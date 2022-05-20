@@ -1,0 +1,32 @@
+exp_params:
+  dataset: 'isolet_subset'
+  input_dims: 617   # x for vectors or (h, w, c) for images
+  latent_dim: 2
+  stream_rate: 100
+  indices_file_path: -1
+  initial_data_num: 300
+
+
+method_params:
+  method: "CDR"
+  initial_train_epoch: 200
+  finetune_epoch: 50
+  buffer_size: 100
+  batch_size: 128
+  LR: 0.001
+  n_neighbors: 10
+  optimizer: "adam" # adam or sgd
+  scheduler: "cosine" # cosine or multi_step or on_plateau
+  temperature: 0.15
+  split_upper: 0.11
+  split_lower: 0.005
+  alpha: 5
+  separation_begin_ratio: 0.25
+  steady_begin_ratio: 0.95
+
+
+debug_params:
+  epoch_print_inter: 0.1
+  vis_inter: 0.5
+  model_save_inter: 1.0
+  eval_inter: 1.0 # 0 indicates that no test during training process
