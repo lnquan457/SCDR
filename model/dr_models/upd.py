@@ -190,16 +190,15 @@ class UPDis4Streaming(UPDis):
         :param ctp2ctp_dists: control points之间的二范数距离，m*m
         :return:
         """
-        dists2ctp **= 2
         # 只使用control points之间的距离来还原其他点的高维坐标
-        ctp2ctp_dists **= 2
-        self.ctp2ctp_dists = ctp2ctp_dists
+        square_ctp2ctp_dists = ctp2ctp_dists ** 2
+        self.ctp2ctp_dists = square_ctp2ctp_dists
 
-        n_samples = ctp2ctp_dists.shape[0]
-        B = _cal_B(ctp2ctp_dists, n_samples)
+        n_samples = square_ctp2ctp_dists.shape[0]
+        B = _cal_B(square_ctp2ctp_dists, n_samples)
         # 1*r, k*r
         eigen_val, eigen_vector = _do_svd(B, self.eta)
-        control_points = _cal_X(ctp2ctp_dists, eigen_val, eigen_vector, n_samples)
+        control_points = _cal_X(square_ctp2ctp_dists, eigen_val, eigen_vector, n_samples)
         self.control_points = control_points
 
         # r * k
@@ -213,12 +212,13 @@ class UPDis4Streaming(UPDis):
 
     def reuse_project(self, dists2ctp):
         # 1*k
+        square_dists2ctp = dists2ctp ** 2
         dists_ga_col = np.mean(self.ctp2ctp_dists, axis=1)
 
-        project_num = dists2ctp.shape[0]
+        project_num = square_dists2ctp.shape[0]
         embeddings = np.zeros((project_num, 2))
         for i in range(project_num):
-            cur_dists = np.expand_dims(dists2ctp[i].T - dists_ga_col, axis=0)
+            cur_dists = np.expand_dims(square_dists2ctp[i].T - dists_ga_col, axis=0)
             project_x = 0.5 * np.matmul(self.normed_eigen_vector, cur_dists.T).T
 
             weight = cdist(project_x, self.control_points).squeeze()

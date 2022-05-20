@@ -1,9 +1,11 @@
 import numpy as np
+from inc_pca import IncPCA
 from procrustes import orthogonal
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans
 from sklearn.neighbors import LocalOutlierFactor
 
+from experiments.experiment import position_vis
 from model.dr_models.upd import cal_dist, UPDis4Streaming
 
 
@@ -27,8 +29,10 @@ def procrustes_analysis(pre_data, cur_data, all_data, align=True, scale=True, tr
     # 在之前control points和当前更新后的control points之间进行普氏分析，得到正交矩阵Q
     # 使得第一个参数尽量与第二个参数对齐
     result = orthogonal(cur_data, pre_data, scale=scale, translate=translate)
+    # print("Procrustes Error = ", result.error)
     # t是一个2 * 2的正交矩阵，new_a是经过放缩和平移之后的
     aligned_embeddings = np.dot(all_data, result.t)
+
     return aligned_embeddings
 
 
@@ -73,35 +77,17 @@ class XtreamingModel:
 
             if cur_control_points is None:
                 # 使用之前的映射函数进行投影
-                cur_embeddings = self.pro_model.reuse_project(dists2cntp ** 2)
+                cur_embeddings = self.pro_model.reuse_project(dists2cntp)
                 self.pre_embedding = np.concatenate([self.pre_embedding, cur_embeddings], axis=0)
             else:
                 print("Re Projection !")
-                # 新的control points的投影结果，用于计算新的control points和之前数据的距离
-                new_data_embeddings = self.pro_model.reuse_project(dists2cntp ** 2)
-                new_cntp_embeddings = new_data_embeddings[cur_control_indices]
+                # aligned_total_embeddings, total_cntp_points = self._re_projection(dists2cntp, cur_control_indices,
+                #                                                                   cur_control_points)
 
-                total_cntp_embeddings = np.concatenate([self.pre_cntp_embeddings, new_cntp_embeddings], axis=0)
-                total_cntp_points = np.concatenate([self.pre_control_points, cur_control_points], axis=0)
-
-                # 所有control points之间的距离，用于构造投影函数
-                cntp_dists = cal_dist(total_cntp_embeddings)
-                # 所有control points与普通点之间的距离，用于恢复普通点的高维坐标
-                dists2cntp = cdist(self.pre_embedding, total_cntp_embeddings)
-                # 对之前的数据以及所有control points进行重新投影
-                prev_updated_embeddings = self.pro_model.fit_transform(dists2cntp, cntp_dists)
-                # 使用最新的投影函数对新数据进行投影
-                new_embeddings = self.pro_model.reuse_project(cdist(new_data_embeddings, total_cntp_embeddings) ** 2)
-                total_embeddings = np.concatenate([prev_updated_embeddings, new_embeddings], axis=0)
-
-                # 更新后的之前所有control points的投影结果，需要与之前的投影结果对齐
-                updated_pre_cntp_embeddings = total_embeddings[self.pre_control_indices]
-                # 使用Procrustes analysis保持mental-map
-                aligned_total_embeddings = procrustes_analysis(self.pre_cntp_embeddings,
-                                                               updated_pre_cntp_embeddings, total_embeddings, scale=False)
+                aligned_total_embeddings, total_cntp_points = self._re_projection_2(dists2cntp, cur_control_indices,
+                                                                                    cur_control_points)
 
                 self.pre_control_points = total_cntp_points
-                self.pre_control_indices = np.concatenate([self.pre_control_indices, cur_control_indices])
                 self.pre_cntp_embeddings = aligned_total_embeddings[self.pre_control_indices]
                 self.pre_embedding = aligned_total_embeddings
 
@@ -127,3 +113,61 @@ class XtreamingModel:
         cur_control_points = None if len(control_indices) == 0 else cur_medoids[control_indices.astype(int)]
         return cur_control_points, control_indices
 
+    def _re_projection(self, dists2cntp, control_indices, control_points):
+
+        # 新的control points的投影结果，用于计算新的control points和之前数据的距离
+        new_data_embeddings = self.pro_model.reuse_project(dists2cntp)
+        new_cntp_embeddings = new_data_embeddings[control_indices]
+
+        total_cntp_embeddings = np.concatenate([self.pre_cntp_embeddings, new_cntp_embeddings], axis=0)
+        total_cntp_points = np.concatenate([self.pre_control_points, control_points], axis=0)
+
+        # 所有control points之间的距离，用于构造投影函数
+        cntp_dists = cal_dist(total_cntp_embeddings)
+        # 所有control points与普通点之间的距离，用于恢复普通点的高维坐标
+        dists2cntp = cdist(self.pre_embedding, total_cntp_embeddings)
+        # 对之前的数据以及所有control points进行重新投影
+        prev_updated_embeddings = self.pro_model.fit_transform(dists2cntp, cntp_dists)
+        # 使用最新的投影函数对新数据进行投影
+        new_embeddings = self.pro_model.reuse_project(cdist(new_data_embeddings, total_cntp_embeddings))
+        total_embeddings = np.concatenate([prev_updated_embeddings, new_embeddings], axis=0)
+
+        # 更新后的之前所有control points的投影结果，需要与之前的投影结果对齐
+        updated_pre_cntp_embeddings = total_embeddings[self.pre_control_indices]
+        # 使用Procrustes analysis保持mental-map
+        aligned_total_embeddings = procrustes_analysis(self.pre_cntp_embeddings,
+                                                       updated_pre_cntp_embeddings, total_embeddings, scale=False)
+
+        self.pre_control_indices = np.concatenate(
+            [self.pre_control_indices, control_indices + self.pre_embedding.shape[0]])
+        return aligned_total_embeddings, total_cntp_points
+
+    def _re_projection_2(self, dists2cntp, control_indices, control_points):
+        pre_data_num = self.pre_embedding.shape[0]
+        total_cntp_points = np.concatenate([self.pre_control_points, control_points], axis=0)
+
+        # 求出之前的所有数据到之前的控制点的距离
+        dists2new_cntp_1 = cdist(self.pre_embedding, self.pre_cntp_embeddings)
+        # 求出之前的所有数据到当前控制点的距离
+        cur_cntp_embeddings = self.pro_model.reuse_project(dists2cntp[control_indices])
+        dists2new_cntp_2 = cdist(self.pre_embedding, cur_cntp_embeddings)
+        dists2new_cntp_all = np.concatenate([dists2new_cntp_1, dists2new_cntp_2], axis=1)
+
+        # 所有control points之间的距离，用于构造投影函数
+        total_cntp_embeddings = np.concatenate([self.pre_cntp_embeddings, cur_cntp_embeddings], axis=0)
+        cntp_dists = cal_dist(total_cntp_embeddings)
+        # 对之前的数据以及所有control points进行重新投影
+        prev_updated_embeddings = self.pro_model.fit_transform(dists2new_cntp_all, cntp_dists)
+
+        # 使用最新的投影函数对新数据进行投影
+        new_embeddings = self.pro_model.reuse_project(cdist(self.buffered_data, total_cntp_points))
+        total_embeddings = np.concatenate([prev_updated_embeddings, new_embeddings], axis=0)
+
+        # 更新后的之前所有control points的投影结果，需要与之前的投影结果对齐
+        updated_pre_cntp_embeddings = total_embeddings[self.pre_control_indices]
+        # 使用Procrustes analysis保持mental-map
+        aligned_total_embeddings = procrustes_analysis(self.pre_cntp_embeddings,
+                                                       updated_pre_cntp_embeddings, total_embeddings)
+
+        self.pre_control_indices = np.concatenate([self.pre_control_indices, control_indices + pre_data_num])
+        return aligned_total_embeddings, total_cntp_points

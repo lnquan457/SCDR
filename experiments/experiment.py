@@ -33,23 +33,24 @@ def draw_loss(training_loss, test_loss, idx, save_path=None):
     plt.show()
 
 
-def position_vis(c, vis_save_path, z):
+def position_vis(c, vis_save_path, z, title=None):
     x = z[:, 0]
     y = z[:, 1]
-    c = np.array(c, dtype=int)
 
     plt.figure(figsize=(8, 8))
     if c is None:
-        sns.scatterplot(x=x, y=y, s=1, legend=False, alpha=0.9)
+        sns.scatterplot(x=x, y=y, s=8, legend=False, alpha=1.0)
     else:
+        c = np.array(c, dtype=int)
         classes = np.unique(c)
         num_classes = classes.shape[0]
         palette = "tab10" if num_classes <= 10 else "tab20"
         sns.scatterplot(x=x, y=y, hue=c, s=8, palette=palette, legend=False, alpha=1.0)
 
-    # plt.title(title, fontsize=18)
-    plt.xticks([])
-    plt.yticks([])
+    if title is not None:
+        plt.title(title, fontsize=18)
+    # plt.xticks([])
+    # plt.yticks([])
     plt.axis("equal")
 
     # plt.title("{} Embeddings".format(method_name), fontsize=20)
