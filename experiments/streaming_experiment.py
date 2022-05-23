@@ -28,6 +28,7 @@ class StreamingEx:
         # self.streaming_mock = StreamingDataMock2Stage(self.dataset_name, initial_cls, 1,
         #                                               args.exp_params.stream_rate, seq_indices=seq_indices)
         self.streaming_mock = StreamingDataMock(self.dataset_name, cfg.exp_params.stream_rate, seq_indices)
+        self.vis_iter = cfg.exp_params.vis_iter
         self.log_path = log_path
         self.result_save_dir = result_save_dir
         self.model = None
@@ -151,9 +152,10 @@ class StreamingEx:
     def save_embeddings_imgs(self):
         sta = time.time()
         np.save(os.path.join(self.embedding_dir, "t_{}.npy".format(self.cur_time_step)), self.cur_embedding)
-        position_vis(self.streaming_mock.seq_label,
-                     os.path.join(self.img_dir, "t_{}.jpg".format(self.cur_time_step)),
-                     self.cur_embedding)
+        if self.cur_time_step % self.vis_iter == 0:
+            position_vis(self.streaming_mock.seq_label,
+                         os.path.join(self.img_dir, "t_{}.jpg".format(self.cur_time_step)),
+                         self.cur_embedding)
         self.other_time += time.time() - sta
 
     def train_end(self):

@@ -16,6 +16,8 @@ log_path = "logs/logs.txt"
 def stream_rate_ex():
     buffer_size = 100
     rate_list = [2, int(buffer_size * 0.5), buffer_size, buffer_size * 2]
+    # rate_list = [2 * buffer_size]
+    # rate_list = [100]
     # rate_list = [buffer_size * 2]
     # rate_list = [int(buffer_size * 0.5)]
 
@@ -23,14 +25,20 @@ def stream_rate_ex():
 
     for i, item in enumerate(rate_list):
         for j, m in enumerate(STREAM_METHOD_LIST):
+            print("正在处理 r = {} m = {}".format(item, m))
             cfg = get_config()
             cfg.merge_from_file(ConfigInfo.MODEL_CONFIG_PATH.format(m))
             cfg.exp_params.stream_rate = item
+            if item != 2:
+                cfg.exp_params.vis_iter = 1
+            args.method = m
+            if m == SCDR:
+                m = m + "_r1.0"
             # result_save_dir = "results/初步实验/stream_rate/single cluster/r{}/{}".format(item, m)
             result_save_dir = "results/初步实验/stream_rate/multi cluster/r{}/{}".format(item, m)
-            args.method = m
+
             # custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)
-            custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster\{}_3_3.npy".format(
+            custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster\{}_3_3_3_2.npy".format(
                 cfg.exp_params.dataset)
             custom_indices_training(custom_indices_path)
 
@@ -43,12 +51,17 @@ def cluster_composite_ex():
         cfg.merge_from_file(ConfigInfo.MODEL_CONFIG_PATH.format(m))
         cfg.exp_params.stream_rate = stream_rate
         args.method = m
+        if m == SCDR:
+            m = m + "_r1.0"
+        result_save_dir = "results/初步实验/cluster composite/single cluster/recurring/{}".format(m)
         # result_save_dir = "results/初步实验/cluster composite/multi cluster/recurring/{}".format(m)
-        result_save_dir = "results/初步实验/cluster composite/identical distribution/{}".format(m)
-        # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_3_3_recur2.npy".format(
-        #     cfg.exp_params.dataset)
-        custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_6_recur5.npy".format(
+        # result_save_dir = "results/初步实验/cluster composite/identical distribution/{}".format(m)
+        custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster_recur\{}_recur2.npy".format(
             cfg.exp_params.dataset)
+        # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_3_3_3_2_recur2.npy".format(
+        #     cfg.exp_params.dataset)
+        # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_11_recur5.npy".format(
+        #     cfg.exp_params.dataset)
         custom_indices_training(custom_indices_path)
 
 

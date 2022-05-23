@@ -13,6 +13,7 @@ import scipy as sp
 from pyflann import FLANN
 import numpy as np
 from scipy.sparse import isspmatrix, csr_matrix
+from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.manifold._t_sne import _joint_probabilities_nn, _joint_probabilities, MACHINE_EPSILON, _gradient_descent, \
     _kl_divergence_bh
@@ -245,8 +246,9 @@ class atSNEModel(TSNE):
     def update_current_knn(self, data, distances_nn, neighbors_nn, new_total_n_samples):
         pre_n_samples = self.X.shape[0]
         new_n_samples = data.shape[0]
-        dists = np.linalg.norm(np.expand_dims(data, axis=1).repeat(repeats=pre_n_samples, axis=1) -
-                               np.expand_dims(self.X, axis=0).repeat(repeats=new_n_samples, axis=0), axis=-1)
+        # dists = np.linalg.norm(np.expand_dims(data, axis=1).repeat(repeats=pre_n_samples, axis=1) -
+        #                        np.expand_dims(self.X, axis=0).repeat(repeats=new_n_samples, axis=0), axis=-1)
+        dists = cdist(data, self.X)
         dists **= 2
         for i in range(new_n_samples):
             indices = np.where(dists[i] - self.max_dist < 0)[0]

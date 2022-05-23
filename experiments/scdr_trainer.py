@@ -21,7 +21,6 @@ class SCDRTrainer(CDRsExperiments):
         CDRsExperiments.__init__(self, model, dataset_name, configs, result_save_dir, config_path, True, device, log_path)
         self.streaming_dataset = None
         self.finetune_epochs = 50
-        self.finetune_data_ratio = 0.5
         self.minimum_finetune_data_num = 400
         self.finetune_data_num = 0
         self.cur_time = 0
@@ -29,7 +28,8 @@ class SCDRTrainer(CDRsExperiments):
         self.first_train_data_num = 0
 
     def update_batch_size(self, data_num):
-        self.batch_size = min(data_num, self.configs.method_params.batch_size)
+        # TODO: 如何设置batch size也是需要研究的
+        self.batch_size = max(min(data_num, self.configs.method_params.batch_size), int(data_num / 10))
         self.streaming_dataset.batch_size = self.batch_size
         self.model.update_neg_num(int(self.batch_size))
 

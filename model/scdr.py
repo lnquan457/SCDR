@@ -36,7 +36,7 @@ def statistical_info(labels, previous_cls, pred_shifted_indices):
 
 class SCDRModel:
     def __init__(self, n_neighbors, buffer_size, model_trainer: SCDRTrainer, initial_train_epoch,
-                 finetune_epoch, finetune_data_ratio=0.5, ckpt_path=None):
+                 finetune_epoch, finetune_data_ratio=1.0, ckpt_path=None):
         self.n_neighbors = n_neighbors
         self.model_trainer = model_trainer
         self.ckpt_path = ckpt_path

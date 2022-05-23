@@ -153,4 +153,4 @@ if __name__ == '__main__':
         # make_multi_cluster_data(ds, composite_num_list[i])
         # make_recurring_multi_cluster_data(ds, composite_num_list[i], 2)
 
-    make_recurring_multi_cluster_data("isolet_subset", [6], 5)
+    make_recurring_multi_cluster_data("food", [11], 5)
