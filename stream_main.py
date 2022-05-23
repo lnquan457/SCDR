@@ -15,8 +15,8 @@ log_path = "logs/logs.txt"
 
 def stream_rate_ex():
     buffer_size = 100
-    rate_list = [2, int(buffer_size * 0.5), buffer_size, buffer_size * 2]
-    # rate_list = [2 * buffer_size]
+    # rate_list = [2, int(buffer_size * 0.5), buffer_size, buffer_size * 2]
+    rate_list = [2]
     # rate_list = [100]
     # rate_list = [buffer_size * 2]
     # rate_list = [int(buffer_size * 0.5)]
@@ -34,12 +34,12 @@ def stream_rate_ex():
             args.method = m
             if m == SCDR:
                 m = m + "_r1.0"
-            # result_save_dir = "results/初步实验/stream_rate/single cluster/r{}/{}".format(item, m)
-            result_save_dir = "results/初步实验/stream_rate/multi cluster/r{}/{}".format(item, m)
+            result_save_dir = "results/初步实验/stream_rate/single cluster/r{}/{}".format(item, m)
+            # result_save_dir = "results/初步实验/stream_rate/multi cluster/r{}/{}".format(item, m)
 
-            # custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)
-            custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster\{}_3_3_3_2.npy".format(
-                cfg.exp_params.dataset)
+            custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)
+            # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster\{}_3_3_3_2.npy".format(
+            #     cfg.exp_params.dataset)
             custom_indices_training(custom_indices_path)
 
 
@@ -137,5 +137,5 @@ if __name__ == '__main__':
     # random_training()
     # custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)
     # custom_indices_training(custom_indices_path)
-    # stream_rate_ex()
-    cluster_composite_ex()
+    stream_rate_ex()
+    # cluster_composite_ex()

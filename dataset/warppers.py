@@ -145,6 +145,21 @@ class DataSetWrapper(object):
         return train_sampler, valid_sampler
 
 
+def eval_knn_acc(acc_knn_indices, pre_knn_indices, new_n_samples, pre_n_samples):
+    acc_list = []
+    a_acc_list = []
+    n_neighbor = acc_knn_indices.shape[1]
+    for i in range(pre_n_samples + new_n_samples):
+        acc_list.append(len(np.intersect1d(acc_knn_indices[i], pre_knn_indices[i])) / n_neighbor)
+        tmp = 0
+        for j in range(n_neighbor):
+            if pre_knn_indices[i][j] == acc_knn_indices[i][j]:
+                tmp += 1
+        a_acc_list.append(tmp / n_neighbor)
+    print("acc = %.4f, a acc = %.4f" % (np.mean(acc_list), np.mean(a_acc_list)))
+    return acc_list, a_acc_list
+
+
 class StreamingDatasetWrapper(DataSetWrapper):
     def __init__(self, initial_data, initial_label, batch_size):
         DataSetWrapper.__init__(self, 1, batch_size)
@@ -231,14 +246,19 @@ class StreamingDatasetWrapper(DataSetWrapper):
     def buffer_empty(self):
         return len(self.cached_shifted_indices) == 0
 
-    def update_knn_graph(self, pre_data, new_data, neighbors_nn, distances_nn):
+    def update_knn_graph(self, pre_data, new_data, buffer_size):
         new_n_samples = new_data.shape[0]
-        dists = cdist(new_data, pre_data)
+        dists = cdist(new_data, self.total_data)
         pre_n_samples = pre_data.shape[0]
         neighbor_changed_indices = list(np.arange(0, new_n_samples, 1) + pre_n_samples)
 
+        # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
+        # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
+
         for i in range(new_n_samples):
-            indices = np.where(dists[i] - self.farest_neighbor_dist[:pre_n_samples] < 0)[0]
+            indices = np.where(dists[i] - self.farest_neighbor_dist < 0)[0]
+            # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
+            indices = indices[np.where(indices < int(i / buffer_size) * buffer_size + pre_n_samples)[0]]
             if len(indices) <= 0:
                 continue
 
@@ -249,16 +269,13 @@ class StreamingDatasetWrapper(DataSetWrapper):
                 if self.knn_indices[j][t] not in neighbor_changed_indices:
                     neighbor_changed_indices.append(self.knn_indices[j][t])
 
+                # 这个更新的过程应该是迭代的
                 self.knn_distances[j][t] = dists[i][j]
-                self.farest_neighbor_dist[j] = dists[i][j]
+                self.farest_neighbor_dist[j] = np.max(self.knn_distances[j])
                 self.knn_indices[j][t] = pre_n_samples + i
 
-                # re_indices = np.argsort(self.symmetric_nn_dists[j])
-                # self.symmetric_nn_dists[j] = self.symmetric_nn_dists[j][re_indices]
-                # self.symmetric_nn_indices[j] = self.symmetric_nn_indices[j][re_indices]
+        # after_acc_list, after_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
 
-        # self.knn_distances = np.concatenate([self.knn_distances, distances_nn], axis=0)
-        # self.knn_indices = np.concatenate([self.knn_indices, neighbors_nn], axis=0)
         self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.zeros((new_n_samples, self.n_neighbor))], axis=0)
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.empty(shape=new_n_samples)])
         self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.empty(shape=new_n_samples)])

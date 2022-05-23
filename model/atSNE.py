@@ -149,7 +149,7 @@ class atSNEModel(TSNE):
                 for j in range(self.n_samples):
                     self.annoy_index.add_item(j, X[j])
                 self.annoy_index.build(100)
-                neighbors_nn, distances_nn = self.get_all_knn(self.k + 1)
+                neighbors_nn, distances_nn = self.get_all_knn(self.k)
 
                 # self.myflann = FLANN()
                 # self.flann_params = self.myflann.build_index(X, algorithm="autotuned", target_precision=self.rho,
@@ -162,7 +162,7 @@ class atSNEModel(TSNE):
             self.neighbors_nn = neighbors_nn
             self.distances_nn = distances_nn
             self.max_dist = np.max(distances_nn, axis=1)
-            coo_row = np.expand_dims(np.arange(0, self.n_samples, 1), axis=1).repeat(k, axis=1).ravel()
+            coo_row = np.expand_dims(np.arange(0, self.n_samples, 1), axis=1).repeat(self.k - 1, axis=1).ravel()
             csr_distances = sp.sparse.coo_matrix((np.ravel(distances_nn), (coo_row, np.ravel(neighbors_nn))),
                                                  shape=(self.n_samples, self.n_samples)).tocsr()
             self.P = _joint_probabilities_nn(csr_distances, self.perplexity, self.verbose)
@@ -197,12 +197,12 @@ class atSNEModel(TSNE):
         # new_flann = FLANN()
         # new_flann.build_index(total_data, algorithm="autotuned", target_precision=self.rho,
         #                       log_level='info')
-        # neighbors_nn, distances = new_flann.nn_index(data, self.k + 1, checks=self.flann_params["checks"])
+        # neighbors_nn, distances = new_flann.nn_index(data, self.k, checks=self.flann_params["checks"])
 
         # 只需要获得新的数据的k近邻即可
-        # neighbors_nn, distances = self.myflann.nn_index(data, self.k + 1, checks=self.flann_params["checks"])
+        # neighbors_nn, distances = self.myflann.nn_index(data, self.k, checks=self.flann_params["checks"])
 
-        neighbors_nn, distances = self.get_knn_by_items(data, self.k + 1)
+        neighbors_nn, distances = self.get_knn_by_items(data, self.k)
         distances **= 2
 
         neighbors_nn = neighbors_nn[:, 1:]
@@ -264,7 +264,7 @@ class atSNEModel(TSNE):
                 self.max_dist[j] = dists[i][j]
         new_distance_nn = np.concatenate([self.distances_nn, distances_nn], axis=0)
         new_neighbor_nn = np.concatenate([self.neighbors_nn, neighbors_nn], axis=0)
-        coo_row = np.expand_dims(np.arange(0, new_total_n_samples, 1), axis=1).repeat(self.k, axis=1).ravel()
+        coo_row = np.expand_dims(np.arange(0, new_total_n_samples, 1), axis=1).repeat(self.k - 1, axis=1).ravel()
         csr_distances = sp.sparse.coo_matrix((np.ravel(new_distance_nn), (coo_row, np.ravel(new_neighbor_nn))),
                                              shape=(new_total_n_samples, new_total_n_samples)).tocsr()
         cur_P, cur_cond_P = my_joint_probabilities_nn(csr_distances, self.perplexity, self.verbose)

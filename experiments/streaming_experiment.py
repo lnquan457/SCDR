@@ -63,8 +63,8 @@ class StreamingEx:
         targets = self.streaming_mock.history_label
         knn_indices, knn_dists = compute_knn_graph(data, None, self.eval_k, None, accelerate=False)
         pairwise_distance = get_pairwise_distance(data, pairwise_distance_cache_path=None, preload=False)
-        self.metric_tool = Metric(self.dataset_name, data, targets,
-                                  knn_indices, knn_dists, pairwise_distance, k=self.eval_k)
+        self.metric_tool = Metric(self.dataset_name, data, targets, knn_indices, knn_dists, pairwise_distance,
+                                  k=self.eval_k)
 
     def start_siPCA(self, forgetting_factor):
         self.model = StreamingIPCA(self.n_components, forgetting_factor)

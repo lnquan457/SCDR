@@ -195,19 +195,28 @@ class SCDRModel:
 
     def clear_buffer(self, final_embed=False):
         if self.buffered_data is not None and final_embed:
-            return self.model_trainer.infer_embeddings(np.concatenate([self.dataset.total_data, self.buffered_data],
-                                                                      axis=0)).numpy()
+
+            # # 更新knn graph
+            nn_indices, nn_dists = self._get_knn(self.buffered_data)
+            self.dataset.add_new_data(self.buffered_data, nn_indices, nn_dists, self.buffered_labels)
+
+            self._process_shift_situation()
+            self._gather_data_stream()
+            return self.pre_embeddings
+
+            # return self.model_trainer.infer_embeddings(np.concatenate([self.dataset.total_data, self.buffered_data],
+            #                                                           axis=0)).numpy()
         self.buffered_data = None
         self.buffered_labels = None
 
     def _update_training_data(self):
 
         # 更新knn graph
-        nn_indices = self.dataset.knn_indices[self.last_train_num:]
-        nn_dists = self.dataset.knn_distances[self.last_train_num:]
+        # nn_indices = self.dataset.knn_indices[self.last_train_num:]
+        # nn_dists = self.dataset.knn_distances[self.last_train_num:]
 
         self.dataset.update_knn_graph(self.dataset.total_data[:self.last_train_num],
-                                      self.dataset.total_data[self.last_train_num:], nn_indices, nn_dists)
+                                      self.dataset.total_data[self.last_train_num:], self.buffer_size)
 
         # 采样训练子集
         n_samples = self.dataset.pre_n_samples
@@ -216,7 +225,9 @@ class SCDRModel:
         all_indices = np.arange(0, n_samples, 1)
         np.random.shuffle(all_indices)
         # TODO:可以选择与代表点数据进行拼接
-        sampled_indices = np.union1d(all_indices[:sampled_num], self.pre_shift_indices)
+        sampled_indices = all_indices[:sampled_num]
+        if self.pre_shift_indices is not None:
+            sampled_indices = np.union1d(sampled_indices, self.pre_shift_indices)
         self.last_train_num = n_samples
 
         self.model_trainer.update_batch_size(n_samples)
@@ -242,7 +253,9 @@ class SCDRModel:
         nn_dists = np.empty((data_num, self.n_neighbors), dtype=float)
         self._build_annoy_index(data)
         for i in range(data_num):
-            nn_indices[i], nn_dists[i] = self.annoy_index.get_nns_by_vector(data[i], self.n_neighbors, include_distances=True)
+            cur_indices, cur_dists = self.annoy_index.get_nns_by_vector(data[i], self.n_neighbors + 1,
+                                                                        include_distances=True)
+            nn_indices[i], nn_dists[i] = cur_indices[1:], cur_dists[1:]
 
         return nn_indices, nn_dists
 
