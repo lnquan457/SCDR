@@ -246,7 +246,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
     def buffer_empty(self):
         return len(self.cached_shifted_indices) == 0
 
-    def update_knn_graph(self, pre_data, new_data, buffer_size):
+    def update_knn_graph(self, pre_data, new_data, data_num_list):
         new_n_samples = new_data.shape[0]
         dists = cdist(new_data, self.total_data)
         pre_n_samples = pre_data.shape[0]
@@ -255,10 +255,14 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
 
+        tmp_index = 0
         for i in range(new_n_samples):
             indices = np.where(dists[i] - self.farest_neighbor_dist < 0)[0]
             # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
-            indices = indices[np.where(indices < int(i / buffer_size) * buffer_size + pre_n_samples)[0]]
+            if i > 0 and i == data_num_list[tmp_index + 1]:
+                tmp_index += 1
+            indices = indices[np.where(indices < data_num_list[tmp_index] + pre_n_samples)[0]]
+
             if len(indices) <= 0:
                 continue
 

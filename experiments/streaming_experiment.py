@@ -7,6 +7,7 @@ from dataset.streaming_data_mock import StreamingDataMock
 from experiments.experiment import position_vis
 from model.atSNE import atSNEModel
 from model.scdr import SCDRModel
+from model.scdr_rt import RTSCDRModel
 from model.si_pca import StreamingIPCA
 from model.xtreaming import XtreamingModel
 from utils.common_utils import evaluate_and_log
@@ -22,8 +23,8 @@ def check_path_exist(t_path):
 
 
 class StreamingEx:
-    def __init__(self, initial_cls, cfg, seq_indices, result_save_dir,
-                 log_path="log_streaming_con.txt", do_eval=True):
+    def __init__(self, initial_cls, cfg, seq_indices, result_save_dir, log_path="log_streaming_con.txt", do_eval=True):
+        self.cfg = cfg
         self.dataset_name = cfg.exp_params.dataset
         # self.streaming_mock = StreamingDataMock2Stage(self.dataset_name, initial_cls, 1,
         #                                               args.exp_params.stream_rate, seq_indices=seq_indices)
@@ -50,6 +51,7 @@ class StreamingEx:
         self.first_fit = False
 
         self.cls2idx = {}
+        self.debug = True
 
     def _train_begin(self):
         self.sta_time = time.time()
@@ -66,23 +68,32 @@ class StreamingEx:
         self.metric_tool = Metric(self.dataset_name, data, targets, knn_indices, knn_dists, pairwise_distance,
                                   k=self.eval_k)
 
-    def start_siPCA(self, forgetting_factor):
-        self.model = StreamingIPCA(self.n_components, forgetting_factor)
+    def start_siPCA(self):
+        self.model = StreamingIPCA(self.n_components, self.cfg.method_params.forgetting_factor)
         self.stream_fitting()
 
-    def start_atSNE(self, perplexity, finetune_iter, n_iter):
-        self.model = atSNEModel(finetune_iter, n_components=self.n_components, perplexity=perplexity,
-                                init="pca", n_iter=n_iter, verbose=0)
+    def start_atSNE(self):
+        self.model = atSNEModel(self.cfg.method_params.finetune_iter, n_components=self.n_components,
+                                perplexity=self.cfg.method_params.perplexity,
+                                init="pca", n_iter=self.cfg.method_params.initial_train_iter, verbose=0)
         self.stream_fitting()
 
-    def start_xtreaming(self, buffer_size, eta):
-        self.model = XtreamingModel(buffer_size, eta)
+    def start_xtreaming(self):
+        self.model = XtreamingModel(self.cfg.method_params.buffer_size, self.cfg.method_params.eta)
         self.stream_fitting()
 
-    def start_scdr(self, n_neighbors, buffer_size, model_trainer, initial_train_epoch=400, finetune_epoch=50,
-                   ckpt_path=None):
-        self.model = SCDRModel(n_neighbors, buffer_size, model_trainer, initial_train_epoch, finetune_epoch,
-                               ckpt_path=ckpt_path)
+    def start_scdr(self, model_trainer):
+        self.model = SCDRModel(self.cfg.method_params.n_neighbors, self.cfg.method_params.buffer_size, model_trainer,
+                               self.cfg.exp_params.initial_data_num,  self.cfg.method_params.initial_train_epoch,
+                               self.cfg.method_params.finetune_epoch, ckpt_path=self.cfg.method_params.ckpt_path)
+        self.stream_fitting()
+
+    def start_rtscdr(self, model_trainer):
+        self.model = RTSCDRModel(self.cfg.method_params.shift_buffer_size, self.cfg.method_params.n_neighbors,
+                                 model_trainer,  self.cfg.exp_params.initial_data_num,
+                                 self.cfg.method_params.initial_train_epoch, self.cfg.method_params.finetune_epoch,
+                                 ckpt_path=self.cfg.method_params.ckpt_path)
+
         self.stream_fitting()
 
     def stream_fitting(self):
@@ -166,8 +177,10 @@ class StreamingEx:
             self.cur_embedding = self.model.clear_buffer(final_embed=True)
             self.save_embeddings_imgs()
 
-        if isinstance(self.model, SCDRModel):
+        if isinstance(self.model, SCDRModel) or isinstance(self.model, RTSCDRModel):
             self.model.save_model()
+            if self.debug:
+                self.model.print_time_cost_info()
 
         end_time = time.time()
         output = "Total Cost Time: %.4f" % (end_time - self.sta_time - self.other_time)

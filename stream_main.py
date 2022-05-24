@@ -6,7 +6,7 @@ import os
 from experiments.scdr_trainer import SCDRTrainer
 from experiments.streaming_experiment import StreamingEx
 from model.dr_models.ModelSets import MODELS
-from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST
+from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, RTSCDR
 from utils.parser import get_config
 
 device = "cuda:0"
@@ -68,14 +68,13 @@ def cluster_composite_ex():
 def start(ex):
     if args.method == ATSNE:
         # ==============1. at-SNE model=====================
-        ex.start_atSNE(cfg.method_params.perplexity, finetune_iter=cfg.method_params.finetune_iter,
-                       n_iter=cfg.method_params.initial_train_iter)
+        ex.start_atSNE()
     elif args.method == SIPCA:
         # ==============2. siPCA model=====================
-        ex.start_siPCA(cfg.method_params.forgetting_factor)
+        ex.start_siPCA()
     elif args.method == XTREAMING:
         # ==============3. Xtreaming model=====================
-        ex.start_xtreaming(cfg.method_params.buffer_size, cfg.method_params.eta)
+        ex.start_xtreaming()
     elif args.method == SCDR:
         # ==============4. SCDR model=====================
         cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
@@ -85,8 +84,15 @@ def start(ex):
         # ckpt_path = r"results\SCDR\n10\isolet_subset\20220512_15h47m54s\initial\CDR_200.pth.tar"
         # ckpt_path = r"results\SCDR\n10\isolet_subset\20220512_19h34m47s\initial\CDR_400.pth.tar"
         ckpt_path = None
-        ex.start_scdr(cfg.method_params.n_neighbors, cfg.method_params.buffer_size, model_trainer,
-                      cfg.method_params.initial_train_epoch, cfg.method_params.finetune_epoch, ckpt_path)
+        ex.start_scdr(model_trainer)
+    elif args.method == RTSCDR:
+        # ==============5. RTSCDR model=====================
+        cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
+
+        model_trainer = SCDRTrainer(cdr_model, cfg.exp_params.dataset, cfg_path, cfg, result_save_dir,
+                                    device=device, log_path=log_path)
+        ex.start_rtscdr(model_trainer)
+
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 
@@ -117,7 +123,7 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=XTREAMING, choices=[ATSNE, SIPCA, XTREAMING, SCDR])
+    parser.add_argument("--method", type=str, default=RTSCDR, choices=[ATSNE, SIPCA, XTREAMING, SCDR, RTSCDR])
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 
@@ -135,7 +141,7 @@ if __name__ == '__main__':
         result_save_dir = "results/{}/".format(args.method)
 
     # random_training()
-    # custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)
-    # custom_indices_training(custom_indices_path)
-    stream_rate_ex()
+    custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)
+    custom_indices_training(custom_indices_path)
+    # stream_rate_ex()
     # cluster_composite_ex()
