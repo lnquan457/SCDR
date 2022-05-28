@@ -10,6 +10,7 @@ from annoy import AnnoyIndex
 from dataset.warppers import StreamingDatasetWrapper
 from experiments.scdr_trainer import SCDRTrainer
 from utils.logger import InfoLogger
+from utils.nn_utils import StreamingKNNSearcher, ANNOY, KD_TREE
 
 
 def statistical_info(labels, previous_cls, pred_shifted_indices):
@@ -54,7 +55,7 @@ class SCDRBase:
         self.cached_shift_indices = None
 
         self.lof = None
-        self.annoy_index = None
+        self.knn_searcher = StreamingKNNSearcher(method=KD_TREE)
         self.time_step = 0
         self.model_trained = False
         self.last_train_num = 0
@@ -142,31 +143,6 @@ class SCDRBase:
         # 更新neighbor_sample_repo以及训练集
         self.model_trainer.update_dataloader(self.finetune_epoch, sampled_indices)
 
-    def _build_annoy_index(self, data):
-        n_samples, dim = data.shape
-        if self.annoy_index is None:
-            pre_nums = 0
-            self.annoy_index = AnnoyIndex(dim, 'euclidean')
-        else:
-            pre_nums = self.annoy_index.get_n_items()
-            self.annoy_index.unbuild()
-
-        for i in range(n_samples):
-            self.annoy_index.add_item(i + pre_nums, data[i])
-        self.annoy_index.build(100)
-
-    def _get_knn(self, data):
-        data_num = data.shape[0]
-        nn_indices = np.empty((data_num, self.n_neighbors), dtype=int)
-        nn_dists = np.empty((data_num, self.n_neighbors), dtype=float)
-        self._build_annoy_index(data)
-        for i in range(data_num):
-            cur_indices, cur_dists = self.annoy_index.get_nns_by_vector(data[i], self.n_neighbors + 1,
-                                                                        include_distances=True)
-            nn_indices[i], nn_dists[i] = cur_indices[1:], cur_dists[1:]
-
-        return nn_indices, nn_dists
-
     def _gather_data_stream(self):
         pass
 
@@ -225,14 +201,14 @@ class SCDRModel(SCDRBase):
                 return None
             self._initial_project(buffer_data, buffer_labels)
             sta = time.time()
-            self._build_annoy_index(buffer_data)
+            self.knn_searcher.search(buffer_data, self.n_neighbors, just_add_new_data=True)
             self.knn_cal_time += time.time() - sta
         else:
             shifted_indices = self._detect_distribution_shift(buffer_data, buffer_labels)
 
             # 更新knn graph
             sta = time.time()
-            nn_indices, nn_dists = self._get_knn(buffer_data)
+            nn_indices, nn_dists = self.knn_searcher.search(buffer_data, self.n_neighbors)
             self.knn_cal_time += time.time() - sta
             self.dataset.add_new_data(buffer_data, nn_indices, nn_dists, buffer_labels)
             self.data_num_list.append(buffer_data.shape[0] + self.data_num_list[-1])
@@ -246,7 +222,8 @@ class SCDRModel(SCDRBase):
                 self.pre_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0)
             else:
                 self._process_shift_situation()
-        self._gather_data_stream()
+        self.clear_buffer()
+
         return self.pre_embeddings
 
     def _gather_data_stream(self):
@@ -254,14 +231,12 @@ class SCDRModel(SCDRBase):
         # 2. 更新knn graph
         # 3. 如果每次buffer后都需要评估的话，更新metric tool
         # 4. 更新一些缓存的数据，例如代表点
-        # self._build_annoy_index(data)
-        self.clear_buffer()
         pass
 
     def clear_buffer(self, final_embed=False):
         if self.buffered_data is not None and final_embed:
             # # 更新knn graph
-            nn_indices, nn_dists = self._get_knn(self.buffered_data)
+            nn_indices, nn_dists = self.knn_searcher.search(self.buffered_data, self.n_neighbors)
             self.dataset.add_new_data(self.buffered_data, nn_indices, nn_dists, self.buffered_labels)
 
             self._process_shift_situation()

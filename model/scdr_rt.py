@@ -22,7 +22,7 @@ class RTSCDRModel(SCDRBase):
                 return None
             self._initial_project(self.initial_data_buffer, self.initial_label_buffer)
             sta = time.time()
-            self._build_annoy_index(self.initial_data_buffer)
+            self.knn_searcher.search(self.initial_data_buffer, self.n_neighbors, just_add_new_data=True)
             self.knn_cal_time += time.time() - sta
         else:
             shifted_indices = self._detect_distribution_shift(data, labels)
@@ -30,7 +30,7 @@ class RTSCDRModel(SCDRBase):
 
             # 更新knn graph
             sta = time.time()
-            nn_indices, nn_dists = self._get_knn(data)
+            nn_indices, nn_dists = self.knn_searcher.search(data, self.n_neighbors)
             self.knn_cal_time += time.time() - sta
             self.dataset.add_new_data(data, nn_indices, nn_dists, labels)
 
@@ -38,11 +38,13 @@ class RTSCDRModel(SCDRBase):
                 # TODO：如何计算这些最新数据的投影结果，以保证其在当前时间点是可信的，应该被当作异常点/离群点进行处理
                 sta = time.time()
                 data_embeddings = self.model_trainer.infer_embeddings(data)
+                data_embeddings = np.reshape(data_embeddings, (data.shape[0], self.pre_embeddings.shape[1]))
                 self.model_repro_time += time.time() - sta
                 self.pre_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0)
             else:
                 self._process_shift_situation()
-        self._gather_data_stream()
+                self.cached_shift_indices = None
+        # self._gather_data_stream()
         return self.pre_embeddings
 
     def _caching_initial_data(self, data, labels):
@@ -54,5 +56,11 @@ class RTSCDRModel(SCDRBase):
 
         return self.initial_data_buffer.shape[0] >= self.initial_train_num
 
-    def _gather_data_stream(self):
-        self.cached_shift_indices = None
+    def buffer_empty(self):
+        return self.cached_shift_indices is None
+
+    def clear_buffer(self, final_embed=False):
+        # 更新knn graph
+        self._process_shift_situation()
+        return self.pre_embeddings
+
