@@ -11,6 +11,7 @@ from dataset.warppers import StreamingDatasetWrapper
 from experiments.scdr_trainer import SCDRTrainer
 from utils.logger import InfoLogger
 from utils.nn_utils import StreamingKNNSearcher, ANNOY, KD_TREE
+from utils.scdr_utils import KeyPointsGenerater
 
 
 def statistical_info(labels, previous_cls, pred_shifted_indices):
@@ -39,23 +40,25 @@ def statistical_info(labels, previous_cls, pred_shifted_indices):
 
 class SCDRBase:
     def __init__(self, n_neighbors, model_trainer: SCDRTrainer, initial_train_num, initial_train_epoch, finetune_epoch,
-                 finetune_data_ratio=1.0, ckpt_path=None):
+                 finetune_data_rate=1.0, ckpt_path=None):
         self.n_neighbors = n_neighbors
         self.model_trainer = model_trainer
         self.ckpt_path = ckpt_path if os.path.exists(ckpt_path) else None
         self.initial_train_num = initial_train_num
         self.initial_train_epoch = initial_train_epoch
         self.finetune_epoch = finetune_epoch
-        self.finetune_data_ratio = finetune_data_ratio
+        self.finetune_data_rate = finetune_data_rate
         self.minimum_finetune_data_num = 400
 
         self.pre_embeddings = None
 
         self.dataset = None
         self.cached_shift_indices = None
+        self.key_data = None
 
         self.lof = None
-        self.knn_searcher = StreamingKNNSearcher(method=KD_TREE)
+        # self.knn_searcher = StreamingKNNSearcher(method=KD_TREE)
+        self.knn_searcher = StreamingKNNSearcher(method=ANNOY)
         self.time_step = 0
         self.model_trained = False
         self.last_train_num = 0
@@ -81,13 +84,13 @@ class SCDRBase:
         self.model_trained = True
         self.last_train_num = self.pre_embeddings.shape[0]
 
-    def _detect_distribution_shift(self, data, labels=None):
+    def _detect_distribution_shift(self, fit_data, pred_data, labels=None):
         """
         检测当前数据是否发生概念漂移
         :return:
         """
         sta = time.time()
-        shifted_indices, data_embeddings = self._lof_based(self.dataset.total_data, data)
+        shifted_indices, data_embeddings = self._lof_based(fit_data, pred_data)
         self.shift_detect_time += time.time() - sta
 
         # if labels is not None:
@@ -120,28 +123,31 @@ class SCDRBase:
         return self.pre_embeddings
 
     def _update_training_data(self):
-
         # 更新knn graph
         sta = time.time()
         self.dataset.update_knn_graph(self.dataset.total_data[:self.last_train_num],
                                       self.dataset.total_data[self.last_train_num:], self.data_num_list)
         self.knn_update_time += time.time() - sta
 
+        sampled_indices = self._sample_training_data()
+
+        self.last_train_num = self.dataset.pre_n_samples
+        self.model_trainer.update_batch_size(len(sampled_indices))
+        # 更新neighbor_sample_repo以及训练集
+        self.model_trainer.update_dataloader(self.finetune_epoch, sampled_indices)
+
+    def _sample_training_data(self):
         # 采样训练子集
         n_samples = self.dataset.pre_n_samples
         # TODO: 可以选择随机采样或者基于聚类进行采样
-        sampled_num = max(int(n_samples * self.finetune_data_ratio), self.minimum_finetune_data_num)
+        sampled_num = max(int(n_samples * self.finetune_data_rate), self.minimum_finetune_data_num)
         all_indices = np.arange(0, n_samples, 1)
         np.random.shuffle(all_indices)
         # TODO:可以选择与代表点数据进行拼接
         sampled_indices = all_indices[:sampled_num]
         if self.cached_shift_indices is not None:
             sampled_indices = np.union1d(sampled_indices, self.cached_shift_indices)
-        self.last_train_num = n_samples
-
-        self.model_trainer.update_batch_size(n_samples)
-        # 更新neighbor_sample_repo以及训练集
-        self.model_trainer.update_dataloader(self.finetune_epoch, sampled_indices)
+        return sampled_indices
 
     def _gather_data_stream(self):
         pass
@@ -160,9 +166,9 @@ class SCDRBase:
 
 class SCDRModel(SCDRBase):
     def __init__(self, n_neighbors, buffer_size, model_trainer: SCDRTrainer, initial_train_num, initial_train_epoch,
-                 finetune_epoch, finetune_data_ratio=1.0, ckpt_path=None):
+                 finetune_epoch, finetune_data_rate=1.0, ckpt_path=None):
         SCDRBase.__init__(self, n_neighbors, model_trainer, initial_train_num, initial_train_epoch, finetune_epoch,
-                          finetune_data_ratio, ckpt_path)
+                          finetune_data_rate, ckpt_path)
 
         self.buffer_size = buffer_size
         self.initial_buffer_size = buffer_size
@@ -204,7 +210,7 @@ class SCDRModel(SCDRBase):
             self.knn_searcher.search(buffer_data, self.n_neighbors, just_add_new_data=True)
             self.knn_cal_time += time.time() - sta
         else:
-            shifted_indices = self._detect_distribution_shift(buffer_data, buffer_labels)
+            shifted_indices = self._detect_distribution_shift(self.dataset.total_data, buffer_data, buffer_labels)
 
             # 更新knn graph
             sta = time.time()

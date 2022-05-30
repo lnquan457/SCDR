@@ -133,12 +133,7 @@ if __name__ == '__main__':
     cfg_path = ConfigInfo.MODEL_CONFIG_PATH.format(args.method)
     cfg = get_config()
     cfg.merge_from_file(cfg_path)
-    if args.method == ATSNE:
-        result_save_dir = "results/{}/n{}/".format(args.method, cfg.method_params.perplexity)
-    elif args.method == SCDR:
-        result_save_dir = "results/{}/n{}/".format(args.method, cfg.method_params.n_neighbors)
-    else:
-        result_save_dir = "results/{}/".format(args.method)
+    result_save_dir = "results/{}/".format(args.method)
 
     # random_training()
     custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)

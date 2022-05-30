@@ -8,7 +8,7 @@ from dataset.streaming_data_mock import StreamingDataMock
 from dataset.warppers import eval_knn_acc
 from experiments.experiment import position_vis
 from model.atSNE import atSNEModel
-from model.scdr import SCDRModel
+from model.scdr import SCDRModel, SCDRBase
 from model.scdr_rt import RTSCDRModel
 from model.si_pca import StreamingIPCA
 from model.xtreaming import XtreamingModel
@@ -134,7 +134,7 @@ class StreamingEx:
 
     def stream_fitting(self):
         self._train_begin()
-        if isinstance(self.model, SCDRModel):
+        if isinstance(self.model, SCDRBase):
             self.model.model_trainer.result_save_dir = self.result_save_dir
 
         # initial_data, initial_label = self.streaming_mock.next_time_data()
@@ -215,8 +215,8 @@ class StreamingEx:
                 cur_nn_indices, cur_nn_dists = compute_knn_graph(cur_embeddings, None, self.vc_k, None)
                 pre_nn_indices, pre_nn_dists = compute_knn_graph(pre_embeddings, None, self.vc_k, None)
 
-                vc_point = metric_mental_map_preservation(cur_embeddings, pre_embeddings, cur_nn_indices, self.vc_k)[0]
-                vc_edge = metric_mental_map_preservation_edge(cur_embeddings, pre_embeddings, cur_nn_indices)[0]
+                # vc_point = metric_mental_map_preservation(cur_embeddings, pre_embeddings, cur_nn_indices, self.vc_k)[0]
+                # vc_edge = metric_mental_map_preservation_edge(cur_embeddings, pre_embeddings, cur_nn_indices)[0]
 
                 # vc_cntp = metric_mental_map_preservation_cntp(self.cur_embedding, self.pre_embedding)
                 vc_cntp = 0
@@ -235,12 +235,13 @@ class StreamingEx:
                 # acc_list, a_acc_list = eval_knn_acc(cur_high_nn_indices, self.pre_high_knn_indices, new_n_samples, pre_embeddings.shape[0])
 
                 vc_db = metric_visual_consistency_dbscan(cur_embeddings, pre_embeddings, np.mean(pre_nn_dists),
-                                                         np.mean(cur_nn_dists), high_dist2new_data=high_dist2new_data,
-                                                         )
+                                                         np.mean(cur_nn_dists), high_dist2new_data=high_dist2new_data)
 
-                title = "P: %.2f E: %.2f C: %.2f D: %.4f" % (vc_point, vc_edge, vc_cntp, vc_db)
-                print("VC Point = %.2f VC Edge = %.2f VC Cluster = %.2f VC DB = %.4f" % (
-                vc_point, vc_edge, vc_cntp, vc_db))
+                # title = "P: %.2f E: %.2f C: %.2f D: %.4f" % (vc_point, vc_edge, vc_cntp, vc_db)
+                # print("VC Point = %.2f VC Edge = %.2f VC Cluster = %.2f VC DB = %.4f" % (
+                # vc_point, vc_edge, vc_cntp, vc_db))
+                title = "Visual Consistency: %.4f" % vc_db
+                # print(title)
             else:
                 self.pre_high_knn_indices, self.pre_high_knn_dists = compute_knn_graph(self.streaming_mock.history_data,
                                                                                        None, self.vc_k, None)

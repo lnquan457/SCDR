@@ -53,20 +53,29 @@ def make():
             for method in os.listdir(os.path.join(root_dir, sub_dir_1, sub_dir_2)):
                 # dataset
                 # for ds in dataset_list:
-                for ds in os.listdir(os.path.join(root_dir, sub_dir_1, sub_dir_2, method)):
-                    pre_dir = os.path.join(root_dir, sub_dir_1, sub_dir_2, method, ds)
-                    print("正在处理：", pre_dir)
-                    img_dir = os.path.join(pre_dir, os.listdir(pre_dir)[0], 'imgs')
-                    step_list = list(map(lambda x: int(x.split("_")[-1].split(".")[0]), os.listdir(img_dir)))
-                    re_indices = np.argsort(step_list)
-                    total_frames = np.max(step_list)
-                    img_list = np.array([os.path.join(img_dir, item) for item in os.listdir(img_dir)])[re_indices]
-
-                    save_path = os.path.join(os.path.join(pre_dir, os.listdir(pre_dir)[0]), "stream.gif")
-                    create_gif(img_list, save_path, total_frames)
+                method_dir = os.path.join(root_dir, sub_dir_1, sub_dir_2, method)
+                for ds in os.listdir(method_dir):
+                    pre_dir = os.path.join(method_dir, ds)
+                    process_single_dir(pre_dir)
                     # save_path = os.path.join(pre_dir, "stream.mp4")
                     # create_video(img_list, save_path, total_frames, size=(5158, 5126))
 
 
+def process_single_dir(base_dir):
+    print("正在处理：", base_dir)
+    # img_dir = os.path.join(base_dir, os.listdir(base_dir)[0], 'imgs')
+    img_dir = os.path.join(base_dir, 'imgs')
+    step_list = list(map(lambda x: int(x.split("_")[-1].split(".")[0]), os.listdir(img_dir)))
+    re_indices = np.argsort(step_list)
+    total_frames = np.max(step_list)
+    img_list = np.array([os.path.join(img_dir, item) for item in os.listdir(img_dir)])[re_indices]
+    # save_path = os.path.join(os.path.join(base_dir, os.listdir(base_dir)[0]), "stream.gif")
+    # save_path = os.path.join(base_dir, "stream.gif")
+    # create_gif(img_list, save_path, total_frames)
+    save_path = os.path.join(base_dir, "stream.mp4")
+    create_video(img_list, save_path, total_frames, size=(5467, 5306))
+
+
 if __name__ == '__main__':
-    make()
+    # make()
+    process_single_dir(r"..\results\RTSCDR\food\final_vc_test")

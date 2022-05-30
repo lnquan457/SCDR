@@ -237,8 +237,8 @@ def cal_vc_corr(corr_cluster, cur_cluster_centroids, cur_cluster_indices, cur_em
                 sample_ratio, weighted, noise_factor=0):
     cur_matched_num = len(np.unique(corr_cluster))
     pre_matched_num = len(pre_matched_indices)
-    print("Previous Cluster Matched Num:", pre_matched_num)
-    print("Current Cluster Matched Num:", cur_matched_num)
+    # print("Previous Cluster Matched Num:", pre_matched_num)
+    # print("Current Cluster Matched Num:", cur_matched_num)
 
     corr_list = np.zeros(shape=pre_matched_num)
     cur_matched_data_indices = set()
@@ -272,13 +272,13 @@ def cal_vc_corr(corr_cluster, cur_cluster_centroids, cur_cluster_indices, cur_em
         corr_list[i] = dists
     # corr_list /= pre_matched_data_num
     matched_data_ratio = len(cur_matched_data_indices) / cur_embeddings.shape[0]
-    print("Raw Correlation: %.2f" % np.mean(corr_list), corr_list)
+    # print("Raw Correlation: %.2f" % np.mean(corr_list), corr_list)
     if weighted:
         old_data_rate **= 2
         selected_old_data_date = old_data_rate[corr_cluster[pre_matched_indices]]
         corr_list = corr_list * selected_old_data_date
-        print("Old Data Rate:", selected_old_data_date)
-    print("Weighted Correlation: %.2f === Matched Data Ratio: %.2f" % (np.mean(corr_list), matched_data_ratio))
+        # print("Old Data Rate:", selected_old_data_date)
+    # print("Weighted Correlation: %.2f === Matched Data Ratio: %.2f" % (np.mean(corr_list), matched_data_ratio))
     vc = 0.5 * (np.mean(corr_list) + 1) * matched_data_ratio
     return vc
 
@@ -341,7 +341,7 @@ def cluster_dbscan(cur_avg_nn_dist, cur_embeddings, pre_avg_nn_dist, pre_embeddi
     cur_cluster_num = len(np.unique(cur_labels)) - (1 if -1 in cur_labels else 0)
     pre_cluster_num = len(np.unique(pre_labels)) - (1 if -1 in pre_labels else 0)
     # print("Previous nn dist:", pre_avg_nn_dist, " Current nn dist:", cur_avg_nn_dist)
-    print("Current Cluster Num: {} Previous Cluster Num: {}".format(cur_cluster_num, pre_cluster_num))
+    # print("Current Cluster Num: {} Previous Cluster Num: {}".format(cur_cluster_num, pre_cluster_num))
     # print("Current Noise Num:", len(np.where(cur_labels == -1)[0]))
     pre_noise_num = len(np.where(pre_labels == -1)[0])
     # print("Previous Noise Num:", pre_noise_num)

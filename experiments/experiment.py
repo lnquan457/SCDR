@@ -49,13 +49,13 @@ def position_vis(c, vis_save_path, z, title=None):
 
     if title is not None:
         plt.title(title, fontsize=18)
-    # plt.xticks([])
-    # plt.yticks([])
+    plt.xticks([])
+    plt.yticks([])
     plt.axis("equal")
 
     # plt.title("{} Embeddings".format(method_name), fontsize=20)
     if vis_save_path is not None:
-        plt.savefig(vis_save_path, dpi=800, bbox_inches='tight', pad_inches=0.1)
+        plt.savefig(vis_save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
     plt.show()
 
 
@@ -172,15 +172,7 @@ class Experiment:
             InfoLogger.info(param_str)
             self.message_queue.put(param_str)
 
-        if self.launch_date_time is None:
-            if launch_time_stamp is None:
-                launch_time_stamp = int(time.time())
-            self.launch_date_time = time_stamp_to_date_time_adjoin(launch_time_stamp)
-
-        if not self.result_save_dir_modified:
-            self.result_save_dir = os.path.join(self.result_save_dir,
-                                                "{}_{}".format(self.dataset_name, self.launch_date_time))
-            self.result_save_dir_modified = True
+        self.initial_result_save_dir(launch_time_stamp)
         self.log_path = os.path.join(self.result_save_dir, "logs.txt")
         self.ckp_save_dir = self.result_save_dir
 
@@ -203,6 +195,16 @@ class Experiment:
         #     self.neighbor_row = np.array(self.neighbor_row, dtype=np.int)
 
         return batch_print_inter, vis_inter, ckp_save_inter
+
+    def initial_result_save_dir(self, launch_time_stamp):
+        if self.launch_date_time is None:
+            if launch_time_stamp is None:
+                launch_time_stamp = int(time.time())
+            self.launch_date_time = time_stamp_to_date_time_adjoin(launch_time_stamp)
+        if not self.result_save_dir_modified:
+            self.result_save_dir = os.path.join(self.result_save_dir,
+                                                "{}_{}".format(self.dataset_name, self.launch_date_time))
+            self.result_save_dir_modified = True
 
     def init_optimizer(self):
         if self.configs.method_params.optimizer == "adam":

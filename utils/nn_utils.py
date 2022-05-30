@@ -179,6 +179,6 @@ class StreamingKNNSearcher:
                 res = self.searcher.get_knn(data[i], k, return_dist_sq=True)
                 nn_indices[i] = [item[1].label for item in res]
                 nn_dists[i] = [item[0] for item in res]
-        print("Search cost time:", time.time() - sta)
+        # print("Search cost time:", time.time() - sta)
         return nn_indices, nn_dists
 

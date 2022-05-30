@@ -4,11 +4,12 @@ import numpy as np
 
 from experiments.scdr_trainer import SCDRTrainer
 from model.scdr import SCDRBase
+from utils.scdr_utils import KeyPointsGenerater
 
 
 class RTSCDRModel(SCDRBase):
     def __init__(self, shift_buffer_size, n_neighbors, model_trainer: SCDRTrainer, initial_train_num,
-                 initial_train_epoch, finetune_epoch, finetune_data_ratio=1.0, ckpt_path=None):
+                 initial_train_epoch, finetune_epoch, finetune_data_ratio=0.5, ckpt_path=None):
         SCDRBase.__init__(self, n_neighbors, model_trainer, initial_train_num, initial_train_epoch, finetune_epoch,
                           finetune_data_ratio, ckpt_path)
 
@@ -16,7 +17,28 @@ class RTSCDRModel(SCDRBase):
         self.initial_data_buffer = None
         self.initial_label_buffer = None
 
+        # 这种情况会导致算法检测不准确，所以检测出异常点的可能性更高（因为高维分布的数据少了），
+        # 会导致投影函数更新的次数增加。
+        self.key_data_rate = 0.5
+        self.using_key_data_in_lof = True
+
+        self.using_key_data_in_finetune = True
+        self.sample_prob = None
+        self.min_prob = 0.1
+        self.decay_rate = 0.9
+        # TODO：后续还需要模拟真实的流数据环境，数据的产生和数据的处理应该是两个进程并行的
+        # 采样概率衰减的间隔时间，以秒为单位
+        self.pre_update_time = None
+        self.decay_iter_time = 10
+
     def fit_new_data(self, data, labels=None):
+        if self.using_key_data_in_lof:
+            self._generate_key_points(data)
+
+        if self.using_key_data_in_finetune:
+            # 如果速率产生的很快，那么采样的概率也会衰减的很快，所以这里的更新应该要以时间为标准
+            self._update_sample_prob(data.shape[0])
+
         if not self.model_trained:
             if not self._caching_initial_data(data, labels):
                 return None
@@ -25,7 +47,8 @@ class RTSCDRModel(SCDRBase):
             self.knn_searcher.search(self.initial_data_buffer, self.n_neighbors, just_add_new_data=True)
             self.knn_cal_time += time.time() - sta
         else:
-            shifted_indices = self._detect_distribution_shift(data, labels)
+            fit_data = self.key_data if self.using_key_data_in_lof else self.dataset.total_data
+            shifted_indices = self._detect_distribution_shift(fit_data, data, labels)
             self.data_num_list.append(data.shape[0] + self.data_num_list[-1])
 
             # 更新knn graph
@@ -64,3 +87,33 @@ class RTSCDRModel(SCDRBase):
         self._process_shift_situation()
         return self.pre_embeddings
 
+    def _update_sample_prob(self, n_samples):
+        # 之后还可以考虑其他一些指标一起计算采样概率
+        if self.sample_prob is None:
+            self.sample_prob = np.ones(shape=n_samples)
+            self.pre_update_time = time.time()
+        else:
+            cur_time = time.time()
+            if cur_time - self.pre_update_time > self.decay_iter_time:
+                self.sample_prob *= self.decay_rate
+                self.sample_prob[self.sample_prob < self.min_prob] = self.min_prob
+                self.pre_update_time = cur_time
+            self.sample_prob = np.concatenate([self.sample_prob, np.ones(shape=n_samples)])
+
+    def _sample_training_data(self):
+        # 采样训练子集
+        if not self.using_key_data_in_finetune:
+            return super()._sample_training_data()
+        else:
+            sampled_indices = KeyPointsGenerater.generate(self.dataset.total_data, self.finetune_data_rate,
+                                                          prob=self.sample_prob)[1]
+            if not self.buffer_empty():
+                sampled_indices = np.union1d(sampled_indices, self.cached_shift_indices)
+            return sampled_indices
+
+    def _generate_key_points(self, data):
+        if self.key_data is None:
+            self.key_data = KeyPointsGenerater.generate(data, self.key_data_rate)[0]
+        else:
+            key_data = KeyPointsGenerater.generate(data, self.key_data_rate)[0]
+            self.key_data = np.concatenate([self.key_data, key_data], axis=0)
