@@ -61,7 +61,7 @@ class SCDRBase:
         self.knn_searcher = StreamingKNNSearcher(method=ANNOY)
         self.time_step = 0
         self.model_trained = False
-        self.last_train_num = 0
+        self.fitted_data_num = 0
 
         self.data_num_list = [0]
 
@@ -83,7 +83,7 @@ class SCDRBase:
         self.pre_embeddings = self.model_trainer.first_train(self.dataset, self.initial_train_epoch, self.ckpt_path)
         self.model_initial_time = time.time() - sta
         self.model_trained = True
-        self.last_train_num = self.pre_embeddings.shape[0]
+        self.fitted_data_num = self.pre_embeddings.shape[0]
 
     def _detect_distribution_shift(self, fit_data, pred_data, labels=None):
         """
@@ -126,13 +126,13 @@ class SCDRBase:
     def _update_training_data(self):
         # 更新knn graph
         sta = time.time()
-        self.dataset.update_knn_graph(self.dataset.total_data[:self.last_train_num],
-                                      self.dataset.total_data[self.last_train_num:], self.data_num_list)
+        self.dataset.update_knn_graph(self.dataset.total_data[:self.fitted_data_num],
+                                      self.dataset.total_data[self.fitted_data_num:], self.data_num_list)
         self.knn_update_time += time.time() - sta
 
         sampled_indices = self._sample_training_data()
 
-        self.last_train_num = self.dataset.pre_n_samples
+        self.fitted_data_num = self.dataset.pre_n_samples
         self.model_trainer.update_batch_size(len(sampled_indices))
         # 更新neighbor_sample_repo以及训练集
         self.model_trainer.update_dataloader(self.finetune_epoch, sampled_indices)

@@ -6,7 +6,7 @@ from dataset.warppers import eval_knn_acc
 from experiments.scdr_trainer import SCDRTrainer
 from model.scdr import SCDRBase
 from utils.metrics_tool import metric_neighbor_preserve_introduce
-from utils.nn_utils import StreamingKNNSearchApprox, compute_knn_graph
+from utils.nn_utils import StreamingKNNSearchApprox, compute_knn_graph, StreamingKNNSearchApprox2
 from utils.scdr_utils import KeyPointsGenerater
 
 
@@ -34,8 +34,11 @@ class RTSCDRModel(SCDRBase):
         self.pre_update_time = None
         self.decay_iter_time = 10
         self.pre_model_update = False
+        # 没有经过模型拟合的数据
+        self.unfitted_data = None
 
-        self.knn_searcher_approx = StreamingKNNSearchApprox()
+        # self.knn_searcher_approx = StreamingKNNSearchApprox()
+        self.knn_searcher_approx = StreamingKNNSearchApprox2()
 
     def fit_new_data(self, data, labels=None):
         new_data_num = data.shape[0]
@@ -56,17 +59,16 @@ class RTSCDRModel(SCDRBase):
             self.knn_searcher.search(self.initial_data_buffer, self.n_neighbors, query=False)
             self.knn_cal_time += time.time() - sta
         else:
-            pre_data_num = self.pre_embeddings.shape[0]
             fit_data = self.key_data if self.using_key_data_in_lof else self.dataset.total_data
             shifted_indices = self._detect_distribution_shift(fit_data, data, labels)
             self.data_num_list.append(new_data_num + self.data_num_list[-1])
 
             # 使用之前的投影函数对最新的数据进行投影
             sta = time.time()
-            data_embeddings = self.model_trainer.infer_embeddings(data).numpy()
+            data_embeddings = self.model_trainer.infer_embeddings(data).numpy().astype(float)
             data_embeddings = np.reshape(data_embeddings, (new_data_num, self.pre_embeddings.shape[1]))
             self.model_repro_time += time.time() - sta
-            cur_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0)
+            cur_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0, dtype=float)
 
             # 更新knn graph
             """
@@ -77,30 +79,42 @@ class RTSCDRModel(SCDRBase):
                 1. 首先用近似的方法求出一部分近邻点下标
                 2. 然后与没有参与训练模型的新数据合并
                 3. 在合并后的数据中使用annoy进行准确的搜索
+                
+                此外， 当数据量越来越多的时候，低维空间中候选的数据也应该越来越多，这样才能保证精度。可以考虑使用聚类的方法
+                选择最接近的两个聚类中的数据作为候选数据。
             """
             sta = time.time()
-            approx_nn_indices, approx_nn_dists = self.knn_searcher_approx.search(self.n_neighbors, self.pre_embeddings,
-                                                                                 self.dataset.total_data,
-                                                                                 data_embeddings, data,
-                                                                                 self.pre_model_update)
+            # approx_nn_indices, approx_nn_dists = self.knn_searcher_approx.search(self.n_neighbors, self.pre_embeddings,
+            #                                                                      self.dataset.total_data,
+            #                                                                      data_embeddings, data,
+            #                                                                      self.pre_model_update)
+
+            approx_nn_indices, approx_nn_dists = self.knn_searcher_approx. \
+                search(self.n_neighbors, self.pre_embeddings[:self.fitted_data_num],
+                       self.dataset.total_data[:self.fitted_data_num], data_embeddings, data, self.unfitted_data)
+
             self.knn_approx_time += time.time() - sta
 
             # TODO: 调试用，调试完成后删除
             sta = time.time()
             nn_indices, nn_dists = self.knn_searcher.search(data, self.n_neighbors)
-            # acc_list, a_acc_list = eval_knn_acc(nn_indices, approx_nn_indices)
-
             self.knn_cal_time += time.time() - sta
-            self.dataset.add_new_data(data, nn_indices, nn_dists, labels)
+            acc_list = eval_knn_acc(nn_indices, approx_nn_indices)
+
+            # self.dataset.add_new_data(data, nn_indices, nn_dists, labels)
+            self.dataset.add_new_data(data, approx_nn_indices, approx_nn_dists, labels)
 
             if len(self.cached_shift_indices) <= self.shift_buffer_size:
                 # TODO：如何计算这些最新数据的投影结果，以保证其在当前时间点是可信的，应该被当作异常点/离群点进行处理
                 self.pre_embeddings = cur_embeddings
                 self.pre_model_update = False
+                self.unfitted_data = data if self.unfitted_data is None else np.concatenate([self.unfitted_data, data],
+                                                                                            axis=0)
             else:
                 self._process_shift_situation()
                 self.cached_shift_indices = None
                 self.pre_model_update = True
+                self.unfitted_data = None
         # self._gather_data_stream()
         return self.pre_embeddings
 

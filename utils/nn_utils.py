@@ -193,27 +193,12 @@ class StreamingKNNSearchApprox:
         self.beta = beta
         self.searcher = None
         self.pre_embeddings_container = None
-        self.pre_n_samples = 0
 
-    def search(self, k, pre_embeddings, pre_data, query_embeddings, query_data, updated=False):
+    def search(self, k, pre_embeddings, pre_data, query_embeddings, query_data, model_update=False):
         # 这里的embeddings每次都需要保持是最新的
-        dim = pre_embeddings.shape[1]
+        query_embeddings_container = self._prepare_searcher_data(pre_data, pre_embeddings, query_data,
+                                                                 query_embeddings, model_update)
 
-        if updated:
-            total_embeddings = np.concatenate([pre_embeddings, query_embeddings], axis=0)
-            total_data = np.concatenate([pre_data, query_data], axis=0)
-            # 这一步很耗时，但是其实只有在投影函数发生变化之后才需要进行更新，否则只需要追加即可
-            self.pre_embeddings_container = add_index_label(total_embeddings.tolist(), others=total_data)
-            self.pre_n_samples = len(self.pre_embeddings_container)
-            # ！！！这一步会改变embeddings的顺序
-            self.searcher = KDTree(self.pre_embeddings_container, dim)
-        else:
-            query_embeddings_container = add_index_label(query_embeddings, pre=self.pre_n_samples, others=query_data)
-            self.pre_embeddings_container = self.pre_embeddings_container + query_embeddings_container
-            self.pre_n_samples += len(query_embeddings_container)
-            self.searcher.add_points(query_embeddings_container)
-
-        data_num = query_embeddings.shape[0]
         """
             又获得一个新奇的知识点啊！！！数据的类型不同竟然也会对性能造成这么大的影响（x10+）
             当是nd.array的时候最慢，慢10多倍
@@ -221,25 +206,77 @@ class StreamingKNNSearchApprox:
             当类型是PointContainer，与建树的数据保持一致的时候，取得了最佳的性能
             是跟原型查找链相关的嘛？
         """
-        query_embeddings = self.pre_embeddings_container[-pre_embeddings.shape[0]:]
         new_k = self.beta * k
-        nn_indices = np.empty((data_num, k), dtype=int)
-        nn_dists = np.empty((data_num, k), dtype=float)
+
         cur_approx_indices = np.empty(new_k)
         cur_other_data = np.empty(shape=(new_k, pre_data.shape[1]))
 
-        sta = time.time()
-        for i, (e, d) in enumerate(zip(query_embeddings, query_data)):
+        nn_indices, nn_dists = self._querying(cur_approx_indices, cur_other_data, k, new_k, query_data,
+                                              query_embeddings_container)
+
+        return nn_indices, nn_dists
+
+    def _querying(self, cur_approx_indices, cur_other_data, k, new_k, query_data, query_embeddings_container):
+        query_num = len(query_embeddings_container)
+        nn_indices = np.zeros((query_num, k), dtype=int)
+        nn_dists = np.zeros((query_num, k), dtype=float)
+        for i, (e, d) in enumerate(zip(query_embeddings_container, query_data)):
             # TODO：这里也很耗时。有点奇怪??? 是目前主要的性能瓶颈
             res = self.searcher.get_knn(e, new_k)
+
             for j, item in enumerate(res):
                 cur_approx_indices[j] = item[1].label
                 cur_other_data[j] = item[1].other_data
 
             # 这一步是很快的
             dists = cdist(np.expand_dims(d, axis=0), cur_other_data)
-            sorted_indices = np.argsort(dists)[0][:k]
+            sorted_indices = np.argsort(dists)[0][1:k+1]
             nn_indices[i] = cur_approx_indices[sorted_indices]
-            nn_dists[i] = np.array(dists[0])[sorted_indices]
+            nn_dists[i] = dists[0][sorted_indices]
 
         return nn_indices, nn_dists
+
+    def _prepare_searcher_data(self, pre_data, pre_embeddings, query_data, query_embeddings, model_update, *args):
+        pre_num, dim = pre_embeddings.shape
+        query_embeddings_container = add_index_label(query_embeddings.tolist(), pre=pre_num, others=query_data)
+        if model_update:
+            # 这一步很耗时，但是其实只有在投影函数发生变化之后才需要进行更新，否则只需要追加即可
+            pre_embedding_container = add_index_label(pre_embeddings.tolist(), others=pre_data)
+            self.pre_embeddings_container = pre_embedding_container + query_embeddings_container
+            # ！！！这一步会改变embeddings的顺序
+            self.searcher = KDTree(self.pre_embeddings_container, dim)
+        else:
+            self.pre_embeddings_container = self.pre_embeddings_container + query_embeddings_container
+            self.searcher.add_points(query_embeddings_container)
+        return query_embeddings_container
+
+
+class StreamingKNNSearchApprox2(StreamingKNNSearchApprox):
+    def __init__(self, beta=10):
+        StreamingKNNSearchApprox.__init__(self, beta)
+        self.beta = beta
+        self.fitted_embeddings_container = None
+
+    def search(self, k, fitted_embeddings, fitted_data, query_embeddings, query_data, unfitted_data=None):
+        fitted_num = self._prepare_searcher_data(fitted_data, fitted_embeddings, unfitted_data)
+
+        new_k = self.beta * k
+        unfitted_data = query_data if unfitted_data is None else np.concatenate([unfitted_data, query_data], axis=0)
+
+        unfitted_data_num, dim = unfitted_data.shape
+        total_num = new_k + unfitted_data_num
+        cur_approx_indices = np.zeros(shape=total_num)
+        cur_other_data = np.zeros(shape=(total_num, dim))
+        cur_approx_indices[-unfitted_data_num:] = np.arange(fitted_num, fitted_num + unfitted_data_num, 1)
+        cur_other_data[-unfitted_data_num:] = unfitted_data
+
+        return self._querying(cur_approx_indices, cur_other_data, k, new_k, query_data, query_embeddings.tolist())
+
+    def _prepare_searcher_data(self, fitted_data, fitted_embeddings, unfitted_data, *args):
+        fitted_num, dim = fitted_embeddings.shape
+        if unfitted_data is None:
+            # 这一步很耗时，但是其实只有在投影函数发生变化之后才需要进行更新，否则只需要追加即可
+            self.fitted_embeddings_container = add_index_label(fitted_embeddings.tolist(), others=fitted_data)
+            # ！！！这一步会改变embeddings的顺序
+            self.searcher = KDTree(self.fitted_embeddings_container, dim)
+        return fitted_num

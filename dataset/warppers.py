@@ -144,10 +144,9 @@ class DataSetWrapper(object):
                 valid_sampler = CustomSampler(val_indices) if test_dataset is not None else None
         return train_sampler, valid_sampler
 
-
+avg_acc = []
 def eval_knn_acc(acc_knn_indices, pre_knn_indices):
     acc_list = []
-    a_acc_list = []
     n_neighbor = acc_knn_indices.shape[1]
     for i in range(acc_knn_indices.shape[0]):
         acc_list.append(len(np.intersect1d(acc_knn_indices[i], pre_knn_indices[i])) / n_neighbor)
@@ -155,9 +154,11 @@ def eval_knn_acc(acc_knn_indices, pre_knn_indices):
         for j in range(n_neighbor):
             if pre_knn_indices[i][j] == acc_knn_indices[i][j]:
                 tmp += 1
-        a_acc_list.append(tmp / n_neighbor)
-    print("acc = %.4f, a acc = %.4f" % (np.mean(acc_list), np.mean(a_acc_list)))
-    return acc_list, a_acc_list
+    print("acc = %.4f" % np.mean(acc_list))
+    global avg_acc
+    avg_acc.append(np.mean(acc_list))
+    print("average acc:", np.mean(avg_acc))
+    return acc_list
 
 
 class StreamingDatasetWrapper(DataSetWrapper):
