@@ -71,6 +71,7 @@ class SCDRBase:
         self.model_initial_time = 0
         self.model_repro_time = 0
         self.model_update_time = 0
+        self.knn_approx_time = 0
         self.debug = True
 
     def fit_new_data(self, data, labels=None):
@@ -157,10 +158,10 @@ class SCDRBase:
 
     def print_time_cost_info(self):
         output_temp = 'Model Initialize: %.4f Model Update: %.4f Model Re-infer: %.4f \n' \
-                      'kNN Calculate: %.4f kNN Update: %.4f \n' \
+                      'kNN Calculate: %.4f kNN Update: %.4f kNN Approximate: %.4f \n' \
                       'Shift Detect: %.4f' % (self.model_initial_time, self.model_update_time,
-                                              self.model_repro_time, self.knn_cal_time,
-                                              self.knn_update_time, self.shift_detect_time)
+                                              self.model_repro_time, self.knn_cal_time, self.knn_update_time,
+                                              self.knn_approx_time, self.shift_detect_time)
         print(output_temp)
 
 
@@ -207,7 +208,7 @@ class SCDRModel(SCDRBase):
                 return None
             self._initial_project(buffer_data, buffer_labels)
             sta = time.time()
-            self.knn_searcher.search(buffer_data, self.n_neighbors, just_add_new_data=True)
+            self.knn_searcher.search(buffer_data, self.n_neighbors, query=False)
             self.knn_cal_time += time.time() - sta
         else:
             shifted_indices = self._detect_distribution_shift(self.dataset.total_data, buffer_data, buffer_labels)

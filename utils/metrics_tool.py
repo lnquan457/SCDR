@@ -365,6 +365,15 @@ def cluster_dbscan(cur_avg_nn_dist, cur_embeddings, pre_avg_nn_dist, pre_embeddi
            pre_cluster_indices, noise_factor
 
 
+def metric_neighbor_preserve_introduce(low_knn_indices, high_knn_indices):
+    preserve_list = []
+    n_samples = low_knn_indices.shape[0]
+    n_neighbor = low_knn_indices.shape[1]
+    for i in range(n_samples):
+        preserve_list.append(len(np.intersect1d(low_knn_indices[i], high_knn_indices[i])) / n_neighbor)
+    return np.mean(preserve_list), preserve_list
+
+
 class Metric:
     def __init__(self, dataset_name, origin_data, origin_label, knn_indices, knn_dists,
                  high_dis_matrix=None, result_save_dir=None, val=False, norm=False,

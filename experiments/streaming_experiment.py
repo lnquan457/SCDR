@@ -15,7 +15,7 @@ from model.xtreaming import XtreamingModel
 from utils.common_utils import evaluate_and_log
 from utils.logger import InfoLogger
 from utils.metrics_tool import Metric, metric_mental_map_preservation, metric_mental_map_preservation_cntp, \
-    metric_mental_map_preservation_edge, metric_visual_consistency_dbscan
+    metric_mental_map_preservation_edge, metric_visual_consistency_dbscan, metric_neighbor_preserve_introduce
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 from utils.time_utils import time_stamp_to_date_time_adjoin
 
@@ -200,6 +200,12 @@ class StreamingEx:
     def save_embeddings_imgs(self, force=False):
         sta = time.time()
         np.save(os.path.join(self.embedding_dir, "t_{}.npy".format(self.cur_time_step)), self.cur_embedding)
+
+        # cur_low_nn_indices = compute_knn_graph(self.cur_embedding, None, self.vc_k, None)[0]
+        # cur_high_nn_indices = compute_knn_graph(self.streaming_mock.history_data, None, self.vc_k, None)[0]
+        # preserve, fake_intro = metric_neighbor_preserve_introduce(cur_low_nn_indices, cur_high_nn_indices)
+        # print("Preserve Rate: %.4f Fake Intro Rate: %.4f" % (preserve, fake_intro))
+
         if self.cur_time_step % self.vis_iter == 0 or force:
             title = None
             if self.pre_embedding is not None:
@@ -223,7 +229,7 @@ class StreamingEx:
                 high_dist2new_data = cdist(self.cur_data, self.streaming_mock.history_data) ** 2
 
                 # cur_high_nn_indices, cur_high_nn_dists = compute_knn_graph(self.streaming_mock.history_data, None,
-                #                                                            self.vc_k, None)
+                                                                           # self.vc_k, None)
                 # new_n_samples = cur_embeddings.shape[0] - pre_embeddings.shape[0]
                 # new_nn_indices = cur_high_nn_indices[-new_n_samples:]
                 # new_nn_dists = cur_high_nn_dists[-new_n_samples:]
@@ -260,7 +266,7 @@ class StreamingEx:
             self.cur_embedding = self.model.clear_buffer(final_embed=True)
             self.save_embeddings_imgs(force=True)
 
-        if isinstance(self.model, SCDRModel) or isinstance(self.model, RTSCDRModel):
+        if isinstance(self.model, SCDRBase):
             self.model.save_model()
             if self.debug:
                 self.model.print_time_cost_info()

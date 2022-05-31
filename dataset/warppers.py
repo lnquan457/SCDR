@@ -145,11 +145,11 @@ class DataSetWrapper(object):
         return train_sampler, valid_sampler
 
 
-def eval_knn_acc(acc_knn_indices, pre_knn_indices, new_n_samples, pre_n_samples):
+def eval_knn_acc(acc_knn_indices, pre_knn_indices):
     acc_list = []
     a_acc_list = []
     n_neighbor = acc_knn_indices.shape[1]
-    for i in range(pre_n_samples + new_n_samples):
+    for i in range(acc_knn_indices.shape[0]):
         acc_list.append(len(np.intersect1d(acc_knn_indices[i], pre_knn_indices[i])) / n_neighbor)
         tmp = 0
         for j in range(n_neighbor):

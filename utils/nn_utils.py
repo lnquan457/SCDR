@@ -3,6 +3,8 @@ import time
 
 import numpy as np
 from pynndescent import NNDescent
+from scipy.spatial.ckdtree import cKDTree
+from scipy.spatial.distance import cdist
 from sklearn.metrics import pairwise_distances
 from annoy import AnnoyIndex
 
@@ -149,21 +151,24 @@ class StreamingKNNSearcher:
             self.searcher.add_item(i + pre_nums, data[i])
         self.searcher.build(100)
 
-    def search(self, data, k, just_add_new_data=False):
+    def search(self, data, k, query=True, adding=True):
         sta = time.time()
         if self.method == KD_TREE:
             data = add_index_label(data.tolist())
-        # 建树或者添加节点
-        if self.searcher is None:
-            self._init_searcher(data)
-        else:
-            if self.method == ANNOY:
-                self._build_annoy_index(data)
-            elif self.method == KD_TREE:
-                self.searcher.add_points(data)
 
-        if just_add_new_data:
+        if adding:  # 建树或者添加节点
+            if self.searcher is None:
+                self._init_searcher(data)
+            else:
+                if self.method == ANNOY:
+                    self._build_annoy_index(data)
+                elif self.method == KD_TREE:
+                    self.searcher.add_points(data)
+
+        if not query:
             return None, None
+
+        assert self.searcher is not None
 
         # 查询k近邻
         data_num = len(data)
@@ -176,9 +181,65 @@ class StreamingKNNSearcher:
                 nn_indices[i], nn_dists[i] = cur_indices[1:], cur_dists[1:]
         elif self.method == KD_TREE:
             for i in range(data_num):
-                res = self.searcher.get_knn(data[i], k, return_dist_sq=True)
-                nn_indices[i] = [item[1].label for item in res]
-                nn_dists[i] = [item[0] for item in res]
+                res = self.searcher.get_knn(data[i], k + 1, return_dist_sq=True)
+                nn_indices[i] = [item[1].label for item in res][1:]
+                nn_dists[i] = [item[0] for item in res][1:]
         # print("Search cost time:", time.time() - sta)
         return nn_indices, nn_dists
 
+
+class StreamingKNNSearchApprox:
+    def __init__(self, beta=10):
+        self.beta = beta
+        self.searcher = None
+        self.pre_embeddings_container = None
+        self.pre_n_samples = 0
+
+    def search(self, k, pre_embeddings, pre_data, query_embeddings, query_data, updated=False):
+        # 这里的embeddings每次都需要保持是最新的
+        dim = pre_embeddings.shape[1]
+
+        if updated:
+            total_embeddings = np.concatenate([pre_embeddings, query_embeddings], axis=0)
+            total_data = np.concatenate([pre_data, query_data], axis=0)
+            # 这一步很耗时，但是其实只有在投影函数发生变化之后才需要进行更新，否则只需要追加即可
+            self.pre_embeddings_container = add_index_label(total_embeddings.tolist(), others=total_data)
+            self.pre_n_samples = len(self.pre_embeddings_container)
+            # ！！！这一步会改变embeddings的顺序
+            self.searcher = KDTree(self.pre_embeddings_container, dim)
+        else:
+            query_embeddings_container = add_index_label(query_embeddings, pre=self.pre_n_samples, others=query_data)
+            self.pre_embeddings_container = self.pre_embeddings_container + query_embeddings_container
+            self.pre_n_samples += len(query_embeddings_container)
+            self.searcher.add_points(query_embeddings_container)
+
+        data_num = query_embeddings.shape[0]
+        """
+            又获得一个新奇的知识点啊！！！数据的类型不同竟然也会对性能造成这么大的影响（x10+）
+            当是nd.array的时候最慢，慢10多倍
+            当类型是list的时候，快一些，但是还是慢了2倍多
+            当类型是PointContainer，与建树的数据保持一致的时候，取得了最佳的性能
+            是跟原型查找链相关的嘛？
+        """
+        query_embeddings = self.pre_embeddings_container[-pre_embeddings.shape[0]:]
+        new_k = self.beta * k
+        nn_indices = np.empty((data_num, k), dtype=int)
+        nn_dists = np.empty((data_num, k), dtype=float)
+        cur_approx_indices = np.empty(new_k)
+        cur_other_data = np.empty(shape=(new_k, pre_data.shape[1]))
+
+        sta = time.time()
+        for i, (e, d) in enumerate(zip(query_embeddings, query_data)):
+            # TODO：这里也很耗时。有点奇怪??? 是目前主要的性能瓶颈
+            res = self.searcher.get_knn(e, new_k)
+            for j, item in enumerate(res):
+                cur_approx_indices[j] = item[1].label
+                cur_other_data[j] = item[1].other_data
+
+            # 这一步是很快的
+            dists = cdist(np.expand_dims(d, axis=0), cur_other_data)
+            sorted_indices = np.argsort(dists)[0][:k]
+            nn_indices[i] = cur_approx_indices[sorted_indices]
+            nn_dists[i] = np.array(dists[0])[sorted_indices]
+
+        return nn_indices, nn_dists

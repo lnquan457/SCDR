@@ -14,6 +14,10 @@ class PointContainer(list):
         self.label = label
         return self
 
+    def set_other_data(self, d):
+        self.other_data = d
+        return self
+
 
 class KDTree(object):
     """
@@ -101,7 +105,6 @@ class KDTree(object):
         self._get_knn = get_knn
         self._root = make(points)
         self._walk = walk
-        self.map_dict = {id(p): i for i, p in enumerate(points)}
 
     def __iter__(self):
         return self._walk(self._root)
@@ -122,7 +125,6 @@ class KDTree(object):
     def add_points(self, points):
         for point in points:
             self._add_single_point(point)
-            self.map_dict[id(point)] = len(self.map_dict.keys())
 
     def get_knn(self, point, k, return_dist_sq=True):
         """Returns k nearest neighbors.
@@ -167,20 +169,23 @@ class KDTree(object):
             else:
                 point
         """
-        l = self._get_knn(self._root, point, 1, return_dist_sq, [], self.map_dict)
+        l = self._get_knn(self._root, point, 1, return_dist_sq, [])
         return l[0] if len(l) else None
 
 
-def add_index_label(data):
-    labels = [i for i in range(len(data))]
-    points = [PointContainer(p).set(label=l) for p, l in zip(data, labels)]
+def add_index_label(data, pre=0, others=None):
+    labels = [i + pre for i in range(len(data))]
+    if others is None:
+        points = [PointContainer(p).set(label=l) for p, l in zip(data, labels)]
+    else:
+        points = [PointContainer(p).set(label=l).set_other_data(d) for p, l, d in zip(data, labels, others)]
     return points
 
 
 def test_kd_tree(dim, points, additional_points, query_points):
     points = add_index_label(points)
-    additional_points = add_index_label(additional_points)
-    query_points = add_index_label(query_points)
+    additional_points = add_index_label(additional_points, pre=len(points))
+    query_points = add_index_label(query_points, pre=len(points)+len(additional_points))
 
     kd_tree_results = []
     kd_tree = KDTree(points, dim)
@@ -189,19 +194,25 @@ def test_kd_tree(dim, points, additional_points, query_points):
     kd_tree.add_points(additional_points)
 
     print("Adding finish! cost time = ", time.time() - sta)
-    # kd_tree_results.append(tuple(kd_tree.get_knn([0] * dim, 8)))
+    # kd_tree_results.append(tuple(kd_tree.get_knn([0] * dim, neighbors)))
     print("Querying k-nearest!")
     sta = time.time()
     for t in query_points:
-        res = tuple(kd_tree.get_knn(t, 8))
+        sta_2 = time.time()
+        res = tuple(kd_tree.get_knn(t, neighbors))
+        print("single query time:", time.time() - sta_2)
         knn_indices = [item[1].label for item in res]
-        kd_tree_results.append(res)
+        knn_dists = [item[0] for item in res]
+        kd_tree_results.extend(knn_indices)
+        kd_tree_results.extend(knn_dists)
     print("Querying k-nearest finish! cost time = ", time.time() - sta)
 
     print("Querying nearest!")
     sta = time.time()
     for t in query_points:
-        kd_tree_results.append(tuple(kd_tree.get_nearest(t)))
+        res = kd_tree.get_nearest(t)
+        kd_tree_results.append(res[1].label)
+        kd_tree_results.append(res[0])
     print("Querying nearest finish! cost time = ", time.time() - sta)
     return kd_tree_results
 
@@ -224,13 +235,23 @@ def test_naive(dim, points, additional_points, query_points):
             return dist_sq_func(nearest, point), nearest
         return nearest
 
+    points = add_index_label(points)
+    additional_points = add_index_label(additional_points, pre=len(points))
+    query_points = add_index_label(query_points, pre=len(points) + len(additional_points))
+
     naive_results = []
     all_points = points + additional_points
-    naive_results.append(tuple(get_knn_naive(all_points, [0] * dim, 8)))
+    # naive_results.append(tuple(get_knn_naive(all_points, [0] * dim, neighbors)))
     for t in query_points:
-        naive_results.append(tuple(get_knn_naive(all_points, t, 8)))
+        res = get_knn_naive(all_points, t, neighbors)
+        knn_indices = [item[1].label for item in res]
+        knn_dists = [item[0] for item in res]
+        naive_results.extend(knn_indices)
+        naive_results.extend(knn_dists)
     for t in query_points:
-        naive_results.append(tuple(get_nearest_naive(all_points, t)))
+        res = get_nearest_naive(all_points, t)
+        naive_results.append(res[1].label)
+        naive_results.append(res[0])
     return naive_results
 
 
@@ -241,7 +262,7 @@ def main():
     dim = 3
     points = [rand_point() for x in range(10000)]
     additional_points = [rand_point() for x in range(100)]
-    query_points = [rand_point() for x in range(100)]
+    query_points = [rand_point() for x in range(4000)]
 
     sta = time.time()
     kd_tree_results = test_kd_tree(dim, points, additional_points, query_points)
@@ -255,4 +276,5 @@ def main():
 
 
 if __name__ == '__main__':
+    neighbors = 100
     main()
