@@ -235,7 +235,7 @@ class UPDis4Streaming(UPDis):
 
 
 if __name__ == '__main__':
-    hf = h5py.File("../../../Data/H5 Data/wethers.h5", "r")
+    hf = h5py.File("../../../../Data/H5 Data/wethers.h5", "r")
     x = np.array(hf['x'], dtype=float)
     y = np.array(hf['y'], dtype=int)
 

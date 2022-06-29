@@ -392,7 +392,10 @@ def load_local_h5_by_path(dataset_path, keys):
     f = h5py.File(dataset_path, "r")
     res = []
     for key in keys:
-        res.append(f[key][:])
+        if key in f.keys():
+            res.append(f[key][:])
+        else:
+            res.append(None)
         # InfoLogger.info(key + ": " + str(f[key][:].shape))
     f.close()
     return res

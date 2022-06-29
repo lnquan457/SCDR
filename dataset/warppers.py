@@ -154,7 +154,7 @@ def eval_knn_acc(acc_knn_indices, pre_knn_indices):
         for j in range(n_neighbor):
             if pre_knn_indices[i][j] == acc_knn_indices[i][j]:
                 tmp += 1
-    print("acc = %.4f" % np.mean(acc_list))
+    # print("acc = %.4f" % np.mean(acc_list))
     global avg_acc
     avg_acc.append(np.mean(acc_list))
     print("average acc:", np.mean(avg_acc))
@@ -167,7 +167,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # initial_data 是一个列表，第一个元素是数据，第二个元素是标签
         self.total_data = initial_data
         self.total_label = initial_label
-        self.pre_n_samples = initial_data.shape[0]
+        self.cur_n_samples = initial_data.shape[0]
         self.cache_process_num_thresh = 100
         self.cached_shifted_indices = []
         self.farest_neighbor_dist = None
@@ -232,7 +232,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
     def add_new_data(self, new_data, knn_indices=None, knn_dists=None, new_label=None):
         # 当数据积累到一定程度，需要更新模型的时候，才会为新的数据计算knn图
-        self.pre_n_samples += new_data.shape[0]
+        self.cur_n_samples += new_data.shape[0]
         self.total_data = np.concatenate([self.total_data, new_data], axis=0)
         if new_label is not None:
             self.total_label = np.concatenate([self.total_label, new_label], axis=0)

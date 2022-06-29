@@ -40,7 +40,7 @@ def statistical_info(labels, previous_cls, pred_shifted_indices):
 
 class SCDRBase:
     def __init__(self, n_neighbors, model_trainer: SCDRTrainer, initial_train_num, initial_train_epoch, finetune_epoch,
-                 finetune_data_rate=1.0, ckpt_path=None):
+                 finetune_data_rate=0.5, ckpt_path=None):
         self.n_neighbors = n_neighbors
         self.model_trainer = model_trainer
         self.ckpt_path = ckpt_path if os.path.exists(ckpt_path) else None
@@ -97,7 +97,7 @@ class SCDRBase:
         # if labels is not None:
         #     statistical_info(labels, np.unique(self.dataset.total_label[:self.last_train_num]), shifted_indices)
 
-        cur_shift_indices = shifted_indices + self.dataset.pre_n_samples
+        cur_shift_indices = shifted_indices + self.dataset.cur_n_samples
         self.cached_shift_indices = cur_shift_indices if self.cached_shift_indices is None else \
             np.concatenate([self.cached_shift_indices, cur_shift_indices])
 
@@ -113,8 +113,8 @@ class SCDRBase:
         shifted_indices = np.where(labels == -1)[0]
         return shifted_indices, None
 
-    def _process_shift_situation(self):
-        self._update_training_data()
+    def _process_shift_situation(self, *args):
+        self._update_training_data(*args)
 
         sta = time.time()
         self.pre_embeddings = self.model_trainer.resume_train(self.finetune_epoch)
@@ -123,23 +123,23 @@ class SCDRBase:
         self.data_num_list = [0]
         return self.pre_embeddings
 
-    def _update_training_data(self):
+    def _update_training_data(self, *args):
         # 更新knn graph
         sta = time.time()
         self.dataset.update_knn_graph(self.dataset.total_data[:self.fitted_data_num],
                                       self.dataset.total_data[self.fitted_data_num:], self.data_num_list)
         self.knn_update_time += time.time() - sta
 
-        sampled_indices = self._sample_training_data()
+        sampled_indices = self._sample_training_data(*args)
 
-        self.fitted_data_num = self.dataset.pre_n_samples
+        self.fitted_data_num = self.dataset.cur_n_samples
         self.model_trainer.update_batch_size(len(sampled_indices))
         # 更新neighbor_sample_repo以及训练集
         self.model_trainer.update_dataloader(self.finetune_epoch, sampled_indices)
 
-    def _sample_training_data(self):
+    def _sample_training_data(self, *args):
         # 采样训练子集
-        n_samples = self.dataset.pre_n_samples
+        n_samples = self.dataset.cur_n_samples
         # TODO: 可以选择随机采样或者基于聚类进行采样
         sampled_num = max(int(n_samples * self.finetune_data_rate), self.minimum_finetune_data_num)
         all_indices = np.arange(0, n_samples, 1)
@@ -148,6 +148,7 @@ class SCDRBase:
         sampled_indices = all_indices[:sampled_num]
         if self.cached_shift_indices is not None:
             sampled_indices = np.union1d(sampled_indices, self.cached_shift_indices)
+        sampled_indices = np.union1d(sampled_indices, np.arange(self.fitted_data_num, self.dataset.cur_n_samples, 1))
         return sampled_indices
 
     def _gather_data_stream(self):

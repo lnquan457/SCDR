@@ -12,7 +12,7 @@ from utils.scdr_utils import KeyPointsGenerater
 
 class RTSCDRModel(SCDRBase):
     def __init__(self, shift_buffer_size, n_neighbors, model_trainer: SCDRTrainer, initial_train_num,
-                 initial_train_epoch, finetune_epoch, finetune_data_ratio=1.0, ckpt_path=None):
+                 initial_train_epoch, finetune_epoch, finetune_data_ratio=0.5, ckpt_path=None):
         SCDRBase.__init__(self, n_neighbors, model_trainer, initial_train_num, initial_train_epoch, finetune_epoch,
                           finetune_data_ratio, ckpt_path)
 
@@ -23,11 +23,13 @@ class RTSCDRModel(SCDRBase):
         # 这种情况会导致算法检测不准确，所以检测出异常点的可能性更高（因为高维分布的数据少了），
         # 会导致投影函数更新的次数增加。
         self.key_data_rate = 0.5
+        # self.key_data_rate = 1.0
         self.using_key_data_in_lof = True
 
-        self.using_key_data_in_finetune = False
-        self.sample_prob = None
-        self.min_prob = 0.1
+        self.metric_based_sample = False
+        self.time_based_sample = False
+        self.time_weights = None
+        self.min_weight = 0.1
         self.decay_rate = 0.9
         # TODO：后续还需要模拟真实的流数据环境，数据的产生和数据的处理应该是两个进程并行的
         # 采样概率衰减的间隔时间，以秒为单位
@@ -45,9 +47,9 @@ class RTSCDRModel(SCDRBase):
         if self.using_key_data_in_lof:
             self._generate_key_points(data)
 
-        if self.using_key_data_in_finetune:
+        if self.time_based_sample:
             # 如果速率产生的很快，那么采样的概率也会衰减的很快，所以这里的更新应该要以时间为标准
-            self._update_sample_prob(new_data_num)
+            self._update_time_weights(new_data_num)
 
         if not self.model_trained:
             if not self._caching_initial_data(data, labels):
@@ -60,7 +62,7 @@ class RTSCDRModel(SCDRBase):
             self.knn_cal_time += time.time() - sta
         else:
             fit_data = self.key_data if self.using_key_data_in_lof else self.dataset.total_data
-            shifted_indices = self._detect_distribution_shift(fit_data, data, labels)
+            self._detect_distribution_shift(fit_data, data, labels)
             self.data_num_list.append(new_data_num + self.data_num_list[-1])
 
             # 使用之前的投影函数对最新的数据进行投影
@@ -89,20 +91,20 @@ class RTSCDRModel(SCDRBase):
             #                                                                      data_embeddings, data,
             #                                                                      self.pre_model_update)
 
-            approx_nn_indices, approx_nn_dists = self.knn_searcher_approx. \
+            nn_indices, nn_dists = self.knn_searcher_approx. \
                 search(self.n_neighbors, self.pre_embeddings[:self.fitted_data_num],
                        self.dataset.total_data[:self.fitted_data_num], data_embeddings, data, self.unfitted_data)
 
             self.knn_approx_time += time.time() - sta
 
             # TODO: 调试用，调试完成后删除
-            sta = time.time()
-            nn_indices, nn_dists = self.knn_searcher.search(data, self.n_neighbors)
-            self.knn_cal_time += time.time() - sta
-            acc_list = eval_knn_acc(nn_indices, approx_nn_indices)
+            # sta = time.time()
+            # nn_indices, nn_dists = self.knn_searcher.search(data, self.n_neighbors)
+            # self.knn_cal_time += time.time() - sta
+            # acc_list = eval_knn_acc(nn_indices, approx_nn_indices)
 
-            # self.dataset.add_new_data(data, nn_indices, nn_dists, labels)
-            self.dataset.add_new_data(data, approx_nn_indices, approx_nn_dists, labels)
+            self.dataset.add_new_data(data, nn_indices, nn_dists, labels)
+            # self.dataset.add_new_data(data, approx_nn_indices, approx_nn_dists, labels)
 
             if len(self.cached_shift_indices) <= self.shift_buffer_size:
                 # TODO：如何计算这些最新数据的投影结果，以保证其在当前时间点是可信的，应该被当作异常点/离群点进行处理
@@ -111,7 +113,7 @@ class RTSCDRModel(SCDRBase):
                 self.unfitted_data = data if self.unfitted_data is None else np.concatenate([self.unfitted_data, data],
                                                                                             axis=0)
             else:
-                self._process_shift_situation()
+                self._process_shift_situation(self.time_based_sample, self.metric_based_sample)
                 self.cached_shift_indices = None
                 self.pre_model_update = True
                 self.unfitted_data = None
@@ -132,40 +134,56 @@ class RTSCDRModel(SCDRBase):
 
     def clear_buffer(self, final_embed=False):
         # 更新knn graph
-        self._process_shift_situation()
+        self._process_shift_situation(self.time_based_sample, self.metric_based_sample)
         return self.pre_embeddings
 
-    def _update_sample_prob(self, n_samples):
+    def _update_time_weights(self, n_samples):
         # 之后还可以考虑其他一些指标一起计算采样概率
-        if self.sample_prob is None:
-            self.sample_prob = np.ones(shape=n_samples)
+        if self.time_weights is None:
+            self.time_weights = np.ones(shape=n_samples)
             self.pre_update_time = time.time()
         else:
             cur_time = time.time()
             if cur_time - self.pre_update_time > self.decay_iter_time:
-                self.sample_prob *= self.decay_rate
-                self.sample_prob[self.sample_prob < self.min_prob] = self.min_prob
+                self.time_weights *= self.decay_rate
+                self.time_weights[self.time_weights < self.min_weight] = self.min_weight
                 self.pre_update_time = cur_time
-            self.sample_prob = np.concatenate([self.sample_prob, np.ones(shape=n_samples)])
+            self.time_weights = np.concatenate([self.time_weights, np.ones(shape=n_samples)])
 
-    def _sample_training_data(self, metric_based=False):
+    def _sample_training_data(self, time_based_samples, metric_based_sample):
         # 采样训练子集
-        if not self.using_key_data_in_finetune:
-            return super()._sample_training_data()
+        if time_based_samples and metric_based_sample:
+            prob = np.copy(self.time_weights)
+            if metric_based_sample:
+                neighbor_lost_weights, pre_n_samples = self._cal_neighbor_lost_weights()
+                # 如何在两者之间进行权衡
+                prob[:pre_n_samples] = (neighbor_lost_weights + prob[:pre_n_samples]) / 2
+        elif time_based_samples:
+            prob = self.time_weights
+        elif metric_based_sample:
+            neighbor_lost_weights, pre_n_samples = self._cal_neighbor_lost_weights()
+            prob = np.concatenate([neighbor_lost_weights, np.ones(shape=self.dataset.cur_n_samples - pre_n_samples)])
         else:
-            prob = self.sample_prob
-            if metric_based:
-                pre_n_samples = self.pre_embeddings.shape[0]
-                high_knn_indices = self.dataset.knn_indices[:pre_n_samples]
-                low_knn_indices = compute_knn_graph(self.pre_embeddings, None, self.n_neighbors, None)
-                acc_list = 1 - metric_neighbor_preserve_introduce(low_knn_indices, high_knn_indices)[1]
-                prob[:pre_n_samples] = (acc_list + prob[:pre_n_samples]) / 2
+            return super()._sample_training_data(metric_based_sample)
 
-            sampled_indices = KeyPointsGenerater.generate(self.dataset.total_data, self.finetune_data_rate,
-                                                          prob=self.sample_prob)[1]
-            if not self.buffer_empty():
-                sampled_indices = np.union1d(sampled_indices, self.cached_shift_indices)
-            return sampled_indices
+        sampled_indices = KeyPointsGenerater.generate(self.dataset.total_data, self.finetune_data_rate,
+                                                      False, prob=prob, min_num=self.minimum_finetune_data_num)[1]
+        if not self.buffer_empty():
+            sampled_indices = np.union1d(sampled_indices, self.cached_shift_indices)
+        # 这里不仅仅是要显式加入分布发生变化的数据，还需要显式加入模型没有拟合过的数据
+        sampled_indices = np.union1d(sampled_indices, np.arange(self.fitted_data_num, self.dataset.cur_n_samples, 1))
+        return sampled_indices
+
+    def _cal_neighbor_lost_weights(self, alpha=2):
+        pre_n_samples = self.pre_embeddings.shape[0]
+        high_knn_indices = self.dataset.knn_indices[:pre_n_samples]
+        # TODO：这里需要进一步提高效率
+        low_knn_indices = compute_knn_graph(self.pre_embeddings, None, self.n_neighbors, None)[0]
+        # 这里还应该有一个阈值，只需要大于这个阈值一定程度便可以视为较好了
+        preserve_rate = metric_neighbor_preserve_introduce(low_knn_indices, high_knn_indices)[1]
+        # mean, std = np.mean(preserve_rate), np.std(preserve_rate)
+        # preserve_rate[preserve_rate > mean + alpha * std] = 1
+        return (1 - preserve_rate) ** 2, pre_n_samples
 
     def _generate_key_points(self, data):
         if self.key_data is None:

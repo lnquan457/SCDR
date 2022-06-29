@@ -27,3 +27,11 @@ def time_stamp_to_date_adjoin(time_stamp):
 def time_stamp_to_date_time_adjoin(time_stamp):
     time_array = time.localtime(time_stamp)
     return time.strftime(DATE_TIME_ADJOIN_FORMAT, time_array)
+
+
+def date_time2timestamp(str_time):
+    # 转换成时间数组
+    timeArray = time.strptime(str_time, DATE_TIME_FORMAT)
+    # 转换成时间戳
+    timestamp = time.mktime(timeArray)
+    return timestamp

@@ -46,6 +46,7 @@ class ConfigInfo:
     NEIGHBORS_CACHE_DIR = r"..\..\Data\knn\{}_k{}.npy"
     PAIRWISE_DISTANCE_DIR = r"..\..\Data\pairwise\{}.npy"
     DATASET_CACHE_DIR = r"..\..\Data\H5 Data"
+    TIME_INFO_CACHE_DIR = r"..\..\Data\H5 Data\Time Info"
     CUSTOM_INDICES_DIR = "../../../Data/indices"
 
 

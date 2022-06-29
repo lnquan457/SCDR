@@ -366,11 +366,13 @@ def cluster_dbscan(cur_avg_nn_dist, cur_embeddings, pre_avg_nn_dist, pre_embeddi
 
 
 def metric_neighbor_preserve_introduce(low_knn_indices, high_knn_indices):
-    preserve_list = []
     n_samples = low_knn_indices.shape[0]
     n_neighbor = low_knn_indices.shape[1]
+    preserve_list = np.zeros(shape=n_samples)
+    fake_list = np.zeros(shape=n_samples)
     for i in range(n_samples):
-        preserve_list.append(len(np.intersect1d(low_knn_indices[i], high_knn_indices[i])) / n_neighbor)
+        preserve_list[i] = len(np.intersect1d(low_knn_indices[i], high_knn_indices[i])) / n_neighbor
+        # fake_list[i] = len(np.setdiff1d())
     return np.mean(preserve_list), preserve_list
 
 

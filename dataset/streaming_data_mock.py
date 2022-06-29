@@ -1,9 +1,86 @@
+import time
+
 import numpy as np
 
 from dataset.datasets import load_local_h5_by_path
 import os
 
 from utils.constant_pool import ConfigInfo
+from utils.time_utils import date_time2timestamp
+from multiprocessing import Process, Queue
+
+data_queue = Queue()
+flag_queue = Queue()
+
+
+class RealStreamingData(Process):
+    def __init__(self, dataset_name):
+        self.name = "真实流数据产生进程"
+        Process.__init__(self, name=self.name)
+        self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
+        # 格式为：time_info,data_nums，time_info 统一为%Y-%m-%d %H:%M:%S的格式
+        self.time_file_path = os.path.join(ConfigInfo.TIME_INFO_CACHE_DIR, dataset_name + ".txt")
+        self.data_index = 0
+        # 二元组，表示每个时间戳产生的数据个数
+        self.time_data_num = []
+        self._load_data()
+
+    def _load_data(self):
+        self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
+        time_file = open(self.time_file_path)
+
+        for line in time_file.readlines():
+            date_time, data_num = line.split(",")
+            timestamp = date_time2timestamp(date_time)
+            self.time_data_num.append([timestamp, int(data_num)])
+
+    def run(self) -> None:
+        while True:
+            flag_queue.get(block=True)
+            if self.data_index > 0:
+                self.data_index = 0
+
+            for i, (cur_timestamp, cur_data_num) in enumerate(self.time_data_num):
+                for j in range(self.data_index, self.data_index + cur_data_num):
+                    data_queue.put([self.data[j], None if self.targets is None else self.targets[j]])
+                self.data_index += cur_data_num
+
+                if i < len(self.time_data_num) - 1:
+                    time.sleep(self.time_data_num[i + 1][0] - cur_timestamp)
+
+
+class SimulatedStreamingData(Process):
+    def __init__(self, dataset_name, stream_rate):
+        self.name = "模板流数据产生进程"
+        Process.__init__(self, name=self.name)
+        self.dataset_name = dataset_name
+        self.stream_rate = stream_rate
+        # True表示数据以每秒stream_rate个匀速产生
+        self.uniform_mode = isinstance(stream_rate, int)
+        self.data_index = 0
+
+        self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
+        self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
+        self.n_samples = self.data.shape[0]
+        if self.uniform_mode:
+            self.data_num_list = np.ones(shape=(self.n_samples // stream_rate)) * stream_rate
+            left = self.n_samples - np.sum(self.data_num_list)
+            if left > 0:
+                self.data_num_list = np.append(self.data_num_list, left)
+        else:
+            self.data_num_list = stream_rate
+
+    def run(self) -> None:
+        while True:
+            flag_queue.get(block=True)
+            if self.data_index > 0:
+                self.data_index = 0
+
+            for i, cur_data_num in enumerate(self.data_num_list):
+                for j in range(self.data_index, self.data_index + cur_data_num):
+                    data_queue.put([self.data[j], None if self.targets is None else self.targets[j]])
+
+                self.data_index += cur_data_num
 
 
 class StreamingDataMock:
@@ -25,8 +102,10 @@ class StreamingDataMock:
         cur_data = self.data[self.seq_indices[from_idx:to_idx]]
         cur_label = self.targets[self.seq_indices[from_idx:to_idx]]
 
-        self.history_data = cur_data if self.history_data is None else np.concatenate([self.history_data, cur_data], axis=0)
-        self.history_label = cur_label if self.history_label is None else np.concatenate([self.history_label, cur_label], axis=0)
+        self.history_data = cur_data if self.history_data is None else np.concatenate([self.history_data, cur_data],
+                                                                                      axis=0)
+        self.history_label = cur_label if self.history_label is None else np.concatenate(
+            [self.history_label, cur_label], axis=0)
         self.get_seq_label(np.copy(cur_label))
         self.time_step += 1
         self.data_index += to_idx - from_idx
