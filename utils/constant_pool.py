@@ -3,8 +3,7 @@
 import numpy as np
 from multiprocessing import Queue
 
-METRIC_NAMES = ["Trust", "Continuity", 'Neighbor Hit', 'KA(10)', 'KA(5)', 'KA(1)', 'Sim Fake', 'Dissim Lost', 'SC',
-                'DSC', 'GON']
+METRIC_NAMES = ["Trust", "Continuity", 'Neighbor Hit', 'KA(10)', 'SC', 'DSC']
 ALL_DATASETS = ["animals", "banknote", "Anuran Calls_8c", "cifar10_ex_10000", "cnae9", "dogs_cats_10000_idx",
                 "fish", "food", "har", "isolet_subset", "mnist_r_10000",
                 "ml binary", "pendigits", "retina_r_10000", "satimage", "stanford dogs_subset",
@@ -16,6 +15,7 @@ ATSNE = "atSNE"
 XTREAMING = "Xtreaming"
 SCDR = "SCDR"
 RTSCDR = "RTSCDR"
+PAR_SCDR = "ParallelSCDR"
 
 # STREAM_METHOD_LIST = [SIPCA, XTREAMING, ATSNE, SCDR]
 # STREAM_METHOD_LIST = [ATSNE, SCDR]
@@ -43,11 +43,11 @@ class ConfigInfo:
     MODEL_CONFIG_PATH = "./configs/{}.yaml"
     RESULT_SAVE_DIR = r".\results\{}\n{}_d{}"
     # 单机下的数据缓存目录
-    NEIGHBORS_CACHE_DIR = r"..\..\Data\knn\{}_k{}.npy"
-    PAIRWISE_DISTANCE_DIR = r"..\..\Data\pairwise\{}.npy"
-    DATASET_CACHE_DIR = r"..\..\Data\H5 Data"
-    TIME_INFO_CACHE_DIR = r"..\..\Data\H5 Data\Time Info"
-    CUSTOM_INDICES_DIR = "../../../Data/indices"
+    NEIGHBORS_CACHE_DIR = r"H:\Projects\流数据\Data\knn\{}_k{}.npy"
+    PAIRWISE_DISTANCE_DIR = r"H:\Projects\流数据\Data\pairwise\{}.npy"
+    DATASET_CACHE_DIR = r"H:\Projects\流数据\Data\H5 Data"
+    TIME_INFO_CACHE_DIR = r"H:\Projects\流数据\Data\Time Info"
+    CUSTOM_INDICES_DIR = r"H:\Projects\流数据\Data\indices"
 
 
 class ComponentInfo:

@@ -1,7 +1,9 @@
 #!/usr/bin/env python 
 # -*- coding:utf-8 -*-
+import copy
 import random
 import shutil
+from multiprocessing import Process
 
 import numpy as np
 import torch
@@ -16,7 +18,7 @@ from utils.metrics_tool import MetricProcess
 
 
 class SCDRTrainer(CDRsExperiments):
-    def __init__(self, model, dataset_name, config_path, configs, result_save_dir, device='cuda',
+    def __init__(self, model, dataset_name, config_path, configs, result_save_dir, device='cuda:0',
                  log_path="log_streaming.txt"):
         CDRsExperiments.__init__(self, model, dataset_name, configs, result_save_dir, config_path, True, device, log_path)
         self.streaming_dataset = None
@@ -24,7 +26,7 @@ class SCDRTrainer(CDRsExperiments):
         self.minimum_finetune_data_num = 400
         self.finetune_data_num = 0
         self.cur_time = 0
-
+        self.infer_model = None
         self.first_train_data_num = 0
 
     def update_batch_size(self, data_num):
@@ -55,6 +57,8 @@ class SCDRTrainer(CDRsExperiments):
             self.load_checkpoint(ckpt_path)
             self.pre_embeddings = self.visualize(None, device=self.device)[0]
             self._train_begin(int(time.time()))
+
+        self.infer_model = self.model.copy_network()
 
         if self.config_path is not None:
             if not os.path.exists(self.result_save_dir):
@@ -88,11 +92,15 @@ class SCDRTrainer(CDRsExperiments):
         self.metric_tool.start()
 
     def infer_embeddings(self, data):
-        self.model.to(self.device)
+        self.infer_model.to(self.device)
         data = torch.tensor(data, dtype=torch.float).to(self.device)
         with torch.no_grad():
-            self.model.eval()
-            data_embeddings = self.model.encode(data)[1].cpu()
-            self.model.train()
+            self.infer_model.eval()
+            data_embeddings = self.infer_model(data).cpu()
+            self.infer_model.train()
         return data_embeddings
 
+    def resume_train(self, resume_epoch):
+        embeddings = super(SCDRTrainer, self).resume_train(resume_epoch)
+        self.infer_model = self.model.copy_network()
+        return embeddings

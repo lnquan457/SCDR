@@ -9,7 +9,7 @@ from utils.math_utils import *
 import matplotlib.pyplot as plt
 import os
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
-from utils.queue_set import QueueSet
+from utils.queue_set import EvalQueueSet
 from utils.time_utils import *
 from torch.optim.lr_scheduler import MultiStepLR, ReduceLROnPlateau
 import shutil
@@ -51,7 +51,7 @@ def position_vis(c, vis_save_path, z, title=None):
         plt.title(title, fontsize=18)
     plt.xticks([])
     plt.yticks([])
-    plt.axis("equal")
+    # plt.axis("equal")
 
     # plt.title("{} Embeddings".format(method_name), fontsize=20)
     if vis_save_path is not None:
@@ -130,7 +130,7 @@ class Experiment:
         # 定量测量
         self.metric_tool = None
         self.val_metric_tool = None
-        self.queue_set = QueueSet()
+        self.queue_set = EvalQueueSet()
 
         # 是否在子集上进行评估
         # self.sub_eval_ratio = self.configs.training_params.sub_eval_ratio
@@ -581,7 +581,7 @@ class Experiment:
             self.model = MODELS[self.configs.method_params.method](self.configs, device=self.device)
             self.model = self.model.to(self.device)
             self.start_epoch = 0
-            self.queue_set = QueueSet()
+            self.queue_set = EvalQueueSet()
             self.message_queue = Queue()
             self.preprocess()
             if i > 0:
@@ -591,7 +591,7 @@ class Experiment:
             self.launch_date_time = None
             embeddings = self.train(launch_time_stamp)
             if not self.multi or self.device_id == 0:
-                metrics = self.metric_tool.queue_set.eval_result_queue.get()
+                metrics = self.metric_tool.stream_data_queue_set.eval_result_queue.get()
                 time_costs.append(self.train_time_cost)
                 # val_metrics = self.metric_tool.queue_set.test_eval_result_queue.get()
                 if metrics is not None and len(metrics) > 0:

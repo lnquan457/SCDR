@@ -1,0 +1,27 @@
+exp_params:
+  dataset: 'food'
+  input_dims: 512   # x for vectors or (h, w, c) for images
+  latent_dim: 2
+
+
+method_params:
+  method: "CDR"
+  initial_train_epoch: 400
+  batch_size: 512
+  LR: 0.001
+  n_neighbors: 10
+  optimizer: "adam" # adam or sgd
+  scheduler: "multi_step" # cosine or multi_step or on_plateau
+  temperature: 0.15
+  split_upper: 0.1
+  split_lower: 0.005
+  alpha: 5
+  separation_begin_ratio: 0.25
+  steady_begin_ratio: 0.9
+
+
+debug_params:
+  epoch_print_inter: 0.1
+  vis_inter: 0.5
+  model_save_inter: 1.0
+  eval_inter: 1.0 # 0 indicates that no test during training process

@@ -1,4 +1,5 @@
 import time
+from multiprocessing import Queue, Process
 
 import numpy as np
 
@@ -12,7 +13,7 @@ from utils.scdr_utils import KeyPointsGenerater
 
 class RTSCDRModel(SCDRBase):
     def __init__(self, shift_buffer_size, n_neighbors, model_trainer: SCDRTrainer, initial_train_num,
-                 initial_train_epoch, finetune_epoch, finetune_data_ratio=0.5, ckpt_path=None):
+                 initial_train_epoch, finetune_epoch, finetune_data_ratio=1.0, ckpt_path=None):
         SCDRBase.__init__(self, n_neighbors, model_trainer, initial_train_num, initial_train_epoch, finetune_epoch,
                           finetune_data_ratio, ckpt_path)
 
@@ -35,7 +36,6 @@ class RTSCDRModel(SCDRBase):
         # 采样概率衰减的间隔时间，以秒为单位
         self.pre_update_time = None
         self.decay_iter_time = 10
-        self.pre_model_update = False
         # 没有经过模型拟合的数据
         self.unfitted_data = None
 
@@ -55,7 +55,6 @@ class RTSCDRModel(SCDRBase):
             if not self._caching_initial_data(data, labels):
                 return None
             self._initial_project(self.initial_data_buffer, self.initial_label_buffer)
-            self.pre_model_update = True
             # TODO: 调试用，调试完成后删除
             sta = time.time()
             self.knn_searcher.search(self.initial_data_buffer, self.n_neighbors, query=False)
@@ -70,7 +69,7 @@ class RTSCDRModel(SCDRBase):
             data_embeddings = self.model_trainer.infer_embeddings(data).numpy().astype(float)
             data_embeddings = np.reshape(data_embeddings, (new_data_num, self.pre_embeddings.shape[1]))
             self.model_repro_time += time.time() - sta
-            cur_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0, dtype=float)
+            cur_total_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0, dtype=float)
 
             # 更新knn graph
             """
@@ -108,17 +107,20 @@ class RTSCDRModel(SCDRBase):
 
             if len(self.cached_shift_indices) <= self.shift_buffer_size:
                 # TODO：如何计算这些最新数据的投影结果，以保证其在当前时间点是可信的，应该被当作异常点/离群点进行处理
-                self.pre_embeddings = cur_embeddings
-                self.pre_model_update = False
+                # TODO: 这边即使数据的分布没有发生变化，但是在投影质量下降到一定程度后，也要进行模型更新
+                self.pre_embeddings = cur_total_embeddings
                 self.unfitted_data = data if self.unfitted_data is None else np.concatenate([self.unfitted_data, data],
                                                                                             axis=0)
             else:
-                self._process_shift_situation(self.time_based_sample, self.metric_based_sample)
-                self.cached_shift_indices = None
-                self.pre_model_update = True
-                self.unfitted_data = None
+                self.pre_embeddings = self._adapt_distribution_change(cur_total_embeddings)
         # self._gather_data_stream()
         return self.pre_embeddings
+
+    def _adapt_distribution_change(self, *args):
+        # TODO:先还是展示当前投影的结果，然后在后台更新投影模型，模型更新完成后，再更新所有数据的投影
+        self._update_projection_model(self.time_based_sample, self.metric_based_sample, self.cached_shift_indices)
+        self.cached_shift_indices = None
+        self.unfitted_data = None
 
     def _caching_initial_data(self, data, labels):
         self.initial_data_buffer = data if self.initial_data_buffer is None \
@@ -134,7 +136,7 @@ class RTSCDRModel(SCDRBase):
 
     def clear_buffer(self, final_embed=False):
         # 更新knn graph
-        self._process_shift_situation(self.time_based_sample, self.metric_based_sample)
+        self._update_projection_model(self.time_based_sample, self.metric_based_sample)
         return self.pre_embeddings
 
     def _update_time_weights(self, n_samples):
@@ -150,7 +152,7 @@ class RTSCDRModel(SCDRBase):
                 self.pre_update_time = cur_time
             self.time_weights = np.concatenate([self.time_weights, np.ones(shape=n_samples)])
 
-    def _sample_training_data(self, time_based_samples, metric_based_sample):
+    def _sample_training_data(self, time_based_samples, metric_based_sample, cached_shift_indices):
         # 采样训练子集
         if time_based_samples and metric_based_sample:
             prob = np.copy(self.time_weights)
@@ -168,8 +170,9 @@ class RTSCDRModel(SCDRBase):
 
         sampled_indices = KeyPointsGenerater.generate(self.dataset.total_data, self.finetune_data_rate,
                                                       False, prob=prob, min_num=self.minimum_finetune_data_num)[1]
-        if not self.buffer_empty():
-            sampled_indices = np.union1d(sampled_indices, self.cached_shift_indices)
+        if cached_shift_indices is not None:
+            sampled_indices = np.union1d(sampled_indices, cached_shift_indices)
+
         # 这里不仅仅是要显式加入分布发生变化的数据，还需要显式加入模型没有拟合过的数据
         sampled_indices = np.union1d(sampled_indices, np.arange(self.fitted_data_num, self.dataset.cur_n_samples, 1))
         return sampled_indices
@@ -191,3 +194,77 @@ class RTSCDRModel(SCDRBase):
         else:
             key_data = KeyPointsGenerater.generate(data, self.key_data_rate)[0]
             self.key_data = np.concatenate([self.key_data, key_data], axis=0)
+
+
+class RTSCDRParallel(RTSCDRModel):
+    def __init__(self, queue_set, shift_buffer_size, n_neighbors, model_trainer: SCDRTrainer, initial_train_num,
+                 initial_train_epoch, finetune_epoch, finetune_data_ratio=1.0, ckpt_path=None):
+        RTSCDRModel.__init__(self, shift_buffer_size, n_neighbors, model_trainer, initial_train_num,
+                             initial_train_epoch, finetune_epoch, finetune_data_ratio, ckpt_path)
+        self.queue_set = queue_set
+        self.scdr_trainer_process = None
+
+    def _initial_project(self, data, labels=None):
+        super()._initial_project(data, labels)
+        self.scdr_trainer_process = SCDRTrainerProcess(self, self.queue_set)
+        self.scdr_trainer_process.start()
+
+    def re_embedding_all(self, data):
+        data_embeddings = self.model_trainer.infer_embeddings(data).numpy().astype(float)
+        self.pre_embeddings = data_embeddings
+        return data_embeddings
+
+    def _adapt_distribution_change(self, *args):
+        cur_total_embeddings = args[0]
+        cur_data_num = cur_total_embeddings.shape[0]
+        self.unfitted_data = None
+        # TODO: debug检查一下，确定没有浅引用问题
+        cached_shift_indices = self.cached_shift_indices
+        self.cached_shift_indices = None
+        data_num_list = self.data_num_list
+        self.data_num_list = [0]
+        fitted_data_num = self.fitted_data_num
+        self.fitted_data_num = self.dataset.cur_n_samples
+
+        # TODO:先还是展示当前投影的结果，然后在后台更新投影模型，模型更新完成后，再更新所有数据的投影
+
+        sampled_indices = self._sample_training_data(self.time_based_sample, self.metric_based_sample,
+                                                     cached_shift_indices)
+
+        self.queue_set.data_queue.put([sampled_indices, fitted_data_num, data_num_list, cur_data_num])
+
+        return cur_total_embeddings
+
+    def parallel_code(self, sampled_indices, fitted_data_num, data_num_list, cur_data_num):
+        # 下面这些应该并行
+        # 更新knn graph
+        sta = time.time()
+        self.dataset.update_knn_graph(self.dataset.total_data[:fitted_data_num],
+                                      self.dataset.total_data[fitted_data_num:], data_num_list, cur_data_num)
+        self.knn_update_time += time.time() - sta
+
+        self.model_trainer.update_batch_size(len(sampled_indices))
+
+        self.model_trainer.update_dataloader(self.finetune_epoch, sampled_indices)
+
+        sta = time.time()
+        # TODO:设置一个队列，当模型更新进程把模型更新好之后就将其加入到该队列中，然后投影进程监听到该队列中有数据就替换当前模型
+        self.model_trainer.resume_train(self.finetune_epoch)
+        self.model_update_time += time.time() - sta
+
+
+class SCDRTrainerProcess(Process):
+    def __init__(self, rt_scdr, queue_set):
+        self.name = "SCDR模型更新进程"
+        Process.__init__(self, name=self.name)
+        self.queue_set = queue_set
+        self.rt_scdr = rt_scdr
+
+    def run(self) -> None:
+        while True:
+            # 获取训练相关的数据，现在的问题在于tensor数据不能跨进程传输
+            training_info = self.queue_set.data_queue.get()
+            print("准备更新模型！")
+            self.rt_scdr.parallel_code(*training_info)
+            self.queue_set.re_embedding_flag_queue.put(True)
+

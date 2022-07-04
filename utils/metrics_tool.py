@@ -71,6 +71,12 @@ def cal_dist_correlation(x, y):
     return corr_list
 
 
+def metric_visual_consistency_simplest(cur_embeddings, pre_embeddings):
+    pre_n_samples = pre_embeddings.shape[0]
+    dists = np.linalg.norm(cur_embeddings[:pre_n_samples] - pre_embeddings, axis=-1) ** 2
+    return np.sum(dists)
+
+
 def metric_mental_map_preservation(cur_embeddings, pre_embeddings, nn_indices=None, k=30):
     pre_n_samples = pre_embeddings.shape[0]
     dists = np.linalg.norm(cur_embeddings[:pre_n_samples] - pre_embeddings, axis=-1) ** 2

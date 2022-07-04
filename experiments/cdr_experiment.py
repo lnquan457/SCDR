@@ -46,7 +46,7 @@ class CDRsExperiments(Experiment):
 
         self.train_loader, self.n_samples = clr_dataset.get_data_loaders(
             init_epoch, self.dataset_name, ConfigInfo.DATASET_CACHE_DIR, self.n_neighbors, knn_cache_path,
-            pairwise_cache_path, self.debiased_sample, self.is_image, multi=self.multi)
+            pairwise_cache_path, self.is_image, multi=self.multi)
 
         self.knn_indices = clr_dataset.knn_indices
         self.knn_dists = clr_dataset.knn_distances

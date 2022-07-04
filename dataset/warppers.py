@@ -44,7 +44,7 @@ class DataSetWrapper(object):
                                                                        ComponentInfo.UMAP_NORMALIZE, root_dir)
         self.train_dataset = train_dataset
         self.knn_indices, self.knn_distances = compute_knn_graph(train_dataset.data, knn_cache_path, n_neighbors,
-                                                                 pairwise_cache_path, accelerate=True)
+                                                                 pairwise_cache_path, accelerate=False)
 
         self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
 
@@ -247,9 +247,14 @@ class StreamingDatasetWrapper(DataSetWrapper):
     def buffer_empty(self):
         return len(self.cached_shifted_indices) == 0
 
-    def update_knn_graph(self, pre_data, new_data, data_num_list):
+    def update_knn_graph(self, pre_data, new_data, data_num_list, cut_num=None):
+        total_data = self.total_data if cut_num is None else self.total_data[:cut_num]
+        farest_neighbor_dist = self.farest_neighbor_dist if cut_num is None else self.farest_neighbor_dist[:cut_num]
+        knn_distances = self.knn_distances if cut_num is None else self.knn_distances[:cut_num]
+        knn_indices = self.knn_indices if cut_num is None else self.knn_indices[:cut_num]
+
         new_n_samples = new_data.shape[0]
-        dists = cdist(new_data, self.total_data)
+        dists = cdist(new_data, total_data)
         pre_n_samples = pre_data.shape[0]
         neighbor_changed_indices = list(np.arange(0, new_n_samples, 1) + pre_n_samples)
 
@@ -258,7 +263,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         tmp_index = 0
         for i in range(new_n_samples):
-            indices = np.where(dists[i] - self.farest_neighbor_dist < 0)[0]
+            indices = np.where(dists[i] - farest_neighbor_dist < 0)[0]
             # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
             if i > 0 and i == data_num_list[tmp_index + 1]:
                 tmp_index += 1
@@ -287,8 +292,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         # TODO:邻域发生变化的点的权重需要重新计算
 
-        umap_graph, sigmas, rhos, self.raw_knn_weights = fuzzy_simplicial_set_partial(self.knn_indices,
-                                                                                      self.knn_distances,
+        umap_graph, sigmas, rhos, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
                                                                                       self.raw_knn_weights,
                                                                                       neighbor_changed_indices)
 

@@ -113,15 +113,16 @@ class SCDRBase:
         shifted_indices = np.where(labels == -1)[0]
         return shifted_indices, None
 
-    def _process_shift_situation(self, *args):
+    def _update_projection_model(self, *args):
         self._update_training_data(*args)
 
         sta = time.time()
-        self.pre_embeddings = self.model_trainer.resume_train(self.finetune_epoch)
+        embeddings = self.model_trainer.resume_train(self.finetune_epoch)
         self.model_update_time += time.time() - sta
+
         self.cached_shift_indices = None
         self.data_num_list = [0]
-        return self.pre_embeddings
+        return embeddings
 
     def _update_training_data(self, *args):
         # 更新knn graph
@@ -223,13 +224,12 @@ class SCDRModel(SCDRBase):
 
             # if len(shifted_indices) <= int(buffer_data.shape[0] * 0.15):
             if len(self.cached_shift_indices) <= 30:
-                # 此时应该将这些数据缓存起来
                 sta = time.time()
                 data_embeddings = self.model_trainer.infer_embeddings(buffer_data)
                 self.model_repro_time += time.time() - sta
                 self.pre_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0)
             else:
-                self._process_shift_situation()
+                self._update_projection_model()
         self.clear_buffer()
 
         return self.pre_embeddings
@@ -247,7 +247,7 @@ class SCDRModel(SCDRBase):
             nn_indices, nn_dists = self.knn_searcher.search(self.buffered_data, self.n_neighbors)
             self.dataset.add_new_data(self.buffered_data, nn_indices, nn_dists, self.buffered_labels)
 
-            self._process_shift_situation()
+            self._update_projection_model()
             self._gather_data_stream()
             return self.pre_embeddings
 

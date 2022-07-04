@@ -78,6 +78,7 @@ class atSNEModel(TSNE):
         self.kl_divergence_ = 0
         self.degrees_of_freedom = 1
 
+        self.first_fitted = False
         self.X = None
         self.distances_nn = None
         self.neighbors_nn = None
@@ -191,6 +192,10 @@ class atSNEModel(TSNE):
         return self.pre_embeddings
 
     def fit_new_data(self, data, labels=None, ex_ratio=0.1):
+        if not self.first_fitted:
+            self.first_fitted = True
+            return self.fit_transform(data, labels)
+
         total_data = np.concatenate([self.X, data], axis=0)
         new_total_n_samples = total_data.shape[0]
 

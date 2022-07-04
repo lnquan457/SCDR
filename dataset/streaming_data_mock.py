@@ -9,18 +9,26 @@ from utils.constant_pool import ConfigInfo
 from utils.time_utils import date_time2timestamp
 from multiprocessing import Process, Queue
 
-data_queue = Queue()
-flag_queue = Queue()
+
+def resort_label(label_seq):
+    # 按照cls出现的顺序重新分配标签
+    unique_cls, show_seq = np.unique(label_seq, return_index=True)
+    for i, item in enumerate(unique_cls):
+        indices = np.argwhere(label_seq == item).squeeze()
+        label_seq[indices] = show_seq[i]
+    return label_seq
 
 
 class RealStreamingData(Process):
-    def __init__(self, dataset_name):
+    def __init__(self, dataset_name, queue_set):
         self.name = "真实流数据产生进程"
         Process.__init__(self, name=self.name)
+        self.queue_set = queue_set
         self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
         # 格式为：time_info,data_nums，time_info 统一为%Y-%m-%d %H:%M:%S的格式
         self.time_file_path = os.path.join(ConfigInfo.TIME_INFO_CACHE_DIR, dataset_name + ".txt")
         self.data_index = 0
+        self.stop_flag = False
         # 二元组，表示每个时间戳产生的数据个数
         self.time_data_num = []
         self._load_data()
@@ -28,40 +36,48 @@ class RealStreamingData(Process):
     def _load_data(self):
         self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
         time_file = open(self.time_file_path)
-
+        self.seq_label = None if self.targets is None else resort_label(self.targets)
         for line in time_file.readlines():
             date_time, data_num = line.split(",")
             timestamp = date_time2timestamp(date_time)
             self.time_data_num.append([timestamp, int(data_num)])
 
     def run(self) -> None:
-        while True:
-            flag_queue.get(block=True)
+        while not self.stop_flag:
+            self.queue_set.start_flag_queue.get(block=True)
             if self.data_index > 0:
                 self.data_index = 0
 
             for i, (cur_timestamp, cur_data_num) in enumerate(self.time_data_num):
+                cur_data = []
                 for j in range(self.data_index, self.data_index + cur_data_num):
-                    data_queue.put([self.data[j], None if self.targets is None else self.targets[j]])
+                    cur_data.append([self.data[j], None if self.targets is None else self.targets[j]])
+                self.queue_set.data_queue.put(cur_data)
                 self.data_index += cur_data_num
 
                 if i < len(self.time_data_num) - 1:
                     time.sleep(self.time_data_num[i + 1][0] - cur_timestamp)
 
+            self.queue_set.stop_flag_queue.put(True)
+
 
 class SimulatedStreamingData(Process):
-    def __init__(self, dataset_name, stream_rate):
-        self.name = "模板流数据产生进程"
+    def __init__(self, dataset_name, stream_rate, queue_set, custom_seq=None):
+        self.name = "模仿流数据产生进程"
         Process.__init__(self, name=self.name)
+        self.queue_set = queue_set
         self.dataset_name = dataset_name
         self.stream_rate = stream_rate
         # True表示数据以每秒stream_rate个匀速产生
         self.uniform_mode = isinstance(stream_rate, int)
+        self.stop_flag = False
         self.data_index = 0
 
         self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
         self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
         self.n_samples = self.data.shape[0]
+        self.custom_seq = np.arange(0, self.n_samples, 1) if custom_seq is None else custom_seq
+        self.seq_label = None if self.targets is None else resort_label(self.targets[self.custom_seq])
         if self.uniform_mode:
             self.data_num_list = np.ones(shape=(self.n_samples // stream_rate)) * stream_rate
             left = self.n_samples - np.sum(self.data_num_list)
@@ -69,18 +85,24 @@ class SimulatedStreamingData(Process):
                 self.data_num_list = np.append(self.data_num_list, left)
         else:
             self.data_num_list = stream_rate
+        self.data_num_list = self.data_num_list.astype(int)
 
     def run(self) -> None:
-        while True:
-            flag_queue.get(block=True)
+        while not self.stop_flag:
+            self.queue_set.start_flag_queue.get(block=True)
+            print("start adding data!")
             if self.data_index > 0:
                 self.data_index = 0
 
             for i, cur_data_num in enumerate(self.data_num_list):
-                for j in range(self.data_index, self.data_index + cur_data_num):
-                    data_queue.put([self.data[j], None if self.targets is None else self.targets[j]])
+                cur_data = []
+                for j in self.custom_seq[self.data_index:self.data_index + cur_data_num]:
+                    cur_data.append([self.data[j], None if self.targets is None else self.targets[j]])
+                self.queue_set.data_queue.put(cur_data)
 
                 self.data_index += cur_data_num
+
+            self.queue_set.stop_flag_queue.put(True)
 
 
 class StreamingDataMock:
@@ -88,9 +110,8 @@ class StreamingDataMock:
         self.seq_indices = seq_indices
         self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
         self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
+        self.seq_label = None if self.targets is None else resort_label(self.targets[seq_indices])
         self.num_per_step = num_per_step
-        self.history_data = None
-        self.history_label = None
         self.time_step = 0
         self.data_index = 0
         self.time_step_num = int(np.ceil(len(seq_indices) / self.num_per_step)) if seq_indices is not None else 0
@@ -102,29 +123,9 @@ class StreamingDataMock:
         cur_data = self.data[self.seq_indices[from_idx:to_idx]]
         cur_label = self.targets[self.seq_indices[from_idx:to_idx]]
 
-        self.history_data = cur_data if self.history_data is None else np.concatenate([self.history_data, cur_data],
-                                                                                      axis=0)
-        self.history_label = cur_label if self.history_label is None else np.concatenate(
-            [self.history_label, cur_label], axis=0)
-        self.get_seq_label(np.copy(cur_label))
         self.time_step += 1
         self.data_index += to_idx - from_idx
         return cur_data, cur_label
-
-    def get_seq_label(self, cur_label):
-        unique_cls = np.unique(cur_label)
-        for item in unique_cls:
-            indices = np.argwhere(cur_label == item).squeeze()
-            if item not in self.cls2idx.keys():
-                num = len(self.cls2idx.keys())
-                self.cls2idx[item] = num
-                cur_label[indices] = num
-            else:
-                cur_label[indices] = self.cls2idx[item]
-        if self.seq_label is None:
-            self.seq_label = cur_label
-        else:
-            self.seq_label = np.concatenate([self.seq_label, cur_label])
 
 
 class StreamingDataMock2Stage(StreamingDataMock):
@@ -138,6 +139,8 @@ class StreamingDataMock2Stage(StreamingDataMock):
         self.initial_indices = None
         self.after_indices = None
         self.time_data_seq = None
+        self.history_data = None
+        self.history_label = None
 
         if seq_indices is None:
             self._generate_indices_seq()

@@ -4,9 +4,9 @@ import numpy as np
 import os
 
 from experiments.scdr_trainer import SCDRTrainer
-from experiments.streaming_experiment import StreamingEx
+from experiments.streaming_experiment import StreamingEx, StreamingExProcess
 from model.dr_models.ModelSets import MODELS
-from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, RTSCDR
+from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, RTSCDR, PAR_SCDR
 from utils.parser import get_config
 
 device = "cuda:0"
@@ -75,24 +75,21 @@ def start(ex):
     elif args.method == XTREAMING:
         # ==============3. Xtreaming model=====================
         ex.start_xtreaming()
-    elif args.method == SCDR:
-        # ==============4. SCDR model=====================
+    elif args.method == SCDR or args.method == RTSCDR or args.method == PAR_SCDR:
+        # ==============4. SCDR/RTSCDR/PAR_SCDR model=====================
         cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
 
         model_trainer = SCDRTrainer(cdr_model, cfg.exp_params.dataset, cfg_path, cfg, result_save_dir,
                                     device=device, log_path=log_path)
-        # ckpt_path = r"results\SCDR\n10\isolet_subset\20220512_15h47m54s\initial\CDR_200.pth.tar"
-        # ckpt_path = r"results\SCDR\n10\isolet_subset\20220512_19h34m47s\initial\CDR_400.pth.tar"
-        ckpt_path = None
-        ex.start_scdr(model_trainer)
-    elif args.method == RTSCDR:
-        # ==============5. RTSCDR model=====================
-        cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
-
-        model_trainer = SCDRTrainer(cdr_model, cfg.exp_params.dataset, cfg_path, cfg, result_save_dir,
-                                    device=device, log_path=log_path)
-        ex.start_rtscdr(model_trainer)
-
+        if args.method == SCDR:
+            ex.start_scdr(model_trainer)
+        elif args.method == RTSCDR:
+            ex.start_rtscdr(model_trainer)
+        else:
+            if isinstance(ex, StreamingExProcess):
+                ex.start_parallel_scdr(model_trainer)
+            else:
+                pass
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 
@@ -115,7 +112,9 @@ def custom_indices_training(custom_indices_path):
     # custom_indices_path = os.path.join(ConfigInfo.CUSTOM_INDICES_DIR, "{}.npy".format(args.dataset))
     custom_indices = np.load(custom_indices_path, allow_pickle=True)
 
-    ex = StreamingEx(None, cfg, custom_indices, result_save_dir)
+    # ex = StreamingEx(cfg, custom_indices, result_save_dir)
+
+    ex = StreamingExProcess(cfg, custom_indices, result_save_dir, )
 
     start(ex)
 
@@ -123,7 +122,8 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=RTSCDR, choices=[ATSNE, SIPCA, XTREAMING, SCDR, RTSCDR])
+    parser.add_argument("--method", type=str, default=PAR_SCDR, choices=[ATSNE, SIPCA, XTREAMING, SCDR, RTSCDR, PAR_SCDR])
+    parser.add_argument("--indices_dir", type=str, default=r"H:\Projects\流数据\Data\indices\single_cluster")
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 
@@ -136,7 +136,7 @@ if __name__ == '__main__':
     result_save_dir = "results/{}/".format(args.method)
 
     # random_training()
-    custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.dataset)
+    custom_indices_path = os.path.join(args.indices_dir, "{}.npy".format(cfg.exp_params.dataset))
     custom_indices_training(custom_indices_path)
     # stream_rate_ex()
     # cluster_composite_ex()

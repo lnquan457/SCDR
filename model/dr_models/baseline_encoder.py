@@ -7,7 +7,7 @@ import torchvision.models as models
 def get_encoder(encoder_name, input_dims):
     try:
         if encoder_name == "CBR":
-            encoder = Encoder(input_dims[:2], in_channels=input_dims[-1])
+            encoder = ConvEncoder(input_dims[:2], in_channels=input_dims[-1])
             encoder_out_dims = encoder.output_dims
         else:
             encoder = FCEncoder(input_dims)
@@ -21,40 +21,9 @@ def get_encoder(encoder_name, input_dims):
                         "FC")
 
 
-class Classifier(nn.Module):
-    def __init__(self, num_classes, in_channels=1, hidden_dims=None):
-        super(Classifier, self).__init__()
-        if hidden_dims is None:
-            hidden_dims = [16, 32, 64, 128, 256]
-        self.hidden_dims = hidden_dims
-
-        modules = []
-        for h_dim in self.hidden_dims:
-            modules.append(nn.Sequential(
-                nn.Conv2d(in_channels, h_dim, kernel_size=3, stride=2, padding=1),
-                nn.BatchNorm2d(h_dim),
-                nn.ReLU()
-            ))
-            in_channels = h_dim
-        modules.append(nn.Flatten())
-
-        self.encoder = nn.Sequential(*modules)
-
-        self.fc1 = nn.Linear(256, 32)
-        self.fc2 = nn.Linear(32, num_classes)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        o = self.encoder(x)
-        f = self.fc1(o)
-        f = self.relu(f)
-        y = self.fc2(f)
-        return y
-
-
-class Encoder(nn.Module):
+class ConvEncoder(nn.Module):
     def __init__(self, input_size, in_channels=1, hidden_dims=None):
-        super(Encoder, self).__init__()
+        super(ConvEncoder, self).__init__()
         if hidden_dims is None:
             hidden_dims = [64, 128, 256, 512]
         self.hidden_dims = hidden_dims
@@ -84,13 +53,12 @@ class FCEncoder(nn.Module):
         nn.Module.__init__(self)
 
         if hidden_dims is None:
-            hidden_dims = [128, 256, 256, 512]
-            # 小规模数据集上使用较浅层网络
-            # hidden_dims = [128, 256, 512]
-            # hidden_dims = [64, 128, 256]
-            # hidden_dims = [32, 64, 128]
-            # hidden_dims = [16, 32, 64]
-            # hidden_dims = [128, 256]
+            # hidden_dims = [128, 256, 256, 512]
+            hidden_dims = [512, 256, 256, 128]
+            # hidden_dims = [512, 256, 256]
+            # hidden_dims = [256, 128, 64, 32]
+            # hidden_dims = [256, 128, 64]
+
         self.hidden_dims = hidden_dims
         modules = []
 
@@ -98,7 +66,7 @@ class FCEncoder(nn.Module):
         for dim in hidden_dims:
             modules.append(nn.Sequential(
                 nn.Linear(in_dim, dim),
-                nn.BatchNorm1d(dim),
+                # nn.BatchNorm1d(dim),
                 nn.ReLU()
             ))
             in_dim = dim

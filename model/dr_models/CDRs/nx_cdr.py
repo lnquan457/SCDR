@@ -1,3 +1,5 @@
+import copy
+
 from torch.nn import Module
 
 from model.dr_models.CDRs.NCELoss import torch_app_skewnorm_func
@@ -33,6 +35,7 @@ class NxCDRModel(Module):
         self.device = device
         self.config = cfg
         self.encoder_name = "FC" if isinstance(cfg.exp_params.input_dims, int) else "CBR"
+        self.pro_dim = 128
 
         self.input_dims = cfg.exp_params.input_dims
         self.latent_dim = cfg.exp_params.latent_dim
@@ -57,6 +60,11 @@ class NxCDRModel(Module):
 
         self.reduction = "mean"
 
+    def copy_network(self):
+        c_encoder = copy.deepcopy(self.encoder)
+        c_pro_header = copy.deepcopy(self.pro_head)
+        return nn.Sequential(c_encoder, c_pro_header)
+
     def update_neg_num(self, new_neg_num):
         self.neg_num = new_neg_num
         self.correlated_mask = _get_correlated_mask(2 * new_neg_num)
@@ -64,11 +72,10 @@ class NxCDRModel(Module):
     def build_model(self):
         encoder, encoder_out_dims = get_encoder(self.encoder_name, self.input_dims)
         self.encoder = encoder
-        pro_dim = 512
         self.pro_head = nn.Sequential(
-            nn.Linear(encoder_out_dims, pro_dim),
+            nn.Linear(encoder_out_dims, self.pro_dim),
             nn.ReLU(),
-            nn.Linear(pro_dim, self.latent_dim)
+            nn.Linear(self.pro_dim, self.latent_dim)
         )
 
     def preprocess(self):
