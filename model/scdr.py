@@ -54,7 +54,6 @@ class SCDRBase:
 
         self.dataset = None
         self.cached_shift_indices = None
-        self.key_data = None
 
         self.lof = None
         # self.knn_searcher = StreamingKNNSearcher(method=KD_TREE)
@@ -229,7 +228,7 @@ class SCDRModel(SCDRBase):
                 self.model_repro_time += time.time() - sta
                 self.pre_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0)
             else:
-                self._update_projection_model()
+                self.pre_embeddings = self._update_projection_model()
         self.clear_buffer()
 
         return self.pre_embeddings
