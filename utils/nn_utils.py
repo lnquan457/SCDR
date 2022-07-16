@@ -267,6 +267,7 @@ class StreamingKNNSearchApprox2(StreamingKNNSearchApprox):
         total_num = new_k + unfitted_data_num
         cur_approx_indices = np.zeros(shape=total_num)
         cur_other_data = np.zeros(shape=(total_num, dim))
+        # TODO：需要弄清楚这一步是为什么
         cur_approx_indices[-unfitted_data_num:] = np.arange(fitted_num, fitted_num + unfitted_data_num, 1)
         cur_other_data[-unfitted_data_num:] = unfitted_data
 

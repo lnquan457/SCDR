@@ -11,7 +11,7 @@ from dataset.warppers import StreamingDatasetWrapper
 from experiments.scdr_trainer import SCDRTrainer
 from utils.logger import InfoLogger
 from utils.nn_utils import StreamingKNNSearcher, ANNOY, KD_TREE
-from utils.scdr_utils import KeyPointsGenerater
+from utils.scdr_utils import KeyPointsGenerater, DistributionChangeDetector
 
 
 def statistical_info(labels, previous_cls, pred_shifted_indices):
@@ -55,7 +55,7 @@ class SCDRBase:
         self.dataset = None
         self.cached_shift_indices = None
 
-        self.lof = None
+        self.dis_change_detector = DistributionChangeDetector(lof_based=True)
         # self.knn_searcher = StreamingKNNSearcher(method=KD_TREE)
         self.knn_searcher = StreamingKNNSearcher(method=ANNOY)
         self.time_step = 0
@@ -76,6 +76,9 @@ class SCDRBase:
     def fit_new_data(self, data, labels=None):
         pass
 
+    def ending(self):
+        pass
+
     def _initial_project(self, data, labels=None):
         self.dataset = StreamingDatasetWrapper(data, labels, self.model_trainer.batch_size)
         sta = time.time()
@@ -83,34 +86,6 @@ class SCDRBase:
         self.model_initial_time = time.time() - sta
         self.model_trained = True
         self.fitted_data_num = self.pre_embeddings.shape[0]
-
-    def _detect_distribution_shift(self, fit_data, pred_data, labels=None):
-        """
-        检测当前数据是否发生概念漂移
-        :return:
-        """
-        sta = time.time()
-        shifted_indices, data_embeddings = self._lof_based(fit_data, pred_data)
-        self.shift_detect_time += time.time() - sta
-
-        # if labels is not None:
-        #     statistical_info(labels, np.unique(self.dataset.total_label[:self.last_train_num]), shifted_indices)
-
-        cur_shift_indices = shifted_indices + self.dataset.cur_n_samples
-        self.cached_shift_indices = cur_shift_indices if self.cached_shift_indices is None else \
-            np.concatenate([self.cached_shift_indices, cur_shift_indices])
-
-        return shifted_indices
-
-    def _lof_based(self, fit_data, pred_data, n_neighbors=5, contamination=0.1):
-        if self.lof is None:
-            self.lof = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, metric="euclidean",
-                                          contamination=contamination)
-
-        self.lof.fit(fit_data)
-        labels = self.lof.predict(pred_data)
-        shifted_indices = np.where(labels == -1)[0]
-        return shifted_indices, None
 
     def _update_projection_model(self, *args):
         self._update_training_data(*args)
@@ -212,7 +187,10 @@ class SCDRModel(SCDRBase):
             self.knn_searcher.search(buffer_data, self.n_neighbors, query=False)
             self.knn_cal_time += time.time() - sta
         else:
-            shifted_indices = self._detect_distribution_shift(self.dataset.total_data, buffer_data, buffer_labels)
+            # 此时还没有往total_data中加入最新数据
+            shifted_indices = self.dis_change_detector.detect_distribution_shift(self.dataset.total_data, buffer_data)
+            self.cached_shift_indices = shifted_indices if self.cached_shift_indices is None else \
+                np.concatenate([self.cached_shift_indices, shifted_indices])
 
             # 更新knn graph
             sta = time.time()

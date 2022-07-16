@@ -4,6 +4,7 @@ import copy
 import random
 import shutil
 from multiprocessing import Process
+from multiprocessing.managers import BaseManager
 
 import numpy as np
 import torch
@@ -15,12 +16,15 @@ from annoy import AnnoyIndex
 from dataset.warppers import StreamingDatasetWrapper, DataSetWrapper
 from utils.constant_pool import *
 from utils.metrics_tool import MetricProcess
+from utils.queue_set import ModelUpdateQueueSet
+from utils.scdr_utils import DataSampler
 
 
 class SCDRTrainer(CDRsExperiments):
     def __init__(self, model, dataset_name, config_path, configs, result_save_dir, device='cuda:0',
                  log_path="log_streaming.txt"):
-        CDRsExperiments.__init__(self, model, dataset_name, configs, result_save_dir, config_path, True, device, log_path)
+        CDRsExperiments.__init__(self, model, dataset_name, configs, result_save_dir, config_path, True, device,
+                                 log_path)
         self.streaming_dataset = None
         self.finetune_epochs = 50
         self.minimum_finetune_data_num = 400
@@ -35,10 +39,13 @@ class SCDRTrainer(CDRsExperiments):
         self.streaming_dataset.batch_size = self.batch_size
         self.model.update_neg_num(int(self.batch_size))
 
-    def first_train(self, dataset: StreamingDatasetWrapper, epochs, ckpt_path=None):
-        self.preprocess(load_data=False)
+    def initialize_streaming_dataset(self, dataset):
         self.first_train_data_num = dataset.total_data.shape[0]
         self.streaming_dataset = dataset
+
+    def first_train(self, dataset: StreamingDatasetWrapper, epochs, ckpt_path=None):
+        self.preprocess(load_data=False)
+        self.initialize_streaming_dataset(dataset)
         self.update_batch_size(self.first_train_data_num)
         self.update_dataloader(epochs)
         self.result_save_dir_modified = True
@@ -104,3 +111,97 @@ class SCDRTrainer(CDRsExperiments):
         embeddings = super(SCDRTrainer, self).resume_train(resume_epoch)
         self.infer_model = self.model.copy_network()
         return embeddings
+
+
+class SCDRTrainerProcess(Process, SCDRTrainer):
+    def __init__(self, queue_set, model, dataset_name, config_path, configs, result_save_dir, device='cuda:0',
+                 log_path="log_streaming.txt", finetune_data_rate=1.0):
+        self.name = "SCDR模型更新进程"
+        Process.__init__(self, name=self.name)
+        SCDRTrainer.__init__(self, model, dataset_name, config_path, configs, result_save_dir, device, log_path)
+        self.queue_set = queue_set
+        self.data_sampler = DataSampler(self.n_neighbors, finetune_data_rate, minimum_sample_data_num=400,
+                                        time_based_sample=False, metric_based_sample=False)
+        self.update_count = 0
+        self.data_stream_ended = False
+
+    def initialize_streaming_dataset(self, dataset):
+        self.first_train_data_num = self.streaming_dataset.total_data.shape[0]
+
+    def run(self) -> None:
+        while True:
+
+            # 获取训练相关的数据，现在的问题在于tensor数据不能跨进程传输
+            if not self.queue_set.flag_queue.empty():
+                flag = self.queue_set.flag_queue.get()
+                if flag == ModelUpdateQueueSet.SAVE:
+                    self.save_weights(self.epoch_num)
+                elif flag == ModelUpdateQueueSet.STOP:
+                    print("scdr trainer exit!")
+                    break
+                elif flag == ModelUpdateQueueSet.DATA_STREAM_END:
+                    print("data stream end!")
+                    self.data_stream_ended = True
+
+            if not self.data_stream_ended:
+                # 模型更新的时候，这里是阻塞的，会积累很多数据，需要全部拿出来
+                raw_info = self.queue_set.raw_data_queue.get()
+
+                self.data_sampler.update_sample_weight(raw_info[0].shape[0])
+
+                if self.streaming_dataset is None:
+                    new_data, new_labels = raw_info
+                    self.streaming_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size)
+                else:
+                    new_data, nn_indices, nn_dists, new_labels = raw_info
+                    self.streaming_dataset.add_new_data(new_data, nn_indices, nn_dists, new_label=new_labels)
+                # print("get data", new_data.shape)
+                if self.queue_set.training_data_queue.empty():
+                    continue
+
+            training_info = self.queue_set.training_data_queue.get()
+            print("准备更新模型！")
+            if self.update_count == 0:
+                self.queue_set.MODEL_UPDATING.value = True
+                embeddings = self.first_train(*training_info)
+                ret = [embeddings, self.infer_model.cpu()]
+            else:
+                finetune_epoch, fitted_data_num, data_num_list, cur_data_num, pre_embeddings, must_indices = training_info
+                self._get_all_from_raw_data_queue(cur_data_num - self.streaming_dataset.total_data.shape[0])
+                print("final num", self.streaming_dataset.total_data.shape[0])
+                pre_n_samples = pre_embeddings.shape[0]
+                self.streaming_dataset.update_knn_graph(self.streaming_dataset.total_data[:fitted_data_num],
+                                                        self.streaming_dataset.total_data[fitted_data_num:],
+                                                        data_num_list, cur_data_num)
+
+                sampled_indices = \
+                    self.data_sampler.sample_training_data(self.streaming_dataset.total_data[:pre_n_samples],
+                                                           pre_embeddings,
+                                                           self.streaming_dataset.knn_indices[:pre_n_samples],
+                                                           must_indices, cur_data_num)
+
+                self.update_batch_size(len(sampled_indices))
+
+                self.update_dataloader(finetune_epoch, sampled_indices)
+
+                sta = time.time()
+                self.queue_set.MODEL_UPDATING.value = True
+                self.resume_train(finetune_epoch)
+                ret = [cur_data_num, self.infer_model.cpu()]
+                # self.model_update_time += time.time() - sta
+
+            self.queue_set.embedding_queue.put(ret)
+            self.queue_set.MODEL_UPDATING.value = False
+            self.update_count += 1
+
+    def _get_all_from_raw_data_queue(self, target_num):
+        print("target num", target_num, " current num", self.streaming_dataset.total_data.shape[0])
+        if target_num <= 0:
+            print("return")
+            return
+
+        num = 0
+        while num < target_num:
+            new_data, nn_indices, nn_dists, new_labels = self.queue_set.raw_data_queue.get()
+            self.streaming_dataset.add_new_data(new_data, nn_indices, nn_dists, new_label=new_labels)
+            num += new_data.shape[0]

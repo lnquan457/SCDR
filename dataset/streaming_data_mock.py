@@ -52,7 +52,7 @@ class RealStreamingData(Process):
                 cur_data = []
                 for j in range(self.data_index, self.data_index + cur_data_num):
                     cur_data.append([self.data[j], None if self.targets is None else self.targets[j]])
-                self.queue_set.data_queue.put(cur_data)
+                self.queue_set.training_data_queue.put(cur_data)
                 self.data_index += cur_data_num
 
                 if i < len(self.time_data_num) - 1:

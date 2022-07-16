@@ -5,9 +5,12 @@ import time
 import numpy as np
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans
+from sklearn.neighbors import LocalOutlierFactor
 
+from dataset.warppers import extract_csr
 from utils.metrics_tool import metric_neighbor_preserve_introduce
 from utils.nn_utils import compute_knn_graph
+from utils.umap_utils import fuzzy_simplicial_set_partial
 
 
 class KeyPointsGenerater:
@@ -65,7 +68,7 @@ class KeyPointsGenerater:
 
 
 class DataSampler:
-    def __init__(self, n_neighbors, sample_rate, minimum_sample_data_num, time_based_sample: bool, metric_based_sample: bool):
+    def __init__(self, n_neighbors, sample_rate, minimum_sample_data_num, time_based_sample=False, metric_based_sample=False):
         self.time_based_sample = time_based_sample
         self.metric_based_sample = metric_based_sample
         self.n_neighbors = n_neighbors
@@ -94,11 +97,11 @@ class DataSampler:
                 self.pre_update_time = cur_time
             self.time_weights = np.concatenate([self.time_weights, np.ones(shape=n_samples)])
 
-    def sample_training_data(self, pre_data, pre_embeddings, high_knn_indices, must_indices):
+    def sample_training_data(self, pre_data, pre_embeddings, high_knn_indices, must_indices, total_data_num):
         # 采样训练子集
         pre_n_samples = pre_embeddings.shape[0]
         if self.sample_rate >= 1:
-            return np.arange(0, pre_n_samples, 1)
+            return np.arange(0, total_data_num, 1)
 
         sampled_indices = None
         prob = None
@@ -141,3 +144,54 @@ class DataSampler:
         np.random.shuffle(all_indices)
         sampled_indices = all_indices[:sampled_num]
         return sampled_indices
+
+
+class DistributionChangeDetector:
+    def __init__(self, lof_based=True):
+        self.lof_based = lof_based
+        self.lof = None
+
+    def detect_distribution_shift(self, fit_data, pred_data, labels=None):
+        if self.lof_based:
+            shifted_indices = self._lof_based(fit_data, pred_data)
+            cur_shift_indices = shifted_indices + fit_data.shape[0]
+        else:
+            cur_shift_indices = None
+
+        return cur_shift_indices
+
+    def _lof_based(self, fit_data, pred_data, n_neighbors=5, contamination=0.1):
+        if self.lof is None:
+            self.lof = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, metric="euclidean",
+                                          contamination=contamination)
+
+        self.lof.fit(fit_data)
+        labels = self.lof.predict(pred_data)
+        shifted_indices = np.where(labels == -1)[0]
+        return shifted_indices
+
+    def _metric_based(self):
+        pass
+
+
+class StreamingDataRepo:
+    # 主要负责记录当前的流数据，以及更新它们的k近邻
+    def __init__(self, n_neighbors):
+        self.n_neighbor = n_neighbors
+        self.total_data = None
+        self.total_label = None
+
+    def get_n_samples(self):
+        return self.total_data.shape[0]
+
+    def add_new_data(self, data, labels=None):
+        if self.total_data is None:
+            self.total_data = data
+        else:
+            self.total_data = np.concatenate([self.total_data, data], axis=0)
+        if labels is not None:
+            if self.total_label is None:
+                self.total_label = labels
+            else:
+                self.total_label = np.concatenate([self.total_label, labels])
+

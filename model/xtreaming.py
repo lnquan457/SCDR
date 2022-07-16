@@ -139,3 +139,6 @@ class XtreamingModel:
 
         self.pre_control_indices = np.concatenate([self.pre_control_indices, control_indices + pre_data_num])
         return aligned_total_embeddings, total_cntp_points
+
+    def ending(self):
+        pass

@@ -23,6 +23,7 @@ class RTSCDRModel(SCDRBase):
 
         # 这种情况会导致算法检测不准确，所以检测出异常点的可能性更高（因为高维分布的数据少了），
         # 会导致投影函数更新的次数增加。
+        self.key_data = None
         self.key_data_rate = 0.5
         # self.key_data_rate = 1.0
         self.using_key_data_in_lof = True
@@ -53,7 +54,9 @@ class RTSCDRModel(SCDRBase):
             self.knn_cal_time += time.time() - sta
         else:
             fit_data = self.key_data if self.using_key_data_in_lof else self.dataset.total_data
-            self._detect_distribution_shift(fit_data, data, labels)
+            shifted_indices = self.dis_change_detector.detect_distribution_shift(fit_data, data, labels)
+            self.cached_shift_indices = shifted_indices if self.cached_shift_indices is None else \
+                np.concatenate([self.cached_shift_indices, shifted_indices])
             self.data_num_list.append(new_data_num + self.data_num_list[-1])
 
             # 使用之前的投影函数对最新的数据进行投影
@@ -156,7 +159,7 @@ class RTSCDRParallel(RTSCDRModel):
 
     def _initial_project(self, data, labels=None):
         super()._initial_project(data, labels)
-        self.scdr_trainer_process = SCDRTrainerProcess(self, self.queue_set)
+        # self.scdr_trainer_process = SCDRTrainerProcess(self, self.queue_set)
         self.scdr_trainer_process.start()
 
     def re_embedding_all(self, data):
@@ -178,10 +181,9 @@ class RTSCDRParallel(RTSCDRModel):
 
         # TODO:先还是展示当前投影的结果，然后在后台更新投影模型，模型更新完成后，再更新所有数据的投影
 
-        sampled_indices = self._sample_training_data(self.time_based_sample, self.metric_based_sample,
-                                                     cached_shift_indices)
+        sampled_indices = self._sample_training_data()
 
-        self.queue_set.data_queue.put([sampled_indices, fitted_data_num, data_num_list, cur_data_num])
+        self.queue_set.training_data_queue.put([sampled_indices, fitted_data_num, data_num_list, cur_data_num])
 
         return cur_total_embeddings
 
@@ -201,20 +203,4 @@ class RTSCDRParallel(RTSCDRModel):
         # TODO:设置一个队列，当模型更新进程把模型更新好之后就将其加入到该队列中，然后投影进程监听到该队列中有数据就替换当前模型
         self.model_trainer.resume_train(self.finetune_epoch)
         self.model_update_time += time.time() - sta
-
-
-class SCDRTrainerProcess(Process):
-    def __init__(self, rt_scdr, queue_set):
-        self.name = "SCDR模型更新进程"
-        Process.__init__(self, name=self.name)
-        self.queue_set = queue_set
-        self.rt_scdr = rt_scdr
-
-    def run(self) -> None:
-        while True:
-            # 获取训练相关的数据，现在的问题在于tensor数据不能跨进程传输
-            training_info = self.queue_set.data_queue.get()
-            print("准备更新模型！")
-            self.rt_scdr.parallel_code(*training_info)
-            self.queue_set.re_embedding_flag_queue.put(True)
 

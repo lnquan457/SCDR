@@ -317,6 +317,9 @@ class atSNEModel(TSNE):
 
         return new_x_embeddings
 
+    def ending(self):
+        pass
+
 
 if __name__ == "__main__":
 

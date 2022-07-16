@@ -162,12 +162,14 @@ def eval_knn_acc(acc_knn_indices, pre_knn_indices):
 
 
 class StreamingDatasetWrapper(DataSetWrapper):
-    def __init__(self, initial_data, initial_label, batch_size):
+    def __init__(self, initial_data, initial_label, batch_size, knn_indices=None, knn_dists=None):
         DataSetWrapper.__init__(self, 1, batch_size)
         # initial_data 是一个列表，第一个元素是数据，第二个元素是标签
         self.total_data = initial_data
         self.total_label = initial_label
-        self.cur_n_samples = initial_data.shape[0]
+        self.knn_indices = knn_indices
+        self.knn_distances = knn_dists
+        self.cur_n_samples = initial_data.shape[0] if initial_data is not None else 0
         self.cache_process_num_thresh = 100
         self.cached_shifted_indices = []
         self.farest_neighbor_dist = None
@@ -186,8 +188,9 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         data_augment, train_dataset = self.get_dataset(data_augment, is_image, ComponentInfo.UMAP_NORMALIZE)
         self.train_dataset = train_dataset
-        self.knn_indices, self.knn_distances = compute_knn_graph(train_dataset.data, None, n_neighbors,
-                                                                 None, accelerate=False)
+        if self.knn_indices is None or self.knn_distances is None:
+            self.knn_indices, self.knn_distances = compute_knn_graph(train_dataset.data, None, n_neighbors,
+                                                                     None, accelerate=False)
 
         self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
 

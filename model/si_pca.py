@@ -24,3 +24,6 @@ class StreamingIPCA:
             self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings, cur_embeddings)
 
         return self.pre_embeddings
+
+    def ending(self):
+        pass

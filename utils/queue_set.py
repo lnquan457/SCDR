@@ -1,4 +1,5 @@
-from multiprocessing import Queue
+from multiprocessing import Queue, Value
+from threading import Semaphore
 
 
 class EvalQueueSet:
@@ -25,10 +26,20 @@ class StreamDataQueueSet:
 
 
 class ModelUpdateQueueSet:
+
+    STOP = 0
+    SAVE = 1
+    DATA_STREAM_END = 2
+
     def __init__(self):
-        self.data_queue = Queue()
-        self.re_embedding_flag_queue = Queue()
+        self.training_data_queue = Queue()
+        self.raw_data_queue = Queue()
+        self.embedding_queue = Queue()
+        self.flag_queue = Queue()
+        self.INITIALIZING = Value("b", False)
+        self.MODEL_UPDATING = Value("b", False)
 
     def clear(self):
-        self.data_queue.close()
-        self.re_embedding_flag_queue.close()
+        self.training_data_queue.close()
+        self.embedding_queue.close()
+        self.flag_queue.close()
