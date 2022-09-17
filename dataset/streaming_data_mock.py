@@ -6,7 +6,7 @@ from dataset.datasets import load_local_h5_by_path
 import os
 
 from utils.constant_pool import ConfigInfo
-from utils.time_utils import date_time2timestamp
+from utils.common_utils import date_time2timestamp
 from multiprocessing import Process, Queue
 
 
@@ -95,6 +95,10 @@ class SimulatedStreamingData(Process):
                 self.data_index = 0
 
             for i, cur_data_num in enumerate(self.data_num_list):
+                # TODO：调试用
+                # if i > 500:
+                #     break
+                # ================
                 cur_data = []
                 for j in self.custom_seq[self.data_index:self.data_index + cur_data_num]:
                     cur_data.append([self.data[j], None if self.targets is None else self.targets[j]])

@@ -1,29 +1,22 @@
 import os
 import time
 from multiprocessing import Process
-from multiprocessing.managers import BaseManager
 
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from model.scdr_parallel import SCDRParallel
+from model.scdr.scdr_parallel import SCDRParallel
 from utils.queue_set import ModelUpdateQueueSet
-from dataset.streaming_data_mock import StreamingDataMock, SimulatedStreamingData, RealStreamingData
-from dataset.warppers import eval_knn_acc
-from experiments.experiment import position_vis
+from dataset.streaming_data_mock import StreamingDataMock, SimulatedStreamingData
+from model.scdr.dependencies.experiment import position_vis
 from model.atSNE import atSNEModel
-from model.scdr import SCDRModel, SCDRBase
-from model.scdr_rt import RTSCDRModel, RTSCDRParallel
 from model.si_pca import StreamingIPCA
 from model.xtreaming import XtreamingModel
-from utils.common_utils import evaluate_and_log
+from utils.common_utils import evaluate_and_log, time_stamp_to_date_time_adjoin
 from utils.logger import InfoLogger
-from utils.metrics_tool import Metric, metric_mental_map_preservation, metric_mental_map_preservation_cntp, \
-    metric_mental_map_preservation_edge, metric_visual_consistency_dbscan, metric_neighbor_preserve_introduce, \
-    metric_visual_consistency_simplest
+from utils.metrics_tool import Metric, metric_visual_consistency_simplest
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 from utils.queue_set import StreamDataQueueSet
-from utils.time_utils import time_stamp_to_date_time_adjoin
 
 
 def check_path_exist(t_path):
@@ -63,8 +56,6 @@ class StreamingEx:
         self.cfg = cfg
         self.seq_indices = seq_indices
         self.dataset_name = cfg.exp_params.dataset
-        # self.streaming_mock = StreamingDataMock2Stage(self.dataset_name, initial_cls, 1,
-        #                                               args.exp_params.stream_rate, seq_indices=seq_indices)
         self.streaming_mock = None
         self.vis_iter = cfg.exp_params.vis_iter
         self.log_path = log_path
@@ -97,6 +88,9 @@ class StreamingEx:
 
         self.cls2idx = {}
         self.debug = True
+        self.save_img = False
+        self.save_embedding_npy = False
+        self.metric_vs = False
 
     def _prepare_streaming_data(self):
         self.streaming_mock = StreamingDataMock(self.dataset_name, self.cfg.exp_params.stream_rate, self.seq_indices)
@@ -131,35 +125,8 @@ class StreamingEx:
         self.model = XtreamingModel(self.cfg.method_params.buffer_size, self.cfg.method_params.eta)
         self.stream_fitting()
 
-    def start_scdr(self, model_trainer):
-        self.model = SCDRModel(self.cfg.method_params.n_neighbors, self.cfg.method_params.buffer_size, model_trainer,
-                               self.cfg.exp_params.initial_data_num, self.cfg.method_params.initial_train_epoch,
-                               self.cfg.method_params.finetune_epoch, ckpt_path=self.cfg.method_params.ckpt_path)
-        self.stream_fitting()
-
-    def start_rtscdr(self, model_trainer):
-        self.model = RTSCDRModel(self.cfg.method_params.shift_buffer_size, self.cfg.method_params.n_neighbors,
-                                 model_trainer, self.cfg.exp_params.initial_data_num,
-                                 self.cfg.method_params.initial_train_epoch, self.cfg.method_params.finetune_epoch,
-                                 ckpt_path=self.cfg.method_params.ckpt_path)
-
-        self.stream_fitting()
-
     def stream_fitting(self):
         self._train_begin()
-        if isinstance(self.model, SCDRBase):
-            self.model.model_trainer.result_save_dir = self.result_save_dir
-
-        # initial_data, initial_label = self.streaming_mock.next_time_data()
-        # if isinstance(self.model, atSNEModel):
-        #     ret_embeddings = self.model.fit_transform(initial_data, initial_label)
-        # else:
-        #     ret_embeddings = self.model.fit_new_data(initial_data, initial_label)
-        #
-        # if ret_embeddings is not None:
-        #     self.cur_embedding = ret_embeddings
-        #     initial_save_path = os.path.join(self.result_save_dir, "t_{}.jpg".format(self.cur_time_step))
-        #     position_vis(initial_label, initial_save_path, self.cur_embedding)
 
         self.processing()
         self.train_end()
@@ -222,8 +189,9 @@ class StreamingEx:
 
     def save_embeddings_imgs(self, pre_embeddings, cur_embeddings, force_vc=False, custom_id=None):
         sta = time.time()
-        custom_id = self.cur_time_step if custom_id is None else custom_id
-        np.save(os.path.join(self.embedding_dir, "t_{}.npy".format(custom_id)), self.cur_embedding)
+        if self.save_embedding_npy:
+            custom_id = self.cur_time_step if custom_id is None else custom_id
+            np.save(os.path.join(self.embedding_dir, "t_{}.npy".format(custom_id)), self.cur_embedding)
 
         # cur_low_nn_indices = compute_knn_graph(self.cur_embedding, None, self.vc_k, None)[0]
         # cur_high_nn_indices = compute_knn_graph(self.streaming_mock.history_data, None, self.vc_k, None)[0]
@@ -272,7 +240,7 @@ class StreamingEx:
                 # =======================================================================================================================
 
                 # =========================================不考虑新数据的影响================================================
-                vc_inconsistency = metric_visual_consistency_simplest(cur_embeddings, pre_embeddings)
+                vc_inconsistency = metric_visual_consistency_simplest(cur_embeddings, pre_embeddings) if self.metric_vs else 0
                 # ========================================================================================================
 
                 title = "Visual Inconsistency: %.4f" % vc_inconsistency
@@ -281,9 +249,8 @@ class StreamingEx:
                 self.pre_high_knn_indices, self.pre_high_knn_dists = compute_knn_graph(self.history_data,
                                                                                        None, self.vc_k, None)
 
-            position_vis(self.streaming_mock.seq_label[:cur_embeddings.shape[0]],
-                         os.path.join(self.img_dir, "t_{}.jpg".format(custom_id)),
-                         cur_embeddings, title)
+            img_save_path = os.path.join(self.img_dir, "t_{}.jpg".format(custom_id)) if self.save_img else None
+            position_vis(self.streaming_mock.seq_label[:cur_embeddings.shape[0]], img_save_path, cur_embeddings, title)
 
         self.other_time += time.time() - sta
 
@@ -292,15 +259,11 @@ class StreamingEx:
         if isinstance(self.model, XtreamingModel) and not self.model.buffer_empty():
             self.cur_embedding = self.model.fit()
             self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding, force_vc=True)
-        elif (isinstance(self.model, SCDRModel) or isinstance(self.model,
-                                                              RTSCDRModel)) and not self.model.buffer_empty():
-            self.cur_embedding = self.model.clear_buffer(final_embed=True)
-            self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding, force_vc=True)
 
-        if isinstance(self.model, SCDRBase):
+        if isinstance(self.model, SCDRParallel):
             self.model.save_model()
             if self.debug:
-                self.model.print_time_cost_info()
+                self.model.ending()
 
         end_time = time.time()
         output = "Total Cost Time: %.4f" % (end_time - self.sta_time - self.other_time)
@@ -330,15 +293,18 @@ class StreamingExProcess(StreamingEx, Process):
         # self.streaming_mock = RealStreamingData(self.dataset_name, self.queue_set)
         self.streaming_mock.start()
 
-    def start_parallel_scdr(self, training_queue_set, model_trainer):
-        self.cdr_update_queue_set = training_queue_set
-        self.model = SCDRParallel(training_queue_set, self.cfg.method_params.shift_buffer_size,
-                                  self.cfg.method_params.n_neighbors, self.cfg.method_params.batch_size,
-                                  self.cfg.exp_params.initial_data_num, self.cfg.method_params.initial_train_epoch,
-                                  self.cfg.method_params.finetune_epoch, ckpt_path=self.cfg.method_params.ckpt_path,
+    def start_parallel_scdr(self, model_update_queue_set, data_process_queue_set, model_trainer, data_processor):
+        self.cdr_update_queue_set = model_update_queue_set
+        self.model = SCDRParallel(model_update_queue_set, data_process_queue_set, self.cfg.exp_params.initial_data_num,
+                                  self.cfg.method_params.initial_train_epoch, ckpt_path=self.cfg.method_params.ckpt_path,
                                   device=model_trainer.device)
+        model_trainer.daemon = True
         model_trainer.start()
+        data_processor.daemon = True
+        data_processor.start()
         self.stream_fitting()
+        model_update_queue_set.STOP.value = 1
+        data_process_queue_set.STOP.value = 1
 
     def processing(self):
         self.run()
@@ -391,13 +357,14 @@ class StreamingExProcess(StreamingEx, Process):
                         or not self.cdr_update_queue_set.embedding_queue.empty():
 
                     if self.update_num == 0:
+                        # 第一次训练模型的时候，接受数据的进程在这里被阻塞住了。合理的，实际上pre-existing data用来训练，这个过程不应该被记入流数据处理过程。
                         ret_embeddings, infer_model = self.cdr_update_queue_set.embedding_queue.get()
                         embeddings_when_update = None
-                        self.model.update_scdr(infer_model, True, ret_embeddings)
+                        self.model.update_scdr(infer_model, True, ret_embeddings, ret_embeddings.shape[0])
                         self.cdr_update_queue_set.INITIALIZING.value = False
                     else:
                         data_num_when_update, infer_model = self.cdr_update_queue_set.embedding_queue.get()
-                        self.model.update_scdr(infer_model)
+                        self.model.update_scdr(infer_model, embedding_num=data_num_when_update)
                         ret_embeddings = self.model.embed_current_data()
                         embeddings_when_update = self.pre_embedding[:data_num_when_update]
 

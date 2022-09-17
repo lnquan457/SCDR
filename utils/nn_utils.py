@@ -228,7 +228,7 @@ class StreamingKNNSearchApprox:
                 cur_approx_indices[j] = item[1].label
                 cur_other_data[j] = item[1].other_data
 
-            # 这一步是很快的
+            # 这一步是很快的，计算这个数据到所有unfitted数据的距离（这是因为没有fit的数据的嵌入不准确，直接计算距离比较可靠一些）
             dists = cdist(np.expand_dims(d, axis=0), cur_other_data)
             sorted_indices = np.argsort(dists)[0][1:k+1]
             nn_indices[i] = cur_approx_indices[sorted_indices]
@@ -251,6 +251,9 @@ class StreamingKNNSearchApprox:
         return query_embeddings_container
 
 
+# 近似的准则是，从模型已经拟合过的数据的嵌入中选择 beta * k个作为候选，然后准确计算每个待查询数据到其他所有未拟合的数据的距离，然后从这所有数据
+# 当中选择最近的k个点。
+# TODO：第二个阶段还需要好好思考一下，如何达到效率和精度的最优。
 class StreamingKNNSearchApprox2(StreamingKNNSearchApprox):
     def __init__(self, beta=10):
         StreamingKNNSearchApprox.__init__(self, beta)
@@ -267,7 +270,7 @@ class StreamingKNNSearchApprox2(StreamingKNNSearchApprox):
         total_num = new_k + unfitted_data_num
         cur_approx_indices = np.zeros(shape=total_num)
         cur_other_data = np.zeros(shape=(total_num, dim))
-        # TODO：需要弄清楚这一步是为什么
+        # 因为没有fit的数据的嵌入不准确，这里是为了方便后续直接计算新数据与其他unfit的数据的距离，比较可靠一些
         cur_approx_indices[-unfitted_data_num:] = np.arange(fitted_num, fitted_num + unfitted_data_num, 1)
         cur_other_data[-unfitted_data_num:] = unfitted_data
 
@@ -276,6 +279,7 @@ class StreamingKNNSearchApprox2(StreamingKNNSearchApprox):
     def _prepare_searcher_data(self, fitted_data, fitted_embeddings, unfitted_data, *args):
         fitted_num, dim = fitted_embeddings.shape
         if unfitted_data is None:
+            # 模型更新了之后，之前数据的嵌入结果也需要更新，所以要重新构建
             # 这一步很耗时，但是其实只有在投影函数发生变化之后才需要进行更新，否则只需要追加即可
             self.fitted_embeddings_container = add_index_label(fitted_embeddings.tolist(), others=fitted_data)
             # ！！！这一步会改变embeddings的顺序

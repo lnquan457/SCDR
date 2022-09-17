@@ -1,11 +1,9 @@
 import numpy as np
-from inc_pca import IncPCA
 from procrustes import orthogonal
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans
 from sklearn.neighbors import LocalOutlierFactor
 
-from experiments.experiment import position_vis
 from model.dr_models.upd import cal_dist, UPDis4Streaming
 
 

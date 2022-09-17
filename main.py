@@ -3,15 +3,14 @@
 import os
 
 from model.dr_models.ModelSets import MODELS
+from utils.common_utils import get_config
 
 os.environ["CUDA_VISIBLE_DEVICES"] = '0, 1, 2, 3'
 import torch
-from utils.parser import *
 from utils.constant_pool import *
 import argparse
 import time
-from utils.logger import InfoLogger
-from experiments.cdr_experiment import CDRsExperiments
+from model.scdr.dependencies.cdr_experiment import CDRsExperiments
 
 device = "cuda:0"
 log_path = "logs/log.txt"

@@ -1,12 +1,12 @@
 #!/usr/bin/env python 
 # -*- coding:utf-8 -*-
+import time
 
 import torch
 from dataset.warppers import DataSetWrapper
-from experiments.experiment import Experiment
+from model.scdr.dependencies.experiment import Experiment
 from model.dr_models.CDRs.cdr import CDRModel
 from utils.constant_pool import *
-from utils.time_utils import *
 
 
 class CDRsExperiments(Experiment):

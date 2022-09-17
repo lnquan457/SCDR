@@ -38,8 +38,19 @@ class ModelUpdateQueueSet:
         self.flag_queue = Queue()
         self.INITIALIZING = Value("b", False)
         self.MODEL_UPDATING = Value("b", False)
+        self.STOP = Value("b", False)
 
     def clear(self):
         self.training_data_queue.close()
         self.embedding_queue.close()
         self.flag_queue.close()
+
+
+# 用于对新数据进行处理时的数据传输
+class DataProcessorQueueSet:
+    def __init__(self):
+        self.data_queue = Queue()
+        self.STOP = Value("b", False)
+
+    def clear(self):
+        self.data_queue.close()

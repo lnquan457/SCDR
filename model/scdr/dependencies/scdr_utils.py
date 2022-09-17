@@ -17,6 +17,8 @@ class KeyPointsGenerater:
 
     @staticmethod
     def generate(data, key_rate, is_random=False, cluster_inner_random=True, prob=None, min_num=0):
+        if key_rate >= 1:
+            return data, np.arange(0, data.shape[0], 1)
         if is_random:
             key_data, key_indices = KeyPointsGenerater._generate_randomly(data, key_rate, prob, min_num)
         else:
@@ -67,7 +69,7 @@ class KeyPointsGenerater:
         return data[key_indices], key_indices
 
 
-class DataSampler:
+class RepDataSampler:
     def __init__(self, n_neighbors, sample_rate, minimum_sample_data_num, time_based_sample=False, metric_based_sample=False):
         self.time_based_sample = time_based_sample
         self.metric_based_sample = metric_based_sample
@@ -119,11 +121,11 @@ class DataSampler:
         else:
             sampled_indices = self._random_sample(pre_n_samples)
 
-        if sampled_indices is not None:
+        if sampled_indices is None:
             sampled_indices = KeyPointsGenerater.generate(pre_data, self.sample_rate, False, prob=prob,
                                                           min_num=self.minimum_sample_data_num)[1]
         if must_indices is not None:
-            sampled_indices = np.union1d(sampled_indices, must_indices)
+            sampled_indices = np.union1d(sampled_indices, must_indices).astype(int)
 
         return sampled_indices
 
@@ -180,15 +182,24 @@ class StreamingDataRepo:
         self.n_neighbor = n_neighbors
         self.total_data = None
         self.total_label = None
+        self.total_embeddings = None
 
     def get_n_samples(self):
-        return self.total_data.shape[0]
+        return self.total_data.shape[0] if self.total_data is not None else 0
 
-    def add_new_data(self, data, labels=None):
-        if self.total_data is None:
-            self.total_data = data
-        else:
-            self.total_data = np.concatenate([self.total_data, data], axis=0)
+    def add_new_data(self, data=None, embeddings=None, labels=None):
+        if data is not None:
+            if self.total_data is None:
+                self.total_data = data
+            else:
+                self.total_data = np.concatenate([self.total_data, data], axis=0)
+
+        if embeddings is not None:
+            if self.total_embeddings is None:
+                self.total_embeddings = embeddings
+            else:
+                self.total_embeddings = np.concatenate([self.total_embeddings, embeddings], axis=0)
+
         if labels is not None:
             if self.total_label is None:
                 self.total_label = labels

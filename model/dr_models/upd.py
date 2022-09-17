@@ -3,7 +3,7 @@ import h5py
 import numpy as np
 from sklearn.cluster import KMeans
 from scipy.spatial.distance import cdist
-from experiments.experiment import position_vis
+from model.scdr.dependencies.experiment import position_vis
 from sklearn.utils.extmath import randomized_svd
 
 

@@ -1,21 +1,23 @@
 #!/usr/bin/env python 
 # -*- coding:utf-8 -*-
+import time
 
 from model.dr_models.ModelSets import *
 import pandas as pd
 import math
+
+from utils.common_utils import time_stamp_to_date_time_adjoin
 from utils.metrics_tool import MetricProcess
 from utils.math_utils import *
 import matplotlib.pyplot as plt
 import os
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 from utils.queue_set import EvalQueueSet
-from utils.time_utils import *
 from torch.optim.lr_scheduler import MultiStepLR, ReduceLROnPlateau
 import shutil
 from utils.constant_pool import ConfigInfo, METRIC_NAMES
 from multiprocessing import Queue
-from utils.logger import InfoLogger, LogWriter
+from utils.logger import InfoLogger
 import seaborn as sns
 
 
@@ -130,7 +132,7 @@ class Experiment:
         # 定量测量
         self.metric_tool = None
         self.val_metric_tool = None
-        self.queue_set = EvalQueueSet()
+        self.model_update_queue_set = EvalQueueSet()
 
         # 是否在子集上进行评估
         # self.sub_eval_ratio = self.configs.training_params.sub_eval_ratio
@@ -295,7 +297,7 @@ class Experiment:
                                      "{}_loss_{}.jpg".format(self.configs.method_params.method, self.epoch_num))
             draw_loss(training_loss_history, test_loss_history, x_idx, save_path)
 
-        self.log_process.join(timeout=5)
+        # self.log_process.join(timeout=5)
         shutil.copyfile(self.tmp_log_path, self.log_path)
         InfoLogger.info("Training process logging to {}".format(self.log_path))
 
@@ -349,7 +351,7 @@ class Experiment:
         preload = eval_used_data.shape[0] <= 30000
         pairwise_distance = get_pairwise_distance(eval_used_data, "euclidean", pair_cache_path, preload)
 
-        self.metric_tool = MetricProcess(self.queue_set, self.message_queue, self.dataset_name, eval_used_data,
+        self.metric_tool = MetricProcess(self.model_update_queue_set, self.message_queue, self.dataset_name, eval_used_data,
                                          self.train_loader.dataset.targets,
                                          knn_indices, knn_dists, pairwise_distance,
                                          self.result_save_dir, norm=self.is_image, k=self.fixed_k)
@@ -373,10 +375,10 @@ class Experiment:
         # 向评估进程传输评估数据
 
         if val:
-            self.queue_set.test_eval_data_queue.put(
+            self.model_update_queue_set.test_eval_data_queue.put(
                 [epoch, k, embedding_data, (epoch == self.epoch_num), False])
         else:
-            self.queue_set.eval_data_queue.put([epoch, k, embedding_data, (epoch == self.epoch_num), False])
+            self.model_update_queue_set.eval_data_queue.put([epoch, k, embedding_data, (epoch == self.epoch_num), False])
 
     def quantitative_eval_data(self):
         self.preprocess()
@@ -490,9 +492,9 @@ class Experiment:
     def preprocess(self, train=True, load_data=True):
         if load_data:
             self.build_dataset()
-        if train and (not self.multi or self.device_id == 0):
-            self.log_process = LogWriter(self.tmp_log_path, self.log_path, self.message_queue)
-            self.log_process.start()
+        # if train and (not self.multi or self.device_id == 0):
+        #     self.log_process = LogWriter(self.tmp_log_path, self.log_path, self.message_queue)
+        #     self.log_process.start()
         self.model_prepare()
         if self.multi:
             self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model).to(self.device)
@@ -581,7 +583,7 @@ class Experiment:
             self.model = MODELS[self.configs.method_params.method](self.configs, device=self.device)
             self.model = self.model.to(self.device)
             self.start_epoch = 0
-            self.queue_set = EvalQueueSet()
+            self.model_update_queue_set = EvalQueueSet()
             self.message_queue = Queue()
             self.preprocess()
             if i > 0:
