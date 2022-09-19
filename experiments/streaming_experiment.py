@@ -262,8 +262,6 @@ class StreamingEx:
 
         if isinstance(self.model, SCDRParallel):
             self.model.save_model()
-            if self.debug:
-                self.model.ending()
 
         end_time = time.time()
         output = "Total Cost Time: %.4f" % (end_time - self.sta_time - self.other_time)
@@ -293,18 +291,17 @@ class StreamingExProcess(StreamingEx, Process):
         # self.streaming_mock = RealStreamingData(self.dataset_name, self.queue_set)
         self.streaming_mock.start()
 
-    def start_parallel_scdr(self, model_update_queue_set, data_process_queue_set, model_trainer, data_processor):
+    def start_parallel_scdr(self, model_update_queue_set, data_process_queue_set, cal_time_queue_set, model_trainer,
+                            data_processor):
         self.cdr_update_queue_set = model_update_queue_set
-        self.model = SCDRParallel(model_update_queue_set, data_process_queue_set, self.cfg.exp_params.initial_data_num,
-                                  self.cfg.method_params.initial_train_epoch, ckpt_path=self.cfg.method_params.ckpt_path,
-                                  device=model_trainer.device)
+        self.model = SCDRParallel(model_update_queue_set, data_process_queue_set, cal_time_queue_set,
+                                  self.cfg.exp_params.initial_data_num, self.cfg.method_params.initial_train_epoch,
+                                  ckpt_path=self.cfg.method_params.ckpt_path, device=model_trainer.device)
         model_trainer.daemon = True
         model_trainer.start()
         data_processor.daemon = True
         data_processor.start()
         self.stream_fitting()
-        model_update_queue_set.STOP.value = 1
-        data_process_queue_set.STOP.value = 1
 
     def processing(self):
         self.run()

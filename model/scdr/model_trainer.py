@@ -28,11 +28,6 @@ class SCDRTrainer(CDRsExperiments):
         self.infer_model = None
         self.first_train_data_num = 0
 
-        self.knn_update_time = 0
-        self.model_initial_time = 0
-        self.model_update_time = 0
-        self.training_data_sample_time = 0
-
     def update_batch_size(self, data_num):
         # TODO: 如何设置batch size也是需要研究的
         self.batch_size = max(min(data_num, self.configs.method_params.batch_size), int(data_num / 10))
@@ -44,7 +39,6 @@ class SCDRTrainer(CDRsExperiments):
         self.streaming_dataset = dataset
 
     def first_train(self, dataset: StreamingDatasetWrapper, epochs, ckpt_path=None):
-        sta = time.time()
         self.preprocess(load_data=False)
         self.initialize_streaming_dataset(dataset)
         self.update_batch_size(self.first_train_data_num)
@@ -65,8 +59,6 @@ class SCDRTrainer(CDRsExperiments):
             self.load_checkpoint(ckpt_path)
             self.pre_embeddings = self.visualize(None, device=self.device)[0]
             self._train_begin(int(time.time()))
-
-        self.model_initial_time += time.time() - sta
 
         self.infer_model = self.model.copy_network()
 
@@ -111,19 +103,18 @@ class SCDRTrainer(CDRsExperiments):
         return data_embeddings
 
     def resume_train(self, resume_epoch):
-        sta = time.time()
         embeddings = super(SCDRTrainer, self).resume_train(resume_epoch)
-        self.model_update_time += time.time() - sta
         self.infer_model = self.model.copy_network()
         return embeddings
 
 
 class SCDRTrainerProcess(Process, SCDRTrainer):
-    def __init__(self, model_update_queue_set, model, dataset_name, config_path, configs, result_save_dir, device='cuda:0',
+    def __init__(self, cal_time_queue_set, model_update_queue_set, model, dataset_name, config_path, configs, result_save_dir, device='cuda:0',
                  log_path="log_streaming.txt", finetune_data_rate=0.3, finetune_epoch=50):
         self.name = "SCDR模型更新进程"
         Process.__init__(self, name=self.name)
         SCDRTrainer.__init__(self, model, dataset_name, config_path, configs, result_save_dir, device, log_path)
+        self.cal_time_queue_set = cal_time_queue_set
         self.model_update_queue_set = model_update_queue_set
         self.data_sampler = RepDataSampler(self.n_neighbors, finetune_data_rate, minimum_sample_data_num=400,
                                            time_based_sample=False, metric_based_sample=False)
@@ -135,13 +126,17 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
         self.first_train_data_num = self.streaming_dataset.total_data.shape[0]
 
     def run(self) -> None:
-        while self.model_update_queue_set.STOP.value == 0:
+        while True:
 
-            # 获取训练相关的数据，现在的问题在于tensor数据不能跨进程传输
+            # 因为这里是if，所以该进程不会在这里阻塞，
             if not self.model_update_queue_set.flag_queue.empty():
                 flag = self.model_update_queue_set.flag_queue.get()
+                print("model trainer", flag)
                 if flag == ModelUpdateQueueSet.SAVE:
                     self.save_weights(self.epoch_num)
+                elif flag == ModelUpdateQueueSet.STOP:
+                    self._ending()
+                    break
                 elif flag == ModelUpdateQueueSet.DATA_STREAM_END:
                     print("data stream end!")
                     self.data_stream_ended = True
@@ -162,11 +157,14 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                 if self.model_update_queue_set.training_data_queue.empty():
                     continue
 
+            # 该进程会在这里阻塞住
             training_info = self.model_update_queue_set.training_data_queue.get()
             print("准备更新模型！")
             if self.update_count == 0:
                 self.model_update_queue_set.MODEL_UPDATING.value = True
+                sta = time.time()
                 embeddings = self.first_train(*training_info)
+                self.cal_time_queue_set.model_initial_queue.put(time.time() - sta)
                 ret = [embeddings, self.infer_model.cpu()]
             else:
                 fitted_data_num, data_num_list, cur_data_num, pre_embeddings, must_indices = training_info
@@ -177,7 +175,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                 self.streaming_dataset.update_knn_graph(self.streaming_dataset.total_data[:fitted_data_num],
                                                         self.streaming_dataset.total_data[fitted_data_num:],
                                                         data_num_list, cur_data_num)
-                self.knn_update_time += time.time() - sta
+                self.cal_time_queue_set.knn_update_queue.put(time.time() - sta)
 
                 sta = time.time()
                 sampled_indices = \
@@ -185,7 +183,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                                                            pre_embeddings,
                                                            self.streaming_dataset.knn_indices[:pre_n_samples],
                                                            must_indices, cur_data_num)
-                self.training_data_sample_time += time.time() - sta
+                self.cal_time_queue_set.training_data_sample_queue.put(time.time() - sta)
 
                 self.update_batch_size(len(sampled_indices))
 
@@ -195,14 +193,11 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                 self.model_update_queue_set.MODEL_UPDATING.value = True
                 self.resume_train(self.finetune_epoch)
                 ret = [cur_data_num, self.infer_model.cpu()]
-                # self.model_update_time += time.time() - sta
+                self.cal_time_queue_set.model_update_queue.put(time.time() - sta)
 
             self.model_update_queue_set.embedding_queue.put(ret)
             self.model_update_queue_set.MODEL_UPDATING.value = False
             self.update_count += 1
-
-        print("scdr trainer exit!")
-        self._ending()
 
     def _get_all_from_raw_data_queue(self, target_num):
         # print("target num", target_num, " current num", self.streaming_dataset.total_data.shape[0])
@@ -215,7 +210,3 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
             new_data, nn_indices, nn_dists, new_labels = self.model_update_queue_set.raw_data_queue.get()
             self.streaming_dataset.add_new_data(new_data, nn_indices, nn_dists, new_label=new_labels)
             num += new_data.shape[0]
-
-    def _ending(self):
-        print("kNN Update: %.4f Model Initial: %.4f Model Update: %.4f Data Sampling: %4.f"
-              % (self.knn_update_time, self.model_initial_time, self.model_update_time, self.training_data_sample_time))

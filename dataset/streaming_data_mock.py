@@ -96,8 +96,8 @@ class SimulatedStreamingData(Process):
 
             for i, cur_data_num in enumerate(self.data_num_list):
                 # TODO：调试用
-                # if i > 500:
-                #     break
+                if i > 500:
+                    break
                 # ================
                 cur_data = []
                 for j in self.custom_seq[self.data_index:self.data_index + cur_data_num]:

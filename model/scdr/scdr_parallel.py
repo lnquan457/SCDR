@@ -4,15 +4,16 @@ import time
 import numpy as np
 import torch
 from model.scdr.data_processor import SCDRProcessor
-from utils.queue_set import ModelUpdateQueueSet
+from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet
 from model.scdr.dependencies.scdr_utils import KeyPointsGenerater, DistributionChangeDetector
 
 
 class SCDRParallel:
-    def __init__(self, model_update_queue_set, data_process_queue_set, initial_train_num,
+    def __init__(self, model_update_queue_set, data_process_queue_set, cal_time_queue_set, initial_train_num,
                  initial_train_epoch, ckpt_path=None, device="cuda:0"):
         self.model_update_queue_set = model_update_queue_set
         self.data_process_queue_set = data_process_queue_set
+        self.cal_time_queue_set = cal_time_queue_set
         self.device = device
         self.infer_model = None
         self.ckpt_path = ckpt_path if os.path.exists(ckpt_path) else None
@@ -152,5 +153,18 @@ class SCDRParallel:
                                                         SCDRProcessor.SIGNAL_GATHER_DATA])
 
     def ending(self):
-        self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
-        print("Shift Detect: %.4f Model Refer: %.4f" % (self.shift_detect_time, self.model_repro_time))
+
+        def accumulate(queue_obj):
+            total = 0
+            while not queue_obj.empty():
+                total += queue_obj.get()
+            return total
+
+        knn_approx = accumulate(self.cal_time_queue_set.knn_approx_queue)
+        knn_update = accumulate(self.cal_time_queue_set.knn_update_queue)
+        model_update = accumulate(self.cal_time_queue_set.model_update_queue)
+        model_initial = accumulate(self.cal_time_queue_set.model_initial_queue)
+        training_data_sample = accumulate(self.cal_time_queue_set.training_data_sample_queue)
+        print("Shift Detect: %.4f kNN Approx: %.4f kNN Update: %.4f Model Update: %.4f Model Initial: %.4f "
+              "Model Refer: %.4f Data Sample: %.4f" % (self.shift_detect_time, knn_approx, knn_update, model_update,
+                                                       model_initial, self.model_repro_time, training_data_sample))

@@ -5,6 +5,7 @@ import numpy as np
 
 from utils.nn_utils import StreamingKNNSearchApprox2
 from model.scdr.dependencies.scdr_utils import StreamingDataRepo
+from utils.queue_set import DataProcessorQueueSet
 
 
 class SCDRProcessor(Process):
@@ -12,10 +13,12 @@ class SCDRProcessor(Process):
     SIGNAL_UPDATE_ONLY = 1
     SIGNAL_GATHER_UPDATE = 2
 
-    def __init__(self, n_neighbors, shift_buffer_size, data_process_queue_set, model_update_queue_set, device):
+    def __init__(self, n_neighbors, shift_buffer_size, data_process_queue_set, model_update_queue_set,
+                 cal_time_queue_set, device):
         Process.__init__(self, name="数据处理进程")
         self.data_process_queue_set = data_process_queue_set
         self.model_update_queue_set = model_update_queue_set
+        self.cal_time_queue_set = cal_time_queue_set
         self.n_neighbors = n_neighbors
         self.device = device
         self.knn_searcher_approx = StreamingKNNSearchApprox2()
@@ -25,11 +28,11 @@ class SCDRProcessor(Process):
         self.shift_buffer_size = shift_buffer_size
         self.dataset = StreamingDataRepo(self.n_neighbors)
         self.data_num_list = [0]
-        self.knn_approx_time = 0
 
     def run(self) -> None:
-        while self.data_process_queue_set.STOP.value == 0:
+        while True:
 
+            # 进程会在这里阻塞住
             fitted_num, query_embeddings, query_data, query_labels, shift_indices, SIGNAL \
                 = self.data_process_queue_set.data_queue.get()
 
@@ -52,7 +55,7 @@ class SCDRProcessor(Process):
             sta = time.time()
             nn_indices, nn_dists = self.knn_searcher_approx.search(self.n_neighbors, fitted_embeddings, fitted_data,
                                                                    query_embeddings, query_data, self.unfitted_data)
-            self.knn_approx_time += time.time() - sta
+            self.cal_time_queue_set.knn_approx_queue.put(time.time() - sta)
 
             # 返回kNN数据
             self.model_update_queue_set.raw_data_queue.put([query_data, nn_indices, nn_dists, query_labels])
@@ -66,9 +69,6 @@ class SCDRProcessor(Process):
                     [self.unfitted_data, query_data], axis=0)
             else:
                 self._send_update_signal(pre_n_samples)
-
-        print("data processor exit!")
-        self._ending()
 
     def _send_update_signal(self, pre_n_samples):
         # 如果还有模型更新任务没有完成，此处应该阻塞等待
@@ -91,5 +91,3 @@ class SCDRProcessor(Process):
             [fitted_data_num, data_num_list, self.pre_train_num,
              self.dataset.total_embeddings[:pre_n_samples], must_indices])
 
-    def _ending(self):
-        print("kNN Approx %.4f" % self.knn_approx_time)

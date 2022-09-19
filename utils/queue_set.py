@@ -38,7 +38,6 @@ class ModelUpdateQueueSet:
         self.flag_queue = Queue()
         self.INITIALIZING = Value("b", False)
         self.MODEL_UPDATING = Value("b", False)
-        self.STOP = Value("b", False)
 
     def clear(self):
         self.training_data_queue.close()
@@ -48,9 +47,26 @@ class ModelUpdateQueueSet:
 
 # 用于对新数据进行处理时的数据传输
 class DataProcessorQueueSet:
+
     def __init__(self):
         self.data_queue = Queue()
-        self.STOP = Value("b", False)
 
     def clear(self):
         self.data_queue.close()
+
+
+# 用于传输各阶段用时数据
+class CalTimeQueueSet:
+    def __init__(self):
+        self.knn_approx_queue = Queue()
+        self.knn_update_queue = Queue()
+        self.model_initial_queue = Queue()
+        self.model_update_queue = Queue()
+        self.training_data_sample_queue = Queue()
+
+    def close(self):
+        self.knn_approx_queue.close()
+        self.knn_update_queue.close()
+        self.model_update_queue.close()
+        self.model_initial_queue.close()
+        self.training_data_sample_queue.close()
