@@ -265,8 +265,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
 
         tmp_index = 0
-        print("new n samples", new_n_samples)
-        print("len:", len(data_num_list))
+        # print("new n samples", new_n_samples)
+        # print("len:", len(data_num_list))
         for i in range(new_n_samples):
             indices = np.where(dists[i] - farest_neighbor_dist < 0)[0]
             # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了

@@ -131,12 +131,8 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
             # 因为这里是if，所以该进程不会在这里阻塞，
             if not self.model_update_queue_set.flag_queue.empty():
                 flag = self.model_update_queue_set.flag_queue.get()
-                print("model trainer", flag)
                 if flag == ModelUpdateQueueSet.SAVE:
                     self.save_weights(self.epoch_num)
-                elif flag == ModelUpdateQueueSet.STOP:
-                    self._ending()
-                    break
                 elif flag == ModelUpdateQueueSet.DATA_STREAM_END:
                     print("data stream end!")
                     self.data_stream_ended = True
@@ -202,7 +198,6 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
     def _get_all_from_raw_data_queue(self, target_num):
         # print("target num", target_num, " current num", self.streaming_dataset.total_data.shape[0])
         if target_num <= 0:
-            print("return")
             return
 
         num = 0

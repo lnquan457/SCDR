@@ -385,7 +385,7 @@ class StreamingExProcess(StreamingEx, Process):
         self.stream_data_queue_set.clear()
 
         if isinstance(self.model, SCDRParallel):
-            self.cur_embedding = self.model.model_update_final()
+            self.cur_embedding = self.model.get_final_embeddings()
             self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding, force_vc=True)
 
         super().train_end()

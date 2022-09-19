@@ -43,6 +43,7 @@ class SCDRParallel:
         self.shift_detect_time = 0
         self.model_repro_time = 0
         self.debug = True
+        self.update_when_end = True
 
     # scdr本身属于嵌入进程，只负责数据的嵌入
     def fit_new_data(self, data, labels=None):
@@ -84,21 +85,22 @@ class SCDRParallel:
 
         return self.pre_embeddings
 
-    def model_update_final(self):
-        # 暂时先等待之前的模型训练完
-        initial_trainer_stat = self.model_update_queue_set.MODEL_UPDATING.value
-        while self.model_update_queue_set.MODEL_UPDATING.value == 1:
-            pass
+    def get_final_embeddings(self):
+        if self.update_when_end:
+            print("final update")
+            # 暂时先等待之前的模型训练完
+            initial_trainer_stat = self.model_update_queue_set.MODEL_UPDATING.value
+            while self.model_update_queue_set.MODEL_UPDATING.value == 1:
+                pass
 
-        if initial_trainer_stat == 1:
-            while not self.model_update_queue_set.embedding_queue.empty():
+            if not self.model_update_queue_set.embedding_queue.empty():
                 self.model_update_queue_set.embedding_queue.get()  # 取出之前训练的结果，但是在这里是没用的了
 
-        self.data_process_queue_set.data_queue.put(
-            [self.fitted_data_num, None, None, None, None, SCDRProcessor.SIGNAL_UPDATE_ONLY])
+            self.data_process_queue_set.data_queue.put(
+                [self.fitted_data_num, None, None, None, None, SCDRProcessor.SIGNAL_UPDATE_ONLY])
 
-        data_num_when_update, infer_model = self.model_update_queue_set.embedding_queue.get()
-        self.update_scdr(infer_model)
+            data_num_when_update, infer_model = self.model_update_queue_set.embedding_queue.get()
+            self.update_scdr(infer_model)
         ret_embeddings = self.embed_current_data()
         return ret_embeddings
 
