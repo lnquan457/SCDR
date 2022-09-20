@@ -157,7 +157,6 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
             training_info = self.model_update_queue_set.training_data_queue.get()
             # print("准备更新模型！")
             if self.update_count == 0:
-                self.model_update_queue_set.MODEL_UPDATING.value = True
                 sta = time.time()
                 embeddings = self.first_train(*training_info)
                 self.cal_time_queue_set.model_initial_queue.put(time.time() - sta)
@@ -171,7 +170,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                 self.streaming_dataset.update_knn_graph(self.streaming_dataset.total_data[:fitted_data_num],
                                                         self.streaming_dataset.total_data[fitted_data_num:],
                                                         data_num_list, cur_data_num)
-                print("new data num:", cur_data_num - fitted_data_num, " cal time:", time.time() - sta)
+                # print("new data num:", cur_data_num - fitted_data_num, " cal time:", time.time() - sta)
                 self.cal_time_queue_set.knn_update_queue.put(time.time() - sta)
 
                 sta = time.time()
@@ -187,7 +186,6 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                 self.update_dataloader(self.finetune_epoch, sampled_indices)
 
                 sta = time.time()
-                self.model_update_queue_set.MODEL_UPDATING.value = True
                 self.resume_train(self.finetune_epoch)
                 ret = [cur_data_num, self.infer_model.cpu()]
                 self.cal_time_queue_set.model_update_queue.put(time.time() - sta)

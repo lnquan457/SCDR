@@ -164,17 +164,14 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
     updated_knn_dists = all_knn_dists[update_indices].astype(np.float32)
     n_neighbors = all_knn_indices.shape[1]
 
-    sta = time.time()
     # 最耗时的！ 90+%
     # sigmas, rhos = smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
     sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
 
-    sta = time.time()
     # 第二耗时，5%
     rows, cols, vals, dists = compute_membership_strengths(
         updated_knn_indices, updated_knn_dists, sigmas, rhos, return_dists
     )
-    print("membership", time.time() - sta)
 
     cur_updated_knn_weights = vals.reshape(updated_knn_indices.shape)
     all_raw_knn_weights[update_indices] = cur_updated_knn_weights

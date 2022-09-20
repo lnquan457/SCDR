@@ -152,28 +152,61 @@ class DistributionChangeDetector:
     def __init__(self, lof_based=True):
         self.lof_based = lof_based
         self.lof = None
+        self._current_labels = None
+        self.acc_list = []
+        self.recall_list = []
 
-    def detect_distribution_shift(self, fit_data, pred_data, labels=None):
+    def detect_distribution_shift(self, pred_data, re_fit=True, fit_data=None, fit_labels=None, pred_labels=None, acc=True):
+        if acc and re_fit and fit_labels is not None:
+            self._gather_distribution(fit_labels)
+
         if self.lof_based:
-            shifted_indices = self._lof_based(fit_data, pred_data)
-            cur_shift_indices = shifted_indices + fit_data.shape[0]
+            shifted_indices = self._lof_based(pred_data, re_fit, fit_data=fit_data)
         else:
-            cur_shift_indices = None
+            shifted_indices = None
 
-        return cur_shift_indices
+        if acc:
+            self._cal_detect_acc(pred_labels, shifted_indices)
 
-    def _lof_based(self, fit_data, pred_data, n_neighbors=5, contamination=0.1):
+        return shifted_indices
+
+    def _lof_based(self, pred_data, re_fit=True, fit_data=None, n_neighbors=5, contamination=0.1):
         if self.lof is None:
             self.lof = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, metric="euclidean",
                                           contamination=contamination)
-
-        self.lof.fit(fit_data)
+        # 每次都需要重新fit，这是非常耗时的。实际上只需要在模型更新之后才需要重新fit。
+        if re_fit:
+            assert fit_data is not None
+            self.lof.fit(fit_data)
         labels = self.lof.predict(pred_data)
         shifted_indices = np.where(labels == -1)[0]
         return shifted_indices
 
     def _metric_based(self):
         pass
+
+    def _gather_distribution(self, labels):
+        self._current_labels = np.unique(labels)
+
+    def _cal_detect_acc(self, pred_labels, shift_indices):
+        true_num = 0
+        detected_num = 0
+        for i in shift_indices:
+            if pred_labels[i] not in self._current_labels:
+                true_num += 1
+        for i, item in enumerate(pred_labels):
+            if item not in self._current_labels and i in shift_indices:
+                detected_num += 1
+        acc = true_num / len(pred_labels)
+        recall = detected_num / len(pred_labels)
+        # print(len(shift_indices), acc, recall)
+        self.acc_list.append(acc)
+        self.recall_list.append(recall)
+
+    def ending(self):
+        avg_acc = np.mean(self.acc_list)
+        avg_recall = np.mean(self.recall_list)
+        print("Avg Acc: %.4f Avg Recall: %.4f" % (avg_acc, avg_recall))
 
 
 class StreamingDataRepo:

@@ -72,9 +72,9 @@ class SCDRProcessor(Process):
 
     def _send_update_signal(self, pre_n_samples):
         # 如果还有模型更新任务没有完成，此处应该阻塞等待
-        while self.model_update_queue_set.MODEL_UPDATING.value == 1:
+        while self.model_update_queue_set.MODEL_UPDATING.value:
             pass
-
+        self.model_update_queue_set.MODEL_UPDATING.value = True
         fitted_data_num = self.pre_train_num
 
         self.unfitted_data = None

@@ -264,9 +264,9 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         new_n_samples = new_data.shape[0]
         # O(m*n*D)
-        sta = time.time()
+        # sta = time.time()
         dists = cdist(new_data, total_data)
-        print("cal dist:", time.time() - sta)
+        # print("cal dist:", time.time() - sta)
 
         pre_n_samples = pre_data.shape[0]
         neighbor_changed_indices = numba.typed.List(np.arange(0, new_n_samples, 1) + pre_n_samples)
@@ -276,7 +276,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         tmp_index = 0
 
-        sta = time.time()
+        # sta = time.time()
         for i in range(new_n_samples):
             indices = np.where(dists[i] - farest_neighbor_dist < 0)[0]
             # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
@@ -305,19 +305,18 @@ class StreamingDatasetWrapper(DataSetWrapper):
                 arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
                 self.farest_neighbor_dist[j] = self.knn_distances[j][-1]
 
-        print("knn update", time.time() - sta)
+        # print("knn update", time.time() - sta)
 
         self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.zeros((new_n_samples, self.n_neighbor))],
                                               axis=0)
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.empty(shape=new_n_samples)])
         self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.empty(shape=new_n_samples)])
 
-        sta = time.time()
-        # 最耗时的一步！ 85%
+        # sta = time.time()
         umap_graph, sigmas, rhos, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
                                                                                       self.raw_knn_weights,
                                                                                       neighbor_changed_indices)
-        print("fuzzy", time.time() - sta)
+        # print("fuzzy", time.time() - sta)
 
         # sta = time.time()
         updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, neighbor_changed_indices)
