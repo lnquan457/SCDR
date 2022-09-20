@@ -155,7 +155,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
 
             # 该进程会在这里阻塞住
             training_info = self.model_update_queue_set.training_data_queue.get()
-            print("准备更新模型！")
+            # print("准备更新模型！")
             if self.update_count == 0:
                 self.model_update_queue_set.MODEL_UPDATING.value = True
                 sta = time.time()
@@ -171,6 +171,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                 self.streaming_dataset.update_knn_graph(self.streaming_dataset.total_data[:fitted_data_num],
                                                         self.streaming_dataset.total_data[fitted_data_num:],
                                                         data_num_list, cur_data_num)
+                print("new data num:", cur_data_num - fitted_data_num, " cal time:", time.time() - sta)
                 self.cal_time_queue_set.knn_update_queue.put(time.time() - sta)
 
                 sta = time.time()

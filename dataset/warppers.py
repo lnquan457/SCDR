@@ -1,8 +1,11 @@
 #!/usr/bin/env python 
 # -*- coding:utf-8 -*-
 import math
+import time
 
+import numba.typed.typedlist
 import numpy as np
+from numba import jit
 from scipy.spatial.distance import cdist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader, SubsetRandomSampler, Sampler
@@ -144,7 +147,10 @@ class DataSetWrapper(object):
                 valid_sampler = CustomSampler(val_indices) if test_dataset is not None else None
         return train_sampler, valid_sampler
 
+
 avg_acc = []
+
+
 def eval_knn_acc(acc_knn_indices, pre_knn_indices):
     acc_list = []
     n_neighbor = acc_knn_indices.shape[1]
@@ -176,7 +182,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
     def _update_knn_stat(self, train_dataset):
         super()._update_knn_stat(train_dataset)
-        self.farest_neighbor_dist = np.max(self.knn_distances, axis=1)
+        self.farest_neighbor_dist = self.knn_distances[:, -1]
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
                          pairwise_cache_path=None, is_image=True, data_file_path=None,
@@ -243,7 +249,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
             self.knn_indices = np.concatenate([self.knn_indices, knn_indices], axis=0)
         if knn_dists is not None:
             self.knn_distances = np.concatenate([self.knn_distances, knn_dists], axis=0)
-            self.farest_neighbor_dist = np.concatenate([self.farest_neighbor_dist, np.max(knn_dists, axis=1)])
+            self.farest_neighbor_dist = np.concatenate([self.farest_neighbor_dist, knn_dists[:, -1]])
 
         self.train_dataset.add_new_data(new_data, new_label)
 
@@ -257,16 +263,20 @@ class StreamingDatasetWrapper(DataSetWrapper):
         knn_indices = self.knn_indices if cut_num is None else self.knn_indices[:cut_num]
 
         new_n_samples = new_data.shape[0]
+        # O(m*n*D)
+        sta = time.time()
         dists = cdist(new_data, total_data)
+        print("cal dist:", time.time() - sta)
+
         pre_n_samples = pre_data.shape[0]
-        neighbor_changed_indices = list(np.arange(0, new_n_samples, 1) + pre_n_samples)
+        neighbor_changed_indices = numba.typed.List(np.arange(0, new_n_samples, 1) + pre_n_samples)
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
 
         tmp_index = 0
-        # print("new n samples", new_n_samples)
-        # print("len:", len(data_num_list))
+
+        sta = time.time()
         for i in range(new_n_samples):
             indices = np.where(dists[i] - farest_neighbor_dist < 0)[0]
             # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
@@ -274,34 +284,44 @@ class StreamingDatasetWrapper(DataSetWrapper):
                 tmp_index += 1
             indices = indices[np.where(indices < data_num_list[tmp_index + 1] + pre_n_samples)[0]]
 
-            if len(indices) <= 0:
+            if len(indices) <= 1:
                 continue
 
             for j in indices:
+                if j == pre_n_samples + i:
+                    continue
                 if j not in neighbor_changed_indices:
                     neighbor_changed_indices.append(j)
-                t = np.argmax(self.knn_distances[j])
-                if self.knn_indices[j][t] not in neighbor_changed_indices:
-                    neighbor_changed_indices.append(self.knn_indices[j][t])
+                # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
+                insert_index = self.knn_distances.shape[1] - 1
+                while insert_index >= 0 and dists[i][j] <= self.knn_distances[j][insert_index]:
+                    insert_index -= 1
 
-                # 这个更新的过程应该是迭代的
-                self.knn_distances[j][t] = dists[i][j]
-                self.farest_neighbor_dist[j] = np.max(self.knn_distances[j])
-                self.knn_indices[j][t] = pre_n_samples + i
+                if self.knn_indices[j][-1] not in neighbor_changed_indices:
+                    neighbor_changed_indices.append(self.knn_indices[j][-1])
 
-        # after_acc_list, after_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
+                # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
+                arr_move_one(self.knn_distances[j], insert_index + 1, dists[i][j])
+                arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
+                self.farest_neighbor_dist[j] = self.knn_distances[j][-1]
 
-        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.zeros((new_n_samples, self.n_neighbor))], axis=0)
+        print("knn update", time.time() - sta)
+
+        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.zeros((new_n_samples, self.n_neighbor))],
+                                              axis=0)
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.empty(shape=new_n_samples)])
         self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.empty(shape=new_n_samples)])
 
-        # TODO:邻域发生变化的点的权重需要重新计算
-
+        sta = time.time()
+        # 最耗时的一步！ 85%
         umap_graph, sigmas, rhos, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
                                                                                       self.raw_knn_weights,
                                                                                       neighbor_changed_indices)
+        print("fuzzy", time.time() - sta)
 
+        # sta = time.time()
         updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, neighbor_changed_indices)
+        # print("extract", time.time() - sta)
 
         self.symmetric_nn_weights[neighbor_changed_indices] = updated_symm_nn_weights
         self.symmetric_nn_indices[neighbor_changed_indices] = updated_sym_nn_indices
@@ -320,3 +340,11 @@ def extract_csr(csr_graph, indices):
         nn_indices.append(cur_indices)
         nn_weights.append(cur_weights / np.sum(cur_weights))
     return nn_indices, nn_weights
+
+
+# 将index之前的元素向后移动一位
+@jit
+def arr_move_one(arr, index, index_val):
+    arr[1:index + 1] = arr[:index]
+    arr[index] = index_val
+

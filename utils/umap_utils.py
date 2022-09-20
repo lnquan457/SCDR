@@ -1,9 +1,14 @@
 #!/usr/bin/env python 
 # -*- coding:utf-8 -*-
+import math
+import time
+
+import numba
 import numpy
 import numpy as np
 import torch
 import scipy
+from numba import jit
 from scipy.sparse import coo_matrix, csr_matrix
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
@@ -159,11 +164,17 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
     updated_knn_dists = all_knn_dists[update_indices].astype(np.float32)
     n_neighbors = all_knn_indices.shape[1]
 
-    sigmas, rhos = smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
+    sta = time.time()
+    # 最耗时的！ 90+%
+    # sigmas, rhos = smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
+    sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
 
+    sta = time.time()
+    # 第二耗时，5%
     rows, cols, vals, dists = compute_membership_strengths(
         updated_knn_indices, updated_knn_dists, sigmas, rhos, return_dists
     )
+    print("membership", time.time() - sta)
 
     cur_updated_knn_weights = vals.reshape(updated_knn_indices.shape)
     all_raw_knn_weights[update_indices] = cur_updated_knn_weights
@@ -232,11 +243,17 @@ def fuzzy_simplicial_set(
 
     # 将邻近点的距离由离散的转换为连续的，sigma表示用于进行正则化的因子，代表局部的黎曼度量
     # rho表示每个点到最近邻居的距离
-    sigmas, rhos = smooth_knn_dist(
+    # sigmas, rhos = smooth_knn_dist(
+    #     knn_dists,
+    #     float(n_neighbors),
+    #     local_connectivity=float(local_connectivity),
+    # )
+    sigmas, rhos = simplified_smooth_knn_dist(
         knn_dists,
         float(n_neighbors),
         local_connectivity=float(local_connectivity),
     )
+    # print(np.sum(sigmas_1) == np.sum(sigmas))
 
     # 根据sigma和rho来计算图的权重信息，利用rows和cols来表示这个权重图，vals就是权重，都是[n_samples * k, 1]
     rows, cols, vals, dists = compute_membership_strengths(
@@ -343,35 +360,7 @@ def smooth_knn_dist(distances, k, n_iter=64, local_connectivity=1.0, bandwidth=1
         elif non_zero_dists.shape[0] > 0:
             rho[i] = np.max(non_zero_dists)
 
-        for n in range(n_iter):
-
-            psum = 0.0
-            """
-            遍历当前点的所有邻居节点，与t-sne中根据perplexity查找合适的高斯分布方差类似，
-            只不过标准不同，这里要找的是一个正则化因子，在这个因子的约束下，将最近邻居点距离看作是
-            一个黎曼度量单位。都是找到一个合适的rho，将其看作局部的黎曼度量来描述这个数据的局部特征
-            这一步按道理来说，应该也是效率极低的。
-            """
-            for j in range(1, distances.shape[1]):
-                # d表示以最近距离归一化后的距离
-                d = distances[i, j] - rho[i]
-                if d > 0:
-                    psum += np.exp(-(d / mid))
-                else:
-                    psum += 1.0
-
-            if np.fabs(psum - target) < SMOOTH_K_TOLERANCE:
-                break
-            # 二分查找的方式
-            if psum > target:
-                hi = mid
-                mid = (lo + hi) / 2.0
-            else:
-                lo = mid
-                if hi == NPY_INFINITY:
-                    mid *= 2
-                else:
-                    mid = (lo + hi) / 2.0
+        mid = _cal_sigma_origin(distances[i], n_iter, rho[i], target, lo, hi, mid)
         # 正则化因子sigma
         result[i] = mid
 
@@ -387,6 +376,7 @@ def smooth_knn_dist(distances, k, n_iter=64, local_connectivity=1.0, bandwidth=1
     return result, rho
 
 
+@jit
 def compute_membership_strengths(
     knn_indices, knn_dists, sigmas, rhos, return_dists=False
 ):
@@ -486,7 +476,7 @@ def compute_local_membership(knn_dist, knn_indices, local_connectivity=1):
 
     # 将邻近点的距离由离散的转换为连续的，sigma表示用于进行正则化的因子，代表局部的黎曼度量
     # rho表示每个点到最近邻居的距离
-    sigmas, rhos = smooth_knn_dist(
+    sigmas, rhos = simplified_smooth_knn_dist(
         knn_dist,
         float(knn_indices.shape[1]),
         local_connectivity=float(local_connectivity),
@@ -498,3 +488,128 @@ def compute_local_membership(knn_dist, knn_indices, local_connectivity=1):
     )
     # 这里由于所有的邻居点都是采样得到的，那么其实各个局部邻域之间是没有重合的，所以不需要进行全局的单纯形融合
     return vals
+
+
+def simplified_smooth_knn_dist(distances, k, n_iter=64, local_connectivity=1.0, bandwidth=1.0):
+    """
+    Compute a continuous version of the distance to the kth nearest
+    neighbor. That is, this is similar to knn-distance but allows continuous
+    k values rather than requiring an integral k. In essence we are simply
+    computing the distance such that the cardinality of fuzzy set we generate
+    is k.
+    """
+    target = np.log2(k) * bandwidth
+    rho = np.zeros(distances.shape[0], dtype=np.float32)
+    result = np.zeros(distances.shape[0], dtype=np.float32)
+
+    mean_distances = np.mean(distances, axis=1)
+
+    # 获取所有点到其最近邻居的距离
+    for i in range(distances.shape[0]):
+        lo = 0.0
+        hi = NPY_INFINITY
+        mid = 1.0
+
+        # TODO: This is very inefficient, but will do for now. FIXME
+        # 获得第i个点到其k个邻居的距离
+        ith_distances = distances[i]
+        # 如果联通点数大于局部连通要求，则直接获取最近距离rho，这个可能是由于距离度量方式不同而导致的
+        if ith_distances.shape[0] >= local_connectivity:
+            index = int(np.floor(local_connectivity))
+            rho[i] = ith_distances[index - 1]
+        elif ith_distances.shape[0] > 0:
+            rho[i] = np.max(ith_distances)
+
+        # mid = _cal_sigma_origin(distances[i], n_iter, rho[i], target, lo, hi, mid)
+        # mid = _cal_sigma_numpy(distances[i], n_iter, rho[i], target, lo, hi, mid)
+        mid = _cal_sigma_numba(distances[i], n_iter, rho[i], target, lo, hi, mid)
+
+        # 正则化因子sigma
+        result[i] = mid
+
+        if result[i] < MIN_K_DIST_SCALE * mean_distances[i]:
+            result[i] = MIN_K_DIST_SCALE * mean_distances[i]
+
+    return result, rho
+
+
+def _cal_sigma_origin(distances, n_iter, rho, target, lo, hi, mid):
+    for n in range(n_iter):
+        psum = 0.0
+        for j in range(1, len(distances)):
+            # d表示以最近距离归一化后的距离
+            d = distances[j] - rho
+            if d > 0:
+                psum += np.exp(-(d / mid))
+            else:
+                psum += 1.0
+
+        if np.fabs(psum - target) < SMOOTH_K_TOLERANCE:
+            break
+        # 二分查找的方式
+        if psum > target:
+            hi = mid
+            mid = (lo + hi) / 2.0
+        else:
+            lo = mid
+            if hi == NPY_INFINITY:
+                mid *= 2
+            else:
+                mid = (lo + hi) / 2.0
+    return mid
+
+
+def _cal_sigma_numpy(distances, n_iter, rho, target, lo, hi, mid):
+    for n in range(n_iter):
+        normed_d = distances - rho
+        p_sum = np.sum(np.exp(-(normed_d[1:] / mid)), dtype=np.float)
+
+        psum = 0
+        for j in range(1, len(distances)):
+            # d表示以最近距离归一化后的距离
+            d = distances[j] - rho
+            if d > 0:
+                psum += np.exp(-(d / mid))
+            else:
+                psum += 1.0
+
+        if np.fabs(psum - target) < SMOOTH_K_TOLERANCE:
+            break
+        # 二分查找的方式
+        if psum > target:
+            hi = mid
+            mid = (lo + hi) / 2.0
+        else:
+            lo = mid
+            if hi == NPY_INFINITY:
+                mid *= 2
+            else:
+                mid = (lo + hi) / 2.0
+    return mid
+
+
+@jit
+def _cal_sigma_numba(distances, n_iter, rho, target, lo, hi, mid):
+    for n in numba.prange(n_iter):
+        psum = 0.0
+        for j in numba.prange(1, len(distances)):
+            # d表示以最近距离归一化后的距离
+            d = distances[j] - rho
+            if d > 0:
+                psum += math.exp(-(d / mid))
+            else:
+                psum += 1.0
+        # print(abs(psum - target))
+        if abs(psum - target) < SMOOTH_K_TOLERANCE:
+            break
+        # 二分查找的方式
+        if psum > target:
+            hi = mid
+            mid = (lo + hi) / 2.0
+        else:
+            lo = mid
+            if hi == NPY_INFINITY:
+                mid *= 2
+            else:
+                mid = (lo + hi) / 2.0
+    return mid
