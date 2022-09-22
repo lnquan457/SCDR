@@ -41,3 +41,33 @@ class CDRModel(NxCDRModel):
             loss = self.criterion(logits, torch.tensor(self.temperature))
 
         return loss
+
+
+class LwFCDR(CDRModel):
+    def batch_logits(self, x_embeddings, x_sim_embeddings, *args):
+        is_incremental_learning = args[3]
+        logits = super().batch_logits(x_embeddings, x_sim_embeddings, *args)
+        if not is_incremental_learning:
+            return logits
+        rep_old_embeddings = args[1]
+
+        rep_old_embeddings_matrix = rep_old_embeddings.unsqueeze(0).repeat(x_embeddings.shape[0] * 2, 1, 1)
+        x_and_x_sim_embeddings = torch.cat([x_embeddings, x_sim_embeddings], dim=0)
+        x_embeddings_matrix = x_and_x_sim_embeddings.unsqueeze(1).repeat(1, rep_old_embeddings.shape[0], 1)
+        # TODO：如果代表性数据与新的数据有来自同一聚类的情况，那一直排斥他们是否会导致模型坍塌呢？
+        rep_old_negatives = self.similarity_func(rep_old_embeddings_matrix, x_embeddings_matrix, self.min_dist)[0]
+
+        total_logits = torch.cat([logits, rep_old_negatives], dim=1)
+        return total_logits
+
+    def compute_loss(self, x_embeddings, x_sim_embeddings, *args):
+        contrastive_loss = super().compute_loss(x_embeddings, x_sim_embeddings, *args)
+        is_incremental_learning = args[3]
+        if not is_incremental_learning:
+            return contrastive_loss
+
+        cur_embeddings, pre_embeddings = args[1], args[2]
+        normalization_loss = torch.mean(torch.norm(cur_embeddings - pre_embeddings, dim=1))
+        # print("normalization_loss", normalization_loss)
+        total_loss = contrastive_loss + normalization_loss
+        return total_loss

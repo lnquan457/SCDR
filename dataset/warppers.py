@@ -20,6 +20,29 @@ from utils.nn_utils import compute_knn_graph
 from utils.umap_utils import fuzzy_simplicial_set_partial
 
 
+def build_dataset(data_file_path, dataset_name, is_image, normalize_method, root_dir):
+    data_augment = transforms.Compose([
+        transforms.ToTensor()
+    ])
+    test_dataset = None
+    if is_image:
+        if normalize_method == ComponentInfo.UMAP_NORMALIZE:
+            train_dataset = UMAP_CLR_Image_Dataset(dataset_name, root_dir, True, data_augment, data_file_path)
+            # test_dataset = UMAP_CLR_Image_Dataset(dataset_name, root_dir, False, data_augment, data_file_path)
+        else:
+            train_dataset = CLR_Image_Dataset(dataset_name, root_dir, True, data_augment, data_file_path)
+            # test_dataset = CLR_Image_Dataset(dataset_name, root_dir, False, data_augment, data_file_path)
+    else:
+        if normalize_method == ComponentInfo.UMAP_NORMALIZE:
+            train_dataset = UMAP_CLR_Text_Dataset(dataset_name, root_dir, True, data_file_path)
+            # test_dataset = UMAP_CLR_Text_Dataset(dataset_name, root_dir, False, data_file_path)
+        else:
+            train_dataset = CLR_Text_Dataset(dataset_name, root_dir, True, data_file_path)
+            # test_dataset = CLR_Text_Dataset(dataset_name, root_dir, False, data_file_path)
+        data_augment = None
+    return data_augment, test_dataset, train_dataset
+
+
 class DataSetWrapper(object):
     batch_size: object
 
@@ -33,53 +56,29 @@ class DataSetWrapper(object):
         self.knn_distances = None
         self.symmetric_nn_indices = None
         self.symmetric_nn_weights = None
-        # self.symmetric_nn_dists = None
-        # self.sym_no_norm_weights = None
         self.raw_knn_weights = None
         self.n_neighbor = 0
-        self.shifted_data = None
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
-                         pairwise_cache_path=None, is_image=True,
-                         data_file_path=None, symmetric="TSNE", multi=False):
+                         pairwise_cache_path=None, is_image=True, data_file_path=None, symmetric="TSNE", multi=False):
         self.n_neighbor = n_neighbors
-        data_augment, test_dataset, train_dataset = self.build_dataset(data_file_path, dataset_name, is_image,
-                                                                       ComponentInfo.UMAP_NORMALIZE, root_dir)
+        data_augment, test_dataset, train_dataset = build_dataset(data_file_path, dataset_name, is_image,
+                                                                  ComponentInfo.UMAP_NORMALIZE, root_dir)
         self.train_dataset = train_dataset
         self.knn_indices, self.knn_distances = compute_knn_graph(train_dataset.data, knn_cache_path, n_neighbors,
                                                                  pairwise_cache_path, accelerate=False)
 
         self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
 
-        train_indices, train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
+        train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
 
-        train_loader, valid_loader = self._get_train_validation_data_loaders(train_dataset, test_dataset,
-                                                                             train_indices, [],
-                                                                             False, multi)
+        train_indices = self._generate_train_indices(train_num, train_dataset)
+
+        train_loader, valid_loader = self.get_train_validation_data_loaders(train_dataset, test_dataset,
+                                                                            train_indices, [],
+                                                                            False, multi)
 
         return train_loader, train_num
-
-    def build_dataset(self, data_file_path, dataset_name, is_image, normalize_method, root_dir):
-        data_augment = transforms.Compose([
-            transforms.ToTensor()
-        ])
-        test_dataset = None
-        if is_image:
-            if normalize_method == ComponentInfo.UMAP_NORMALIZE:
-                train_dataset = UMAP_CLR_Image_Dataset(dataset_name, root_dir, True, data_augment, data_file_path)
-                # test_dataset = UMAP_CLR_Image_Dataset(dataset_name, root_dir, False, data_augment, data_file_path)
-            else:
-                train_dataset = CLR_Image_Dataset(dataset_name, root_dir, True, data_augment, data_file_path)
-                # test_dataset = CLR_Image_Dataset(dataset_name, root_dir, False, data_augment, data_file_path)
-        else:
-            if normalize_method == ComponentInfo.UMAP_NORMALIZE:
-                train_dataset = UMAP_CLR_Text_Dataset(dataset_name, root_dir, True, data_file_path)
-                # test_dataset = UMAP_CLR_Text_Dataset(dataset_name, root_dir, False, data_file_path)
-            else:
-                train_dataset = CLR_Text_Dataset(dataset_name, root_dir, True, data_file_path)
-                # test_dataset = CLR_Text_Dataset(dataset_name, root_dir, False, data_file_path)
-            data_augment = None
-        return data_augment, test_dataset, train_dataset
 
     def update_transform(self, data_augment, epoch_num, is_image, train_dataset):
         # 更新transform，迭代时对邻居进行采样返回正例对
@@ -88,9 +87,8 @@ class DataSetWrapper(object):
                                                         self.symmetric_nn_weights))
         train_num = train_dataset.data_num
 
-        train_indices = list(range(train_num))
         self.batch_num = math.floor(train_num / self.batch_size)
-        return train_indices, train_num
+        return train_num
 
     def distance2prob(self, normalize_method, train_dataset, symmetric):
         # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
@@ -108,8 +106,8 @@ class DataSetWrapper(object):
         # self.sym_no_norm_weights = train_dataset.sym_no_norm_weights
         self.raw_knn_weights = train_dataset.raw_knn_weights
 
-    def _get_train_validation_data_loaders(self, train_dataset, test_dataset, train_indices, val_indices,
-                                           debiased_sample, multi):
+    def get_train_validation_data_loaders(self, train_dataset, test_dataset, train_indices, val_indices,
+                                          debiased_sample, multi):
         # obtain training indices that will be used for validation
         np.random.shuffle(train_indices)
         # np.random.shuffle(val_indices)
@@ -146,6 +144,10 @@ class DataSetWrapper(object):
                 train_sampler = CustomSampler(train_indices)
                 valid_sampler = CustomSampler(val_indices) if test_dataset is not None else None
         return train_sampler, valid_sampler
+
+    def _generate_train_indices(self, train_num, train_dataset):
+        train_indices = list(range(train_num))
+        return train_indices
 
 
 avg_acc = []
@@ -200,7 +202,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
 
-        train_indices, train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
+        train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
+        train_indices = self._generate_train_indices(train_num, train_dataset)
 
         train_loader = self._get_train_data_loader(train_dataset, train_indices, multi)
 
@@ -346,4 +349,3 @@ def extract_csr(csr_graph, indices):
 def arr_move_one(arr, index, index_val):
     arr[1:index + 1] = arr[:index]
     arr[index] = index_val
-

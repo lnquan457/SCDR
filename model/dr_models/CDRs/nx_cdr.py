@@ -1,5 +1,6 @@
 import copy
 
+import torch
 from torch.nn import Module
 
 from model.dr_models.CDRs.NCELoss import torch_app_skewnorm_func
@@ -137,5 +138,4 @@ class NxCDRModel(Module):
         # 将本地的正例、负例与全局的负例拼接在一起
         logits = torch.cat((positives, negatives), dim=1)
         return logits
-
 

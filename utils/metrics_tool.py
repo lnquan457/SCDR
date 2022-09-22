@@ -393,7 +393,7 @@ class Metric:
         self.subset_indices = subset_indices
         self.method_name = method_name
         if knn_indices is None or knn_indices.shape[1] < self.K:
-            knn_indices, knn_dists = compute_knn_graph(origin_data, None, self.K, None, accelerate=True)
+            knn_indices, knn_dists = compute_knn_graph(origin_data, None, self.K, None, accelerate=False)
 
         if norm:
             origin_data = origin_data / 255
@@ -563,17 +563,18 @@ class Metric:
         origin_nn_label_same_ratio = cal()
         return origin_nn_label_same_ratio
 
-    def metric_neighborhood_hit(self, k, embedding_data):
+    def metric_neighborhood_hit(self, k, embedding_data, eval_indices=None):
         # 获取原数据近邻点下标和距离
         if self.low_knn_indices is None:
             self.acquire_low_distance(embedding_data)
 
-        pred_knn_labels = np.zeros_like(self.low_knn_indices)
-        for i in range(self.low_knn_indices.shape[0]):
-            pred_knn_labels[i] = self.origin_label[self.low_knn_indices[i]]
+        indices = np.arange(0, self.low_knn_indices.shape[0]) if eval_indices is None else eval_indices
+        pred_knn_labels = np.zeros(shape=(len(indices), self.K))
+        for index, i in enumerate(indices):
+            pred_knn_labels[index] = self.origin_label[self.low_knn_indices[i]]
 
         nn_label_same_ratio = np.mean(
-            np.mean((pred_knn_labels == np.tile(self.origin_label.reshape((-1, 1)), k)).astype('uint8'), axis=1))
+            np.mean((pred_knn_labels == np.tile(self.origin_label[indices].reshape((-1, 1)), k)).astype('uint8'), axis=1))
         return nn_label_same_ratio
 
     def acquire_low_distance(self, embedding_data):
@@ -863,28 +864,21 @@ class MetricProcess(Process, Metric):
                 break
 
 
-def knn_score(data, labels_gt, k, metric="euclidean", pair_distance=None):
-    """
-        预测函数
-        :param k: 近邻数
-        :param metric: 距离度量方式
-        :param pair_distance: 待预测数据集距离对
-        :param labels_gt: 待预测数据集标签
-        :param data: 待预测数据集
-        :return: 预测精度
-        """
+def knn_score(data, labels_gt, k, metric="euclidean", knn_indices=None, eval_indices=None):
     n_samples = data.shape[0]
-    if pair_distance is None:
+    if knn_indices is None:
         flattened_data = np.reshape(data, (n_samples, np.prod(data.shape[1:])))
         pair_distance = get_pairwise_distance(flattened_data, metric, preload=False)
+        knn_indices = np.argsort(pair_distance, axis=1)[:, 1:k+1]
+
     labels_predict = []
-    for i in range(n_samples):
-        nearest = np.argsort(pair_distance[i])
-        top_k = [labels_gt[i] for i in nearest[1:k + 1]]
+    indices = range(n_samples) if eval_indices is None else eval_indices
+    for i in indices:
+        top_k = [labels_gt[i] for i in knn_indices[i]]
         nums, counts = np.unique(top_k, return_counts=True)
         labels_predict.append(nums[np.argmax(counts)])
     labels_predict = np.array(labels_predict)
-    labels_gt = labels_gt[:n_samples]
+    labels_gt = labels_gt[indices]
     acc = np.sum(labels_predict == labels_gt) / len(labels_gt)
     return acc
 

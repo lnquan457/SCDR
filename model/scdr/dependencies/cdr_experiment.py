@@ -97,7 +97,7 @@ class CDRsExperiments(Experiment):
             self._train_end(test_loss_history, training_loss_history, embeddings)
         return embeddings
 
-    def resume_train(self, resume_epoch):
+    def resume_train(self, resume_epoch, *args):
         self.start_epoch = self.epoch_num
         self.epoch_num = self.start_epoch + resume_epoch
         if isinstance(self.model, CDRModel):
@@ -163,4 +163,5 @@ class CDRsExperiments(Experiment):
 
     def model_prepare(self):
         self.model.preprocess()
+
 

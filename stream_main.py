@@ -134,7 +134,7 @@ def parse_args():
 
     parser.add_argument("--method", type=str, default=PAR_SCDR,
                         choices=[ATSNE, SIPCA, XTREAMING, SCDR, RTSCDR, PAR_SCDR])
-    parser.add_argument("--indices_dir", type=str, default=r"H:\Projects\流数据\Data\indices\single_cluster")
+    parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/single_cluster")
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 

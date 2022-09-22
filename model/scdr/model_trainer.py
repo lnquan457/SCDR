@@ -25,7 +25,6 @@ class SCDRTrainer(CDRsExperiments):
         self.minimum_finetune_data_num = 400
         self.finetune_data_num = 0
         self.cur_time = 0
-        self.infer_model = None
         self.first_train_data_num = 0
 
     def update_batch_size(self, data_num):
@@ -60,8 +59,6 @@ class SCDRTrainer(CDRsExperiments):
             self.pre_embeddings = self.visualize(None, device=self.device)[0]
             self._train_begin(int(time.time()))
 
-        self.infer_model = self.model.copy_network()
-
         if self.config_path is not None:
             if not os.path.exists(self.result_save_dir):
                 os.makedirs(self.result_save_dir)
@@ -92,20 +89,6 @@ class SCDRTrainer(CDRsExperiments):
                                          self.train_loader.dataset.targets, None, None, None,
                                          self.result_save_dir, norm=self.is_image, k=self.fixed_k)
         self.metric_tool.start()
-
-    def infer_embeddings(self, data):
-        self.infer_model.to(self.device)
-        data = torch.tensor(data, dtype=torch.float).to(self.device)
-        with torch.no_grad():
-            self.infer_model.eval()
-            data_embeddings = self.infer_model(data).cpu()
-            self.infer_model.train()
-        return data_embeddings
-
-    def resume_train(self, resume_epoch):
-        embeddings = super(SCDRTrainer, self).resume_train(resume_epoch)
-        self.infer_model = self.model.copy_network()
-        return embeddings
 
 
 class SCDRTrainerProcess(Process, SCDRTrainer):
@@ -160,7 +143,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
                 sta = time.time()
                 embeddings = self.first_train(*training_info)
                 self.cal_time_queue_set.model_initial_queue.put(time.time() - sta)
-                ret = [embeddings, self.infer_model.cpu()]
+                ret = [embeddings, self.model.copy_network().cpu()]
             else:
                 fitted_data_num, data_num_list, cur_data_num, pre_embeddings, must_indices = training_info
                 self._get_all_from_raw_data_queue(cur_data_num - self.streaming_dataset.total_data.shape[0])
@@ -187,7 +170,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
 
                 sta = time.time()
                 self.resume_train(self.finetune_epoch)
-                ret = [cur_data_num, self.infer_model.cpu()]
+                ret = [cur_data_num, self.model.copy_network().cpu()]
                 self.cal_time_queue_set.model_update_queue.put(time.time() - sta)
 
             self.model_update_queue_set.embedding_queue.put(ret)
@@ -204,3 +187,51 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
             new_data, nn_indices, nn_dists, new_labels = self.model_update_queue_set.raw_data_queue.get()
             self.streaming_dataset.add_new_data(new_data, nn_indices, nn_dists, new_label=new_labels)
             num += new_data.shape[0]
+
+
+class IncrementalCDREx(SCDRTrainer):
+    def __init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, shuffle=True, device='cuda',
+                 log_path="logs.txt", multi=False):
+        CDRsExperiments.__init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, shuffle, device,
+                                 log_path, multi)
+        self._rep_old_data = None
+        self._pre_rep_old_embeddings = None
+        self._is_incremental_learning = False
+        self.stream_dataset = None
+
+    def active_incremental_learning(self):
+        self._is_incremental_learning = True
+
+    def update_train_loader(self, train_indices):
+        self.train_loader, self.n_samples = \
+            self.clr_dataset.get_train_validation_data_loaders(self.clr_dataset.train_dataset, None,
+                                                               train_indices, [], False, False)
+
+    def resume_train(self, resume_epoch, *args):
+        rep_old_data, rep_old_embeddings = args[0], args[1]
+        self._rep_old_data = torch.tensor(rep_old_data, dtype=torch.float).to(self.device)
+        if not isinstance(rep_old_embeddings, torch.Tensor):
+            self._pre_rep_old_embeddings = torch.tensor(rep_old_embeddings, dtype=torch.float).to(self.device)
+
+        return super().resume_train(resume_epoch)
+
+    def _train_step(self, *args):
+        x, x_sim, epoch, indices, sim_indices = args
+
+        self.optimizer.zero_grad()
+
+        with torch.cuda.device(self.device_id):
+            _, x_embeddings, _, x_sim_embeddings = self.forward(x, x_sim)
+            rep_old_embeddings = self.model.acquire_latent_code(self._rep_old_data)
+
+        # 使用嵌入编码计算contrastive loss
+        train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, rep_old_embeddings,
+                                             self._pre_rep_old_embeddings, self._is_incremental_learning)
+
+        train_loss.backward()
+        self.optimizer.step()
+        return train_loss
+
+    def build_dataset(self, *args):
+        new_data, new_labels = args[0], args[1]
+        self.stream_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size)

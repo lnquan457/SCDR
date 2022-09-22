@@ -43,11 +43,11 @@ class ConfigInfo:
     MODEL_CONFIG_PATH = "./configs/{}.yaml"
     RESULT_SAVE_DIR = r".\results\{}\n{}_d{}"
     # 单机下的数据缓存目录
-    NEIGHBORS_CACHE_DIR = r"H:\Projects\流数据\Data\knn\{}_k{}.npy"
-    PAIRWISE_DISTANCE_DIR = r"H:\Projects\流数据\Data\pairwise\{}.npy"
-    DATASET_CACHE_DIR = r"H:\Projects\流数据\Data\H5 Data"
-    TIME_INFO_CACHE_DIR = r"H:\Projects\流数据\Data\Time Info"
-    CUSTOM_INDICES_DIR = r"H:\Projects\流数据\Data\indices"
+    NEIGHBORS_CACHE_DIR = r"../../Data/knn/{}_k{}.npy"
+    PAIRWISE_DISTANCE_DIR = r"../../Data/pairwise/{}.npy"
+    DATASET_CACHE_DIR = r"../../Data/H5 Data"
+    TIME_INFO_CACHE_DIR = r"../../Data/Time Info"
+    CUSTOM_INDICES_DIR = r"../../Data/indices"
 
 
 class ComponentInfo:
