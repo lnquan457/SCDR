@@ -175,16 +175,12 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # initial_data 是一个列表，第一个元素是数据，第二个元素是标签
         self.total_data = initial_data
         self.total_label = initial_label
-        self.knn_indices = knn_indices
-        self.knn_distances = knn_dists
+        self.kNN_manager = KNNManager(self.n_neighbor)
         self.cur_n_samples = initial_data.shape[0] if initial_data is not None else 0
-        self.cache_process_num_thresh = 100
         self.cached_shifted_indices = []
-        self.farest_neighbor_dist = None
 
     def _update_knn_stat(self, train_dataset):
         super()._update_knn_stat(train_dataset)
-        self.farest_neighbor_dist = self.knn_distances[:, -1]
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
                          pairwise_cache_path=None, is_image=True, data_file_path=None,
@@ -196,9 +192,10 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         data_augment, train_dataset = self.get_dataset(data_augment, is_image, ComponentInfo.UMAP_NORMALIZE)
         self.train_dataset = train_dataset
-        if self.knn_indices is None or self.knn_distances is None:
-            self.knn_indices, self.knn_distances = compute_knn_graph(train_dataset.data, None, n_neighbors,
-                                                                     None, accelerate=False)
+        if self.kNN_manager.is_empty():
+            knn_indices, knn_distances = compute_knn_graph(train_dataset.data, None, n_neighbors,
+                                                           None, accelerate=False)
+            self.kNN_manager.add_new_kNN(knn_indices, knn_distances)
 
         self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
 
@@ -248,12 +245,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.total_data = np.concatenate([self.total_data, new_data], axis=0)
         if new_label is not None:
             self.total_label = np.concatenate([self.total_label, new_label], axis=0)
-        if knn_indices is not None:
-            self.knn_indices = np.concatenate([self.knn_indices, knn_indices], axis=0)
-        if knn_dists is not None:
-            self.knn_distances = np.concatenate([self.knn_distances, knn_dists], axis=0)
-            self.farest_neighbor_dist = np.concatenate([self.farest_neighbor_dist, knn_dists[:, -1]])
 
+        self.kNN_manager.add_new_kNN(knn_indices, knn_dists)
         self.train_dataset.add_new_data(new_data, new_label)
 
     def buffer_empty(self):
@@ -261,15 +254,12 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
     def update_knn_graph(self, pre_data, new_data, data_num_list, cut_num=None):
         total_data = self.total_data if cut_num is None else self.total_data[:cut_num]
-        farest_neighbor_dist = self.farest_neighbor_dist if cut_num is None else self.farest_neighbor_dist[:cut_num]
-        knn_distances = self.knn_distances if cut_num is None else self.knn_distances[:cut_num]
-        knn_indices = self.knn_indices if cut_num is None else self.knn_indices[:cut_num]
+        knn_distances = self.kNN_manager.knn_dists if cut_num is None else self.kNN_manager.knn_dists[:cut_num]
+        knn_indices = self.kNN_manager.knn_indices if cut_num is None else self.kNN_manager.knn_indices[:cut_num]
 
         new_n_samples = new_data.shape[0]
         # O(m*n*D)
-        # sta = time.time()
         dists = cdist(new_data, total_data)
-        # print("cal dist:", time.time() - sta)
 
         pre_n_samples = pre_data.shape[0]
         neighbor_changed_indices = numba.typed.List(np.arange(0, new_n_samples, 1) + pre_n_samples)
@@ -277,39 +267,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
 
-        tmp_index = 0
-
-        # sta = time.time()
-        for i in range(new_n_samples):
-            indices = np.where(dists[i] - farest_neighbor_dist < 0)[0]
-            # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
-            if i > 0 and i == data_num_list[tmp_index + 1]:
-                tmp_index += 1
-            indices = indices[np.where(indices < data_num_list[tmp_index + 1] + pre_n_samples)[0]]
-
-            if len(indices) <= 1:
-                continue
-
-            for j in indices:
-                if j == pre_n_samples + i:
-                    continue
-                if j not in neighbor_changed_indices:
-                    neighbor_changed_indices.append(j)
-                # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
-                insert_index = self.knn_distances.shape[1] - 1
-                while insert_index >= 0 and dists[i][j] <= self.knn_distances[j][insert_index]:
-                    insert_index -= 1
-
-                if self.knn_indices[j][-1] not in neighbor_changed_indices:
-                    neighbor_changed_indices.append(self.knn_indices[j][-1])
-
-                # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
-                arr_move_one(self.knn_distances[j], insert_index + 1, dists[i][j])
-                arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
-                self.farest_neighbor_dist[j] = self.knn_distances[j][-1]
-
-        # print("knn update", time.time() - sta)
-
+        self.kNN_manager.update_previous_kNN(new_n_samples, dists, data_num_list, neighbor_changed_indices)
         self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.zeros((new_n_samples, self.n_neighbor))],
                                               axis=0)
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.empty(shape=new_n_samples)])
@@ -327,6 +285,65 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         self.symmetric_nn_weights[neighbor_changed_indices] = updated_symm_nn_weights
         self.symmetric_nn_indices[neighbor_changed_indices] = updated_sym_nn_indices
+
+
+# 负责存储以及更新kNN
+class KNNManager:
+    def __init__(self, k):
+        self.k = k
+        self.knn_indices = None
+        self.knn_dists = None
+
+    def is_empty(self):
+        return self.knn_indices is None
+
+    def add_new_kNN(self, new_knn_indices, new_knn_dists):
+        if new_knn_indices is None:
+            self.knn_indices = new_knn_indices
+            self.knn_dists = new_knn_dists
+            return
+
+        if new_knn_indices is not None:
+            self.knn_indices = np.concatenate([self.knn_indices, new_knn_indices], axis=0)
+        if new_knn_dists is not None:
+            self.knn_dists = np.concatenate([self.knn_dists, new_knn_dists], axis=0)
+
+    def update_previous_kNN(self, new_data_num, dists2pre_data, data_num_list=None, neighbor_changed_indices=None):
+        farest_neighbor_dist = self.knn_dists[:, -1]
+        pre_n_samples = self.knn_indices.shape[0]
+
+        if neighbor_changed_indices is None:
+            neighbor_changed_indices = numba.typed.List()
+
+        tmp_index = 0
+        for i in range(new_data_num):
+            indices = np.where(dists2pre_data[i] - farest_neighbor_dist < 0)[0]
+
+            if data_num_list is not None:
+                # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
+                if i > 0 and i == data_num_list[tmp_index + 1]:
+                    tmp_index += 1
+                indices = indices[np.where(indices < data_num_list[tmp_index + 1] + pre_n_samples)[0]]
+
+                if len(indices) <= 1:
+                    continue
+
+            for j in indices:
+                if j == pre_n_samples + i:
+                    continue
+                if j not in neighbor_changed_indices:
+                    neighbor_changed_indices.append(j)
+                # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
+                insert_index = self.knn_dists.shape[1] - 1
+                while insert_index >= 0 and dists2pre_data[i][j] <= self.knn_dists[j][insert_index]:
+                    insert_index -= 1
+
+                if self.knn_indices[j][-1] not in neighbor_changed_indices:
+                    neighbor_changed_indices.append(self.knn_indices[j][-1])
+
+                # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
+                arr_move_one(self.knn_dists[j], insert_index + 1, dists2pre_data[i][j])
+                arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
 
 
 def extract_csr(csr_graph, indices):
