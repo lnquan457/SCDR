@@ -38,7 +38,8 @@ def cal_snn_similarity(knn, cache_path=None):
     return knn, snn_sim
 
 
-def compute_accurate_knn(flattened_data, k, neighbors_cache_path=None, pairwise_cache_path=None, metric="euclidean"):
+def compute_accurate_knn(flattened_data, k, neighbors_cache_path=None, pairwise_cache_path=None, metric="euclidean",
+                         include_self=False):
     cur_path = None
     if neighbors_cache_path is not None:
         cur_path = neighbors_cache_path.replace(".npy", "_ac.npy")
@@ -54,7 +55,10 @@ def compute_accurate_knn(flattened_data, k, neighbors_cache_path=None, pairwise_
 
         pairwise_distance = get_pairwise_distance(flattened_data, metric, pairwise_cache_path, preload=preload)
         sorted_indices = np.argsort(pairwise_distance, axis=1)
-        knn_indices = sorted_indices[:, 1:k + 1]
+        if include_self:
+            knn_indices = sorted_indices[:, :k]
+        else:
+            knn_indices = sorted_indices[:, 1:k + 1]
         knn_distances = []
         for i in range(knn_indices.shape[0]):
             knn_distances.append(pairwise_distance[i, knn_indices[i]])
@@ -66,11 +70,12 @@ def compute_accurate_knn(flattened_data, k, neighbors_cache_path=None, pairwise_
 
 
 def compute_knn_graph(all_data, neighbors_cache_path, k, pairwise_cache_path,
-                      metric="euclidean", max_candidates=60, accelerate=False):
+                      metric="euclidean", max_candidates=60, accelerate=False, include_self=False):
     flattened_data = all_data.reshape((len(all_data), np.product(all_data.shape[1:])))
     # 精确的KNN，比较慢
     if not accelerate:
-        knn_indices, knn_distances = compute_accurate_knn(flattened_data, k, neighbors_cache_path, pairwise_cache_path)
+        knn_indices, knn_distances = compute_accurate_knn(flattened_data, k, neighbors_cache_path, pairwise_cache_path,
+                                                          include_self=include_self)
         return knn_indices, knn_distances
 
     # 近似的KNN，比较快

@@ -262,12 +262,14 @@ class StreamingDatasetWrapper(DataSetWrapper):
         dists = cdist(new_data, total_data)
 
         pre_n_samples = pre_data.shape[0]
-        neighbor_changed_indices = numba.typed.List(np.arange(0, new_n_samples, 1) + pre_n_samples)
+        neighbor_changed_indices = list(np.arange(0, new_n_samples, 1) + pre_n_samples)
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
 
-        self.kNN_manager.update_previous_kNN(new_n_samples, dists, data_num_list, neighbor_changed_indices)
+        neighbor_changed_indices = self.kNN_manager.update_previous_kNN(new_n_samples, pre_n_samples, dists,
+                                                                        data_num_list, neighbor_changed_indices)
+
         self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.zeros((new_n_samples, self.n_neighbor))],
                                               axis=0)
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.empty(shape=new_n_samples)])
@@ -298,7 +300,7 @@ class KNNManager:
         return self.knn_indices is None
 
     def add_new_kNN(self, new_knn_indices, new_knn_dists):
-        if new_knn_indices is None:
+        if self.knn_indices is None:
             self.knn_indices = new_knn_indices
             self.knn_dists = new_knn_dists
             return
@@ -308,29 +310,27 @@ class KNNManager:
         if new_knn_dists is not None:
             self.knn_dists = np.concatenate([self.knn_dists, new_knn_dists], axis=0)
 
-    def update_previous_kNN(self, new_data_num, dists2pre_data, data_num_list=None, neighbor_changed_indices=None):
+    def update_previous_kNN(self, new_data_num, pre_n_samples, dists2pre_data, data_num_list=None,
+                            neighbor_changed_indices=None, symm=True):
         farest_neighbor_dist = self.knn_dists[:, -1]
-        pre_n_samples = self.knn_indices.shape[0]
 
         if neighbor_changed_indices is None:
-            neighbor_changed_indices = numba.typed.List()
+            neighbor_changed_indices = []
 
         tmp_index = 0
         for i in range(new_data_num):
-            indices = np.where(dists2pre_data[i] - farest_neighbor_dist < 0)[0]
+            indices = np.where(dists2pre_data[i] < farest_neighbor_dist)[0]
 
             if data_num_list is not None:
-                # 在该点出现之后出现的点，在计算kNN的时候就已经将其计算进去了
+                # kNN计算正确的情况下，新数据i只可能改变在它之前到达的数据的kNN
                 if i > 0 and i == data_num_list[tmp_index + 1]:
                     tmp_index += 1
-                indices = indices[np.where(indices < data_num_list[tmp_index + 1] + pre_n_samples)[0]]
+                indices = indices[np.where(indices < data_num_list[tmp_index] + pre_n_samples)[0]]
 
-                if len(indices) <= 1:
+                if len(indices) < 1:
                     continue
 
             for j in indices:
-                if j == pre_n_samples + i:
-                    continue
                 if j not in neighbor_changed_indices:
                     neighbor_changed_indices.append(j)
                 # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
@@ -338,15 +338,17 @@ class KNNManager:
                 while insert_index >= 0 and dists2pre_data[i][j] <= self.knn_dists[j][insert_index]:
                     insert_index -= 1
 
-                if self.knn_indices[j][-1] not in neighbor_changed_indices:
+                if symm and self.knn_indices[j][-1] not in neighbor_changed_indices:
                     neighbor_changed_indices.append(self.knn_indices[j][-1])
 
                 # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
                 arr_move_one(self.knn_dists[j], insert_index + 1, dists2pre_data[i][j])
                 arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
 
+        return neighbor_changed_indices
 
-def extract_csr(csr_graph, indices):
+
+def extract_csr(csr_graph, indices, norm=True):
     nn_indices = []
     nn_weights = []
 
@@ -357,12 +359,14 @@ def extract_csr(csr_graph, indices):
         cur_weights = csr_graph.data[pre:idx]
 
         nn_indices.append(cur_indices)
-        nn_weights.append(cur_weights / np.sum(cur_weights))
+        if norm:
+            nn_weights.append(cur_weights / np.sum(cur_weights))
+        else:
+            nn_weights.append(cur_weights)
     return nn_indices, nn_weights
 
 
-# 将index之前的元素向后移动一位
-@jit
+# 将index之后的元素向后移动一位
 def arr_move_one(arr, index, index_val):
-    arr[1:index + 1] = arr[:index]
+    arr[index+1:] = arr[index:-1]
     arr[index] = index_val

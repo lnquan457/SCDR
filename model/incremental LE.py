@@ -1,28 +1,34 @@
+import h5py
 import numpy as np
+from scipy.sparse import csr_matrix
 from scipy.spatial.distance import cdist
 from sklearn.manifold import SpectralEmbedding
+from sklearn.manifold._locally_linear import barycenter_weights
+from sklearn.neighbors import kneighbors_graph
 
-from dataset.warppers import arr_move_one
+from dataset.warppers import arr_move_one, KNNManager, extract_csr
+from model.scdr.dependencies.experiment import position_vis
 from model.scdr.dependencies.scdr_utils import StreamingDataRepo
+from utils.nn_utils import compute_knn_graph
 
 
 class IncrementalLE(SpectralEmbedding):
     def __init__(self, train_num, n_components, n_neighbors):
         SpectralEmbedding.__init__(self, n_components, n_neighbors=n_neighbors)
         self.train_num = train_num
-        self.knn_indices = None
-        self.knn_dists = None
+        self.knn_manager = KNNManager(n_neighbors)
+        # 只在训练时用到
+        self.initial_knn_indices = None
+        self.initial_knn_dists = None
         self.weight_matrix = None
         self.pre_embeddings = None
         self.stream_dataset = StreamingDataRepo(n_neighbors)
         self.trained = False
 
-    def first_train(self, train_data, train_labels=None):
-        le_embedder = SpectralEmbedding(self.n_components, n_neighbors=self.n_neighbors)
-        self.pre_embeddings = le_embedder.fit_transform(train_data)
-        affinity = le_embedder.affinity
-        self.weight_matrix = le_embedder.affinity_matrix_
-        print(affinity)
+    def _first_train(self, train_data):
+        self.pre_embeddings = self.fit_transform(train_data)
+        self.knn_manager.add_new_kNN(self.initial_knn_indices, self.initial_knn_dists)
+        self.weight_matrix = np.array(self.affinity_matrix_.todense())
         return self.pre_embeddings
 
     def fit_new_data(self, x, labels=None):
@@ -32,64 +38,139 @@ class IncrementalLE(SpectralEmbedding):
             if self.stream_dataset.get_n_samples() < self.train_num:
                 return None
             self.trained = True
-            return self.first_train(self.stream_dataset.total_data, self.stream_dataset.total_label)
+            self._first_train(self.stream_dataset.total_data)
+        else:
+            self._incremental_embedding(x)
 
-        new_data_embeddings = self._incremental_embedding(x)
-        total_embeddings = np.concatenate([self.pre_embeddings, new_data_embeddings], axis=0)
-        return total_embeddings
+        return self.pre_embeddings
 
     def _incremental_embedding(self, new_data):
-        self._update_kNN(new_data)
-        self._update_weight_matrix()
-        return self._embedding_new_data_linear()
+        pre_knn_indices = self.knn_manager.knn_indices
+        new_knn_indices, new_knn_dists, neighbor_changed_indices = self._update_kNN(new_data)
+
+        self._update_weight_matrix(pre_knn_indices, new_knn_indices, neighbor_changed_indices)
+
+        self.pre_embeddings = self._embedding_new_data_linear(new_data.shape[0])
+        self._update_previous_embeddings(neighbor_changed_indices)
+        return self.pre_embeddings
 
     def _update_kNN(self, new_data):
         # 1. 计算新数据的kNN
         knn_indices, knn_dists, dists = self._cal_new_data_kNN(new_data)
+        self.knn_manager.add_new_kNN(knn_indices, knn_dists)
 
+        # 2. 更新旧数据的kNN
+        new_data_num = new_data.shape[0]
+        pre_data_num = self.stream_dataset.get_n_samples() - new_data_num
+        neighbor_changed_indices = self.knn_manager.update_previous_kNN(new_data_num, pre_data_num, dists,
+                                                                        data_num_list=[0, new_data_num])
+        neighbor_changed_indices = np.array(neighbor_changed_indices)
+        return knn_indices, knn_dists, neighbor_changed_indices[neighbor_changed_indices < pre_data_num]
 
-    def _update_weight_matrix(self):
-        pass
+    # 仅体现0-1连接关系
+    def _update_weight_matrix(self, pre_knn_indices, new_knn_indices, neighbor_changed_indices):
+        new_data_num = new_knn_indices.shape[0]
+        pre_data_num = pre_knn_indices.shape[0]
+        self.weight_matrix = np.concatenate([self.weight_matrix, np.zeros((self.stream_dataset.get_n_samples() -
+                                                                           new_data_num, new_data_num))], axis=1)
+        new_weight_matrix = np.zeros(shape=(new_data_num, self.stream_dataset.get_n_samples()))
+        self.weight_matrix = np.concatenate([self.weight_matrix, new_weight_matrix], axis=0)
 
-    def _embedding_new_data_linear(self):
-        pass
+        for i in neighbor_changed_indices:
+            diff = np.setdiff1d(pre_knn_indices[i], self.knn_manager.knn_indices[i])
+            new = np.setdiff1d(self.knn_manager.knn_indices[i], pre_knn_indices[i])
+            for item in diff:
+                if self.weight_matrix[i][item] == 1:  # 说明i和item互为邻居
+                    self.weight_matrix[i][item] = 0.5
+                    self.weight_matrix[item][i] = 0.5
+                else:   # 等于0.5说明item的kNN中没有i
+                    self.weight_matrix[i][item] = 0
+                    self.weight_matrix[item][i] = 0
+
+            # 均是新到达的数据，这些新数据之前不存在连接关系
+            for item in new:
+                self.weight_matrix[i][item] = 0.5
+                self.weight_matrix[item][i] = 0.5
+
+        for i in range(new_data_num):
+            zero_indices = np.argwhere(self.weight_matrix[new_knn_indices[i], i+pre_data_num] == 0)
+            half_indices = np.argwhere(self.weight_matrix[new_knn_indices[i], i+pre_data_num] == 0.5)
+            self.weight_matrix[new_knn_indices[i][zero_indices], i+pre_data_num] = 0.5
+            self.weight_matrix[i+pre_data_num, new_knn_indices[i][zero_indices]] = 0.5
+            self.weight_matrix[new_knn_indices[i][half_indices], i + pre_data_num] = 1
+            self.weight_matrix[i + pre_data_num, new_knn_indices[i][half_indices]] = 1
+            self.weight_matrix[i+pre_data_num, i+pre_data_num] = 1
+
+    def _embedding_new_data_linear(self, new_data_num):
+        new_embeddings = np.zeros((new_data_num, self.n_components))
+        embeddings = np.concatenate([self.pre_embeddings, new_embeddings], axis=0)
+
+        for i in range(new_data_num):
+            index = -new_data_num + i
+            embeddings[index] = \
+                np.dot(embeddings[:index].T, np.expand_dims(self.weight_matrix[index, :index], axis=1)).T \
+                / np.sum(self.weight_matrix[index, :index])
+
+        return embeddings
 
     def _embedding_new_data_manifold(self):
         pass
 
-    def _cal_new_data_kNN(self, new_data):
+    def _update_previous_embeddings(self, neighbor_changed_indices):
+        neighbor_changed_data = self.stream_dataset.total_data[neighbor_changed_indices]
+        indices = self.knn_manager.knn_indices[neighbor_changed_indices]
+        weights = barycenter_weights(neighbor_changed_data, self.stream_dataset.total_data, indices)
+
+        for i, idx in enumerate(neighbor_changed_indices):
+            self.pre_embeddings[idx] = np.sum(np.expand_dims(weights[i], axis=1) * self.pre_embeddings[indices[i]], axis=0)
+
+    def _cal_new_data_kNN(self, new_data, include_self=True):
         new_data_num = new_data.shape[0]
-        pre_data = self.stream_dataset.total_data[:-new_data_num]
-        dists = cdist(new_data, pre_data)
-        knn_indices = np.argsort(dists, axis=1)[:, 1:self.n_neighbors + 1]
+        dists = cdist(new_data, self.stream_dataset.total_data)
+        if include_self:
+            knn_indices = np.argsort(dists, axis=1)[:, :self.n_neighbors]
+        else:
+            knn_indices = np.argsort(dists, axis=1)[:, 1:self.n_neighbors + 1]
         knn_dists = np.zeros(shape=(new_data_num, self.n_neighbors))
         for i in range(new_data_num):
             knn_dists[i] = dists[i][knn_indices[i]]
         return knn_indices, knn_dists, dists
 
-    def _update_old_data_kNN(self, new_data_num, dists, new_knn_indices, new_knn_dists):
-        farest_neighbor_dist = self.knn_dists[:, -1]
-        pre_n_samples = self.stream_dataset.get_n_samples() - new_data_num
-        neighbor_changed_indices = []
-        for i in range(new_data_num):
-            indices = np.where(dists[i] < farest_neighbor_dist)[0]
-            if len(indices) <= 0:
-                continue
+    def _get_affinity_matrix(self, X, Y=None):
+        self.n_neighbors_ = (
+            self.n_neighbors
+            if self.n_neighbors is not None
+            else max(int(X.shape[0] / 10), 1)
+        )
+        self.affinity_matrix_ = kneighbors_graph(
+            X, self.n_neighbors_, include_self=True, n_jobs=self.n_jobs, mode="distance", metric="euclidean"
+        )
+        knn_indices, knn_dists = extract_csr(self.affinity_matrix_, np.arange(X.shape[0]), norm=False)
+        self.initial_knn_indices = np.array(knn_indices, dtype=int)
+        self.initial_knn_dists = np.array(knn_dists, dtype=float)
 
-            for j in indices:
-                if j == pre_n_samples + i:
-                    continue
-                if j not in neighbor_changed_indices:
-                    neighbor_changed_indices.append(j)
-                # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
-                insert_index = self.n_neighbors - 1
-                while insert_index >= 0 and dists[i][j] <= self.knn_dists[j][insert_index]:
-                    insert_index -= 1
+        self.affinity_matrix_.data = self.affinity_matrix_.data * 0 + 1
 
-                if self.knn_indices[j][-1] not in neighbor_changed_indices:
-                    neighbor_changed_indices.append(self.knn_indices[j][-1])
+        self.affinity_matrix_ = 0.5 * (
+            self.affinity_matrix_ + self.affinity_matrix_.T
+        )
+        return self.affinity_matrix_
 
-                # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
-                arr_move_one(self.knn_dists[j], insert_index + 1, dists[i][j])
-                arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
-                self.farest_neighbor_dist[j] = self.knn_distances[j][-1]
+
+if __name__ == '__main__':
+    with h5py.File("../../../Data/H5 Data/food.h5", "r") as hf:
+        X = np.array(hf['x'])
+        Y = np.array(hf['y'])
+
+    train_num = 1000
+    train_data = X[:train_num]
+    train_labels = Y[:train_num]
+
+    ile = IncrementalLE(train_num, 2, 10)
+
+    first_embeddings = ile.fit_new_data(train_data)
+    position_vis(train_labels, None, first_embeddings, "first")
+
+    second_embeddings = ile.fit_new_data(X[train_num:train_num + 1000])
+    position_vis(Y[train_num:train_num + 1000], None, second_embeddings[train_num:], "second - new")
+    position_vis(train_labels, None, second_embeddings[:train_num], "second - pre")
