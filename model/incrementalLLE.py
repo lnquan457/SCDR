@@ -4,11 +4,10 @@ from scipy.linalg import eigh, schur
 from scipy.sparse.linalg import eigsh
 from sklearn.manifold import LocallyLinearEmbedding
 import numpy as np
-from sklearn.manifold._locally_linear import null_space, barycenter_kneighbors_graph, barycenter_weights
+from sklearn.manifold._locally_linear import barycenter_kneighbors_graph, barycenter_weights
 from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import eye
 from sklearn.utils._arpack import _init_arpack_v0
-
 from model.scdr.dependencies.experiment import position_vis
 from utils.nn_utils import compute_knn_graph
 from model.incrementalLE import kNNBasedIncrementalMethods
@@ -30,19 +29,6 @@ class IncrementalLLE(LocallyLinearEmbedding, kNNBasedIncrementalMethods):
         self.pre_embeddings = self.fit_transform(train_data)
         knn_indices, knn_dists = compute_knn_graph(train_data, None, self.n_neighbors, None)
         self.knn_manager.add_new_kNN(knn_indices, knn_dists)
-        return self.pre_embeddings
-
-    def fit_new_data(self, x, labels=None):
-        self.stream_dataset.add_new_data(x, None, labels)
-
-        if not self.trained:
-            if self.stream_dataset.get_n_samples() < self.train_num:
-                return None
-            self.trained = True
-            self._first_train(self.stream_dataset.total_data)
-        else:
-            self._incremental_embedding(x)
-
         return self.pre_embeddings
 
     def _incremental_embedding(self, new_data):

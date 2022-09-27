@@ -51,6 +51,19 @@ class kNNBasedIncrementalMethods:
         pass
 
     def fit_new_data(self, x, labels=None):
+        self.stream_dataset.add_new_data(x, None, labels)
+
+        if not self.trained:
+            if self.stream_dataset.get_n_samples() < self.train_num:
+                return None
+            self.trained = True
+            self._first_train(self.stream_dataset.total_data)
+        else:
+            self._incremental_embedding(x)
+
+        return self.pre_embeddings
+
+    def _incremental_embedding(self, new_data):
         pass
 
 
@@ -67,19 +80,6 @@ class IncrementalLE(SpectralEmbedding, kNNBasedIncrementalMethods):
         self.pre_embeddings = self.fit_transform(train_data)
         self.knn_manager.add_new_kNN(self.initial_knn_indices, self.initial_knn_dists)
         self.weight_matrix = np.array(self.affinity_matrix_.todense())
-        return self.pre_embeddings
-
-    def fit_new_data(self, x, labels=None):
-        self.stream_dataset.add_new_data(x, None, labels)
-
-        if not self.trained:
-            if self.stream_dataset.get_n_samples() < self.train_num:
-                return None
-            self.trained = True
-            self._first_train(self.stream_dataset.total_data)
-        else:
-            self._incremental_embedding(x)
-
         return self.pre_embeddings
 
     def _incremental_embedding(self, new_data):
