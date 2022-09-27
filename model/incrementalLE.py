@@ -12,18 +12,56 @@ from model.scdr.dependencies.scdr_utils import StreamingDataRepo
 from utils.nn_utils import compute_knn_graph
 
 
-class IncrementalLE(SpectralEmbedding):
+class kNNBasedIncrementalMethods:
+    def __init__(self, train_num, n_components, n_neighbors):
+        self.train_num = train_num
+        self.n_components = n_components
+        self.n_neighbors = n_neighbors
+        self.knn_manager = KNNManager(n_neighbors)
+        self.stream_dataset = StreamingDataRepo(n_neighbors)
+        self.pre_embeddings = None
+        self.trained = False
+
+    def _update_kNN(self, new_data):
+        # 1. 计算新数据的kNN
+        knn_indices, knn_dists, dists = self._cal_new_data_kNN(new_data)
+        self.knn_manager.add_new_kNN(knn_indices, knn_dists)
+
+        # 2. 更新旧数据的kNN
+        new_data_num = new_data.shape[0]
+        pre_data_num = self.stream_dataset.get_n_samples() - new_data_num
+        neighbor_changed_indices = self.knn_manager.update_previous_kNN(new_data_num, pre_data_num, dists,
+                                                                        data_num_list=[0, new_data_num])
+        neighbor_changed_indices = np.array(neighbor_changed_indices)
+        return knn_indices, knn_dists, neighbor_changed_indices[neighbor_changed_indices < pre_data_num]
+
+    def _cal_new_data_kNN(self, new_data, include_self=True):
+        new_data_num = new_data.shape[0]
+        dists = cdist(new_data, self.stream_dataset.total_data)
+        if include_self:
+            knn_indices = np.argsort(dists, axis=1)[:, :self.n_neighbors]
+        else:
+            knn_indices = np.argsort(dists, axis=1)[:, 1:self.n_neighbors + 1]
+        knn_dists = np.zeros(shape=(new_data_num, self.n_neighbors))
+        for i in range(new_data_num):
+            knn_dists[i] = dists[i][knn_indices[i]]
+        return knn_indices, knn_dists, dists
+
+    def _first_train(self, train_data):
+        pass
+
+    def fit_new_data(self, x, labels=None):
+        pass
+
+
+class IncrementalLE(SpectralEmbedding, kNNBasedIncrementalMethods):
     def __init__(self, train_num, n_components, n_neighbors):
         SpectralEmbedding.__init__(self, n_components, n_neighbors=n_neighbors)
-        self.train_num = train_num
-        self.knn_manager = KNNManager(n_neighbors)
+        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors)
         # 只在训练时用到
         self.initial_knn_indices = None
         self.initial_knn_dists = None
         self.weight_matrix = None
-        self.pre_embeddings = None
-        self.stream_dataset = StreamingDataRepo(n_neighbors)
-        self.trained = False
 
     def _first_train(self, train_data):
         self.pre_embeddings = self.fit_transform(train_data)
@@ -53,19 +91,6 @@ class IncrementalLE(SpectralEmbedding):
         self.pre_embeddings = self._embedding_new_data_linear(new_data.shape[0])
         self._update_previous_embeddings(neighbor_changed_indices)
         return self.pre_embeddings
-
-    def _update_kNN(self, new_data):
-        # 1. 计算新数据的kNN
-        knn_indices, knn_dists, dists = self._cal_new_data_kNN(new_data)
-        self.knn_manager.add_new_kNN(knn_indices, knn_dists)
-
-        # 2. 更新旧数据的kNN
-        new_data_num = new_data.shape[0]
-        pre_data_num = self.stream_dataset.get_n_samples() - new_data_num
-        neighbor_changed_indices = self.knn_manager.update_previous_kNN(new_data_num, pre_data_num, dists,
-                                                                        data_num_list=[0, new_data_num])
-        neighbor_changed_indices = np.array(neighbor_changed_indices)
-        return knn_indices, knn_dists, neighbor_changed_indices[neighbor_changed_indices < pre_data_num]
 
     # 仅体现0-1连接关系
     def _update_weight_matrix(self, pre_knn_indices, new_knn_indices, neighbor_changed_indices):
@@ -123,18 +148,6 @@ class IncrementalLE(SpectralEmbedding):
 
         for i, idx in enumerate(neighbor_changed_indices):
             self.pre_embeddings[idx] = np.sum(np.expand_dims(weights[i], axis=1) * self.pre_embeddings[indices[i]], axis=0)
-
-    def _cal_new_data_kNN(self, new_data, include_self=True):
-        new_data_num = new_data.shape[0]
-        dists = cdist(new_data, self.stream_dataset.total_data)
-        if include_self:
-            knn_indices = np.argsort(dists, axis=1)[:, :self.n_neighbors]
-        else:
-            knn_indices = np.argsort(dists, axis=1)[:, 1:self.n_neighbors + 1]
-        knn_dists = np.zeros(shape=(new_data_num, self.n_neighbors))
-        for i in range(new_data_num):
-            knn_dists[i] = dists[i][knn_indices[i]]
-        return knn_indices, knn_dists, dists
 
     def _get_affinity_matrix(self, X, Y=None):
         self.n_neighbors_ = (
