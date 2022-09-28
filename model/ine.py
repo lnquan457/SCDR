@@ -1,5 +1,3 @@
-import random
-
 import h5py
 import numpy as np
 import scipy.optimize
@@ -8,10 +6,8 @@ from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.manifold._utils import _binary_search_perplexity
 from sklearn.neighbors import NearestNeighbors
-
 from model.incrementalLE import kNNBasedIncrementalMethods
 from sklearn.manifold import TSNE
-
 from model.scdr.dependencies.experiment import position_vis
 from utils.nn_utils import compute_knn_graph
 
@@ -28,8 +24,8 @@ def _select_min_loss_one(candidate_embeddings, neighbors_embeddings, high_probab
 
 
 class INE(kNNBasedIncrementalMethods, TSNE):
-    def __init__(self, train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=2, init="pca"):
-        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors)
+    def __init__(self, train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=3, init="pca"):
+        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, single=True)
         TSNE.__init__(self, n_components, perplexity=n_neighbors)
         self.init = init
         self.desired_perplexity = desired_perplexity
@@ -37,19 +33,6 @@ class INE(kNNBasedIncrementalMethods, TSNE):
         self.grid_num = grid_num
         self.condition_P = None
         self._learning_rate = 200.0
-
-    def fit_new_data(self, x, labels=None):
-        for item in x:
-            self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None)
-
-            if not self.trained:
-                if self.stream_dataset.get_n_samples() >= self.train_num:
-                    self.trained = True
-                    self._first_train(self.stream_dataset.total_data)
-            else:
-                self._incremental_embedding(item)
-
-        return self.pre_embeddings
 
     def _first_train(self, train_data):
         self.pre_embeddings = self.fit_transform(train_data)
@@ -92,6 +75,7 @@ class INE(kNNBasedIncrementalMethods, TSNE):
         res = scipy.optimize.minimize(loss_func, initial_embedding, method="BFGS",
                                       args=(new_data_prob, self.pre_embeddings[new_data_knn_indices.squeeze()]),
                                       options={'gtol': 1e-6, 'disp': False})
+
         new_embeddings = res.x[np.newaxis, :]
         total_embeddings = np.concatenate([self.pre_embeddings, new_embeddings], axis=0)
         return total_embeddings
@@ -182,11 +166,11 @@ def my_joint_probabilities_nn(distances, desired_perplexity):
 
 
 if __name__ == '__main__':
-    with h5py.File("../../../Data/H5 Data/wethers.h5", "r") as hf:
+    with h5py.File("../../../Data/H5 Data/food.h5", "r") as hf:
         X = np.array(hf['x'])
         Y = np.array(hf['y'])
 
-    train_num = 400
+    train_num = 1000
     train_data = X[:train_num]
     train_labels = Y[:train_num]
 
@@ -195,7 +179,7 @@ if __name__ == '__main__':
     first_embeddings = ile.fit_new_data(train_data)
     position_vis(train_labels, None, first_embeddings, "first")
 
-    second_embeddings = ile.fit_new_data(X[train_num:train_num + 400])
-    position_vis(Y[train_num:train_num + 400], None, second_embeddings[train_num:], "second new")
+    second_embeddings = ile.fit_new_data(X[train_num:train_num + 1000])
+    position_vis(Y[train_num:train_num + 1000], None, second_embeddings[train_num:], "second new")
     position_vis(train_labels, None, second_embeddings[:train_num], "second pre")
-    position_vis(Y[:train_num + 400], None, second_embeddings, "second whole")
+    position_vis(Y[:train_num + 1000], None, second_embeddings, "second whole")

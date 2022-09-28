@@ -13,7 +13,8 @@ from utils.nn_utils import compute_knn_graph
 
 
 class kNNBasedIncrementalMethods:
-    def __init__(self, train_num, n_components, n_neighbors):
+    def __init__(self, train_num, n_components, n_neighbors, single=False):
+        self.single = single
         self.train_num = train_num
         self.n_components = n_components
         self.n_neighbors = n_neighbors
@@ -51,6 +52,12 @@ class kNNBasedIncrementalMethods:
         pass
 
     def fit_new_data(self, x, labels=None):
+        if self.single:
+            return self.fit_new_data_single(x, labels)
+        else:
+            return self.fit_new_data_batch(x, labels)
+
+    def fit_new_data_batch(self, x, labels=None):
         self.stream_dataset.add_new_data(x, None, labels)
 
         if not self.trained:
@@ -60,6 +67,19 @@ class kNNBasedIncrementalMethods:
             self._first_train(self.stream_dataset.total_data)
         else:
             self._incremental_embedding(x)
+
+        return self.pre_embeddings
+
+    def fit_new_data_single(self, x, labels=None):
+        for item in x:
+            self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None)
+
+            if not self.trained:
+                if self.stream_dataset.get_n_samples() >= self.train_num:
+                    self.trained = True
+                    self._first_train(self.stream_dataset.total_data)
+            else:
+                self._incremental_embedding(item)
 
         return self.pre_embeddings
 
