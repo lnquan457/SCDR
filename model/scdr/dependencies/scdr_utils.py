@@ -235,7 +235,11 @@ class StreamingDataRepo:
 
         if labels is not None:
             if self.total_label is None:
-                self.total_label = labels
+                self.total_label = np.array(labels)
             else:
-                self.total_label = np.concatenate([self.total_label, labels])
+                if isinstance(labels, list):
+                    self.total_label = np.concatenate([self.total_label, labels])
+                else:
+                    self.total_label = np.append(self.total_label, labels)
+
 

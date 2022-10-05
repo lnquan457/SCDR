@@ -53,11 +53,11 @@ class kNNBasedIncrementalMethods:
 
     def fit_new_data(self, x, labels=None):
         if self.single:
-            return self.fit_new_data_single(x, labels)
+            return self._fit_new_data_single(x, labels)
         else:
-            return self.fit_new_data_batch(x, labels)
+            return self._fit_new_data_batch(x, labels)
 
-    def fit_new_data_batch(self, x, labels=None):
+    def _fit_new_data_batch(self, x, labels=None):
         self.stream_dataset.add_new_data(x, None, labels)
 
         if not self.trained:
@@ -70,9 +70,9 @@ class kNNBasedIncrementalMethods:
 
         return self.pre_embeddings
 
-    def fit_new_data_single(self, x, labels=None):
-        for item in x:
-            self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None)
+    def _fit_new_data_single(self, x, labels=None):
+        for i, item in enumerate(x):
+            self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
 
             if not self.trained:
                 if self.stream_dataset.get_n_samples() >= self.train_num:
