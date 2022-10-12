@@ -128,6 +128,9 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         self.cluster_indices = None
         self.global_embedding_mean = []
 
+        self.cluster_real_cls = []
+        self.predict_cls = []
+
     def _first_train(self, train_data):
         knn_indices, knn_dists = compute_knn_graph(train_data, None, self.n_neighbors, None)
         self.knn_manager.add_new_kNN(knn_indices, knn_dists)
@@ -136,7 +139,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         seq_cluster_indices, seq_labels, seq_local_embeddings = \
             _extract_labels(self.cluster_indices, local_embeddings_list)
 
-        position_vis(self.stream_dataset.total_label, None, seq_local_embeddings, "local embeddings")
+        # position_vis(self.stream_dataset.total_label, None, seq_local_embeddings, "local embeddings")
 
         self.pre_cluster_num = len(self.cluster_indices)
         if self.pre_cluster_num > 1:
@@ -153,9 +156,10 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         local_embedding_list, geodesic_dists_list = self._embedding2each_manifold(new_data)
         if self.pre_cluster_num > 1:
             global_embedding_list = self._transform2global_space(local_embedding_list)
+            # TODO: 分类的精度非常低
             idx = self._select_best_manifold(global_embedding_list)
             embeddings = global_embedding_list[idx]
-            # embeddings = local_embedding_list[idx]
+            self.predict_cls.append(self.cluster_real_cls[idx])
         else:
             idx = 0
             embeddings = local_embedding_list[0]
@@ -225,7 +229,21 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             cluster_indices[int(closest_indices[i])].append(item)
 
         print("cluster number:", idx)
+        for item in cluster_indices:
+            labels = self.stream_dataset.total_label[item]
+            cls, counts = np.unique(labels, return_counts=True)
+            idx = np.argmax(counts)
+            self.cluster_real_cls.append(cls[idx])
         return cluster_indices
+
+    # def _find_clusters_acc(self, data):
+    #     cluster_indices = []
+    #     unique_cls = np.unique(self.stream_dataset.total_label)
+    #     for item in unique_cls:
+    #         indices = np.argwhere(self.stream_dataset.total_label == item).squeeze()
+    #         cluster_indices.append(indices.tolist())
+    #     print("cluster num:", len(cluster_indices))
+    #     return cluster_indices
 
     def _local_embedding(self, data):
         cluster_embedding_list = []
@@ -397,3 +415,6 @@ if __name__ == '__main__':
     position_vis(Y[train_num:train_num + 500], None, second_embeddings[train_num:], "second new")
     position_vis(train_labels, None, second_embeddings[:train_num], "second pre")
     position_vis(Y[:train_num + 500], None, second_embeddings, "second whole")
+
+    cls_acc = np.sum(np.array(ile.predict_cls, dtype=int) == Y[train_num:train_num + 500]) / 500
+    print("cls acc", cls_acc)
