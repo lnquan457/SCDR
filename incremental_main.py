@@ -11,7 +11,7 @@ from model.dr_models.ModelSets import MODELS
 from model.scdr.dependencies.experiment import position_vis
 from model.scdr.dependencies.scdr_utils import KeyPointsGenerator
 from utils.common_utils import get_config, time_stamp_to_date_time_adjoin
-from utils.metrics_tool import Metric, knn_score
+from utils.metrics_tool import Metric, knn_score, metric_silhouette_score
 
 os.environ["CUDA_VISIBLE_DEVICES"] = '0, 1, 2, 3'
 import torch
@@ -21,6 +21,8 @@ import time
 from sklearn.cluster import KMeans, DBSCAN
 from model.scdr.dependencies.cdr_experiment import CDRsExperiments
 from model.scdr.model_trainer import IncrementalCDREx
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 device = "cuda:0"
 log_path = "logs/log.txt"
@@ -90,18 +92,19 @@ class IndicesGenerator:
 
 def incremental_cdr_pipeline():
     cfg.merge_from_file(CONFIG_PATH)
-    result_save_dir = ConfigInfo.RESULT_SAVE_DIR.format(METHOD_NAME, cfg.method_params.n_neighbors,
-                                                        cfg.exp_params.latent_dim)
+    # result_save_dir = ConfigInfo.RESULT_SAVE_DIR.format(METHOD_NAME, cfg.method_params.n_neighbors,
+    #                                                     cfg.exp_params.latent_dim)
     clr_model = MODELS[METHOD_NAME](cfg, device=device)
-    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, result_save_dir, CONFIG_PATH, shuffle=True,
-                                    device=device, log_path=log_path)
+    t_log_path = os.path.join(RESULT_SAVE_DIR, "logs.txt")
+    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH, shuffle=True,
+                                    device=device, log_path=t_log_path)
     n_neighbors = experimenter.n_neighbors
 
     with h5py.File(os.path.join(ConfigInfo.DATASET_CACHE_DIR, "{}.h5".format(experimenter.dataset_name)), "r") as hf:
         total_data = np.array(hf['x'])
         total_labels = np.array(hf['y'])
 
-    METRICS = ["Movement", "Neighbor Hit", "kNN-CA"]
+    METRICS = ["Movement", "Neighbor Hit", "kNN-CA", "Trust", "Continuity", "SC"]
     # 0.需要创建一个索引生成器，根据不同的条件生成一批批的索引列表
     indices_generator = IndicesGenerator(total_labels)
 
@@ -124,14 +127,17 @@ def incremental_cdr_pipeline():
     initial_labels = total_labels[batch_indices[0]]
     stream_dataset = StreamingDatasetWrapper(initial_data, initial_labels, experimenter.batch_size,
                                              experimenter.n_neighbors)
+    experimenter.update_neg_num(initial_data.shape[0] / 8)
+    sta = time.time()
     initial_embeddings = experimenter.first_train(stream_dataset, INITIAL_EPOCHS)
+    cost_time = time.time() - sta
     position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "0.jpg"), initial_embeddings,
                  title="Initial Embeddings")
 
     metric_tool = Metric(experimenter.dataset_name, stream_dataset.total_data, stream_dataset.total_label,
                          stream_dataset.get_knn_indices(), stream_dataset.get_knn_dists(), None,
                          norm=experimenter.is_image, k=experimenter.fixed_k)
-    eval_res = evaluate(experimenter, metric_tool, initial_embeddings, initial_labels)
+    eval_res = evaluate(cost_time, experimenter, metric_tool, initial_embeddings, initial_labels)
     embedding_acc_history[0, 0] = eval_res
     initial_embeddings_list = [initial_embeddings]
 
@@ -139,22 +145,58 @@ def incremental_cdr_pipeline():
     experimenter.active_incremental_learning()
 
     for i in range(1, n_step):
+        sta = time.time()
         # TODO：现在是进行聚类，然后从每个聚类中选100个点。确实缓解了聚类内部分散的问题。但是现在使用DBSCAN聚类很不准确
         # rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
         #     KeyPointsGenerator.generate(total_data[fitted_indices], 0, method=KeyPointsGenerator.DBSCAN, min_num=50,
         #                                 eps=np.mean(stream_dataset.get_knn_dists()),
         #                                 min_samples=experimenter.n_neighbors // 2)
-        ravel_1 = np.reshape(np.repeat(experimenter.pre_embeddings[:, np.newaxis, :], n_neighbors, 1), (-1, 2))
-        ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices())]
+        ravel_1 = np.reshape(np.repeat(experimenter.pre_embeddings[:, np.newaxis, :], n_neighbors//2, 1), (-1, 2))
+        ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors//2])]
         embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
+        print("eps:", embedding_nn_dist)
         rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
-            KeyPointsGenerator.generate(experimenter.pre_embeddings, 0, method=KeyPointsGenerator.DBSCAN, min_num=100,
-                                        eps=embedding_nn_dist,
-                                        min_samples=experimenter.n_neighbors)
-        print(cluster_indices)
+            KeyPointsGenerator.generate(experimenter.pre_embeddings, 0, method=KeyPointsGenerator.DBSCAN,
+                                        min_num=REP_NUM, eps=embedding_nn_dist, min_samples=experimenter.n_neighbors,
+                                        batch_whole=BATCH_WHOLE)
+
+        if not BATCH_WHOLE:
+            rep_batch_nums = 1
+            rep_old_data = [total_data[fitted_indices][rep_old_indices]]
+            cluster_indices = [cluster_indices]
+            exclude_indices = [exclude_indices]
+            # 2.将代表点数据作为候选负例兼容到模型的增量训练中，每次都需要计算代表性数据的嵌入
+            rep_old_embeddings = [experimenter.acquire_latent_code_allin(torch.tensor(rep_old_data, dtype=torch.float)
+                                                                        .to(device), device)]
+
+            # x = rep_old_embeddings[0][:, 0]
+            # y = rep_old_embeddings[0][:, 1]
+            # c = []
+            # for ttt, item in enumerate(cluster_indices[0]):
+            #     c.extend([ttt] * len(item))
+            #
+            # plt.figure(figsize=(8, 8))
+            # c = np.array(c, dtype=int)
+            # sns.scatterplot(x=experimenter.pre_embeddings[:, 0], y=experimenter.pre_embeddings[:, 1], color="gray",
+            #                 s=8, legend=False, alpha=1.0)
+            # sns.scatterplot(x=x, y=y, hue=c, s=16, palette="tab10", legend=False, alpha=1.0)
+            #
+            # plt.title("rep data", fontsize=28)
+            # plt.show()
+
+        else:
+            rep_batch_nums = len(rep_old_indices)
+            rep_old_data = []
+            rep_old_embeddings = []
+            for item in rep_old_indices:
+                # print("num:", len(item))
+                rep_old_data.append(total_data[fitted_indices][item])
+                rep_old_embeddings.append(experimenter.pre_embeddings[item])
+
+        print("cluster num:", len(cluster_indices[0]))
+        print("Distribution_1:", [len(item) for item in cluster_indices[0]])
         print()
-        print(exclude_indices)
-        rep_old_data = total_data[rep_old_indices]
+        print("Exclude:", [len(item) for item in exclude_indices[0]])
 
         # 更新数据集状态
         cur_batch_data = total_data[batch_indices[i]]
@@ -172,12 +214,11 @@ def incremental_cdr_pipeline():
         experimenter.update_neg_num(cur_batch_num / 8)
         experimenter.update_dataloader(RESUME_EPOCH, np.arange(fitted_num, fitted_num + cur_batch_num, 1))
 
-        # 2.将代表点数据作为候选负例兼容到模型的增量训练中，每次都需要计算代表性数据的嵌入
-        rep_old_embeddings = experimenter.acquire_latent_code_allin(torch.tensor(rep_old_data, dtype=torch.float)
-                                                                    .to(device), device)
-
         # 3.需要改变模型的损失计算。使用不同的方式进行incremental learning。需要创建一个新的train方法。
-        embeddings = experimenter.resume_train(RESUME_EPOCH, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices)
+        embeddings = experimenter.resume_train(RESUME_EPOCH,
+                                               (rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices,
+                                                exclude_indices))
+        cost_time = time.time() - sta
         position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "{}.jpg".format(i)), embeddings,
                      title="Step {} Embeddings".format(i))
 
@@ -194,8 +235,9 @@ def incremental_cdr_pipeline():
             pre_old_data_embeddings = initial_embeddings_list[j]
             # 新数据的加入可能导致旧数据的kNN发生变化，那么其嵌入标准实际上也发生了改变。这种情况下如何比较投影质量的变化呢？
             # 衍生出的另一个问题就是，被选作代表点的数据，应该是kNN没有发生变化或者变化非常小的数据。
-            eval_res = evaluate(experimenter, metric_tool, embeddings, stream_dataset.total_label,
-                                eval_indices, pre_old_data_embeddings)
+            record = i == j
+            eval_res = evaluate(cost_time, experimenter, metric_tool, embeddings, stream_dataset.total_label,
+                                eval_indices, pre_old_data_embeddings, record=record)
             embedding_acc_history[j, i] = eval_res
 
         # 上述步骤1-4应该写成一个循环
@@ -208,28 +250,44 @@ def incremental_cdr_pipeline():
         print()
 
 
-def evaluate(experimenter, metric_tool, embeddings, labels, eval_indices=None, pre_embeddings=None):
+def evaluate(cost_time, experimenter, metric_tool, embeddings, labels, eval_indices=None, pre_embeddings=None, record=True):
     if pre_embeddings is not None:
         assert eval_indices is not None
         movements = np.mean(np.linalg.norm(embeddings[eval_indices] - pre_embeddings, axis=1))
     else:
         movements = 0
 
+    trust = metric_tool.metric_trustworthiness(experimenter.fixed_k, embeddings)
+    cont = metric_tool.metric_continuity(experimenter.fixed_k, embeddings)
     neighbor_hit = metric_tool.metric_neighborhood_hit(experimenter.fixed_k, embeddings, eval_indices)
-    knn_ca = knn_score(embeddings, labels, k=10, knn_indices=metric_tool.low_knn_indices, eval_indices=eval_indices)
-    return movements, neighbor_hit, knn_ca
+    k = 10
+    knn_ca = knn_score(embeddings, labels, k=k, knn_indices=metric_tool.low_knn_indices, eval_indices=eval_indices)
+    sc = metric_silhouette_score(embeddings, labels)
+
+    if record:
+        output_template = "Movements: %.4f Neighbor Hit: %.4f kNN(%d): " \
+                          "%.4f Trust: %.4f Cont: %.4f SC: %.4f Time: %.2f" % (movements, neighbor_hit, k, knn_ca, trust,
+                                                                               cont, sc, cost_time)
+        if experimenter.tmp_log_file is None:
+            experimenter.tmp_log_file = open(experimenter.tmp_log_path, "w")
+        experimenter.tmp_log_file.write(output_template + "\n")
+
+    return movements, neighbor_hit, knn_ca, trust, cont, sc
 
 
 if __name__ == '__main__':
     with torch.cuda.device(0):
         time_step = time_stamp_to_date_time_adjoin(time.time())
-        RESULT_SAVE_DIR = r"results/incremental ex/{}".format(time_step)
+        RESULT_SAVE_DIR = r"results/incremental_ex/{}".format(time_step)
         os.mkdir(RESULT_SAVE_DIR)
         METHOD_NAME = "LwF_CDR"
         CONFIG_PATH = "configs/ParallelSCDR.yaml"
         INDICES_DIR = r"../../Data/indices/single_cluster"
+
         INITIAL_EPOCHS = 100
         RESUME_EPOCH = 50
+        REP_NUM = 100
+        BATCH_WHOLE = True
         K = 10
 
         cfg = get_config()

@@ -43,7 +43,7 @@ def _with_pearson_and_spearman_corr(cur_embeddings, pre_embeddings, cluster_indi
         intra_spearman_corr[i] = compute_rank_correlation(cur_pairwise_dists[item][:, other_cluster_indices],
                                                           pre_pairwise_dists[item][:, other_cluster_indices])
     # print("pearson corr:", torch.mean(inner_pearson_corr).item())
-    print("spearman corr:", torch.mean(intra_spearman_corr).item())
+    # print("spearman corr:", torch.mean(intra_spearman_corr).item())
     # return torch.mean(inner_pearson_corr) + torch.mean(intra_spearman_corr)
     return torch.mean(inner_pearson_corr)
 
@@ -52,6 +52,7 @@ def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, 
     cluster_num = len(cluster_indices)
     inner_dist_change = torch.zeros(cluster_num)
     intra_dist_change = torch.zeros(cluster_num)
+    intra_spearman_corr = torch.zeros(cluster_num)
 
     cur_pairwise_dists = torch.cdist(cur_embeddings, cur_embeddings)
     pre_pairwise_dists = torch.cdist(pre_embeddings, pre_embeddings)
@@ -64,7 +65,12 @@ def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, 
         intra_dist_change[i] = torch.mean(torch.norm(cur_pairwise_dists[item][:, other_cluster_indices] -
                                                      pre_pairwise_dists[item][:, other_cluster_indices], dim=-1))
 
+        intra_spearman_corr[i] = compute_rank_correlation(cur_pairwise_dists[item][:, other_cluster_indices],
+                                                          pre_pairwise_dists[item][:, other_cluster_indices])
+
     # print("pearson corr:", torch.mean(inner_pearson_corr).item())
-    print("intra dist change:", torch.mean(intra_dist_change).item())
+    # print("intra dist change:", torch.mean(intra_dist_change).item())
+    # print("spearman corr:", torch.mean(intra_spearman_corr).item())
     # return torch.mean(inner_pearson_corr) + torch.mean(intra_spearman_corr)
-    return torch.mean(inner_dist_change)
+    return torch.mean(inner_dist_change) - torch.mean(intra_spearman_corr)
+    # return torch.mean(inner_dist_change)

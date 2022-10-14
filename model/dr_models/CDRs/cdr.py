@@ -52,7 +52,7 @@ class LwFCDR(CDRModel):
         self.neg_num = None
         self.update_neg_num(neg_num)
         # 新数据与旧数据之间进行排斥的对比损失的权重
-        self.alpha = 2.0
+        self.alpha = 3.0
         # 保持旧数据嵌入位置不变的权重
         self.beta = 2.0
 
@@ -63,7 +63,7 @@ class LwFCDR(CDRModel):
 
     def compute_loss(self, x_embeddings, x_sim_embeddings, *args):
         epoch = args[0]
-        is_incremental_learning = args[3]
+        is_incremental_learning = args[1]
         novel_logits = self.batch_logits(x_embeddings, x_sim_embeddings, *args)
         novel_loss = self._post_loss(novel_logits, None, epoch, None, *args)
 
@@ -72,7 +72,7 @@ class LwFCDR(CDRModel):
 
         # self.alpha = 8
 
-        rep_old_embeddings, pre_old_embeddings = args[1], args[2]
+        rep_old_embeddings, pre_old_embeddings = args[2], args[3]
         cluster_indices, exclude_indices = args[4], args[5]
         # cluster_indices, exclude_indices = None, None
 
@@ -82,7 +82,7 @@ class LwFCDR(CDRModel):
 
         vc_loss = _visual_consistency_loss(rep_old_embeddings, pre_old_embeddings,
                                            cluster_indices=cluster_indices, exclude_indices=exclude_indices)
-        print(" vc loss:", vc_loss.item())
+        # print(" vc loss:", vc_loss.item())
         # print("novel loss:", novel_loss, " old loss:", old_loss, " vc loss:", vc_loss)
         loss = novel_loss + self.alpha * old_loss + self.beta * vc_loss
         return loss
@@ -100,7 +100,7 @@ class LwFCDR(CDRModel):
         return old_logits
 
     def batch_logits(self, x_embeddings, x_sim_embeddings, *args):
-        is_incremental_learning = args[3]
+        is_incremental_learning = args[1]
         if not is_incremental_learning or self.neg_num is None or self.neg_num == 2 * self.batch_size:
             logits = super().batch_logits(x_embeddings, x_sim_embeddings, *args)
         else:

@@ -125,6 +125,7 @@ class Experiment:
 
         # 日志模块记录
         self.tmp_log_path = log_path
+        self.tmp_log_file = None
         self.log_process = None
         self.log_path = None
         self.message_queue = Queue()
@@ -298,7 +299,10 @@ class Experiment:
             draw_loss(training_loss_history, test_loss_history, x_idx, save_path)
 
         # self.log_process.join(timeout=5)
-        shutil.copyfile(self.tmp_log_path, self.log_path)
+        if self.tmp_log_file is not None and self.tmp_log_path != self.log_path:
+            if not os.path.exists(self.log_path):
+                os.makedirs(self.log_path)
+            # shutil.copyfile(self.tmp_log_path, self.log_path)
         InfoLogger.info("Training process logging to {}".format(self.log_path))
 
     def train(self, launch_time_stamp=None, target_metric_val=-1):

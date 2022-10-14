@@ -14,23 +14,22 @@ from utils.umap_utils import fuzzy_simplicial_set_partial
 
 
 class KeyPointsGenerator:
-
     RANDOM = "random"
     KMEANS = "kmeans"
     DBSCAN = "dbscan"
 
     @staticmethod
-    def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, **kwargs):
-        if key_rate >= 1:
+    def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, batch_whole=False, **kwargs):
+        if key_rate >= 1 or (batch_whole and method == KeyPointsGenerator.RANDOM):
             return data, np.arange(0, data.shape[0], 1)
         if method == KeyPointsGenerator.RANDOM:
             return KeyPointsGenerator._generate_randomly(data, key_rate, prob, min_num)
         elif method == KeyPointsGenerator.KMEANS:
             return KeyPointsGenerator._generate_kmeans_based(data, key_rate, cluster_inner_random,
-                                                                              prob, min_num)
+                                                             prob, min_num, batch_whole)
         elif method == KeyPointsGenerator.DBSCAN:
             return KeyPointsGenerator._generate_dbscan_based(data, key_rate, cluster_inner_random,
-                                                                              prob, min_num, **kwargs)
+                                                             prob, min_num, batch_whole, **kwargs)
         else:
             raise RuntimeError("Unsupported key data generating method. Please ensure that 'method' is one of random/"
                                "kmeans/dbscan.")
@@ -45,28 +44,30 @@ class KeyPointsGenerator:
         return data[key_indices], key_indices
 
     @staticmethod
-    def _generate_kmeans_based(data: np.ndarray, key_rate: float, is_random=True, prob=None, min_num=0, **kwargs):
+    def _generate_kmeans_based(data, key_rate, is_random=True, prob=None, min_num=0, batch_whole=False):
         n_samples = data.shape[0]
         cluster_num = int(math.sqrt(n_samples))
         km = KMeans(n_clusters=cluster_num)
         km.fit(data)
         key_data_num = max(int(n_samples * key_rate), min_num)
 
-        key_data, key_indices, cluster_indices, exclude_indices = \
-            KeyPointsGenerator._sample_in_each_cluster(data, km.labels_, key_data_num, None, prob, is_random)
-        return key_data, key_indices, cluster_indices, exclude_indices
+        if not batch_whole:
+            return KeyPointsGenerator._sample_in_each_cluster(data, km.labels_, key_data_num, None, prob, is_random)
+        else:
+            return KeyPointsGenerator._batch_whole_seq(data, km.labels_, key_data_num)
 
     @staticmethod
-    def _generate_dbscan_based(data, key_rate, is_random=True, prob=None, min_num=0, **kwargs):
+    def _generate_dbscan_based(data, key_rate, is_random=True, prob=None, min_num=0, batch_whole=False, **kwargs):
         n_samples = data.shape[0]
         eps = kwargs['eps']
         min_samples = kwargs["min_samples"]
         dbs = DBSCAN(eps, min_samples=min_samples)
         dbs.fit(data)
         key_data_num = max(int(n_samples * key_rate), min_num)
-        key_data, key_indices, cluster_indices, exclude_indices = \
-            KeyPointsGenerator._sample_in_each_cluster(data, dbs.labels_, key_data_num, None, prob, is_random)
-        return key_data, key_indices, cluster_indices, exclude_indices
+        if not batch_whole:
+            return KeyPointsGenerator._sample_in_each_cluster(data, dbs.labels_, key_data_num, None, prob, is_random)
+        else:
+            return KeyPointsGenerator._batch_whole_seq(data, dbs.labels_, key_data_num, min_samples * 3)
 
     @staticmethod
     def _sample_in_each_cluster(data, labels, key_data_num, centroids=None, prob=None, is_random=True):
@@ -79,13 +80,13 @@ class KeyPointsGenerator:
                 if item < 0:
                     continue
                 cur_indices = np.where(labels == item)[0]
-                cur_key_num = int(len(cur_indices) * key_rate)
+                cur_key_num = int(math.ceil(len(cur_indices) * key_rate))
                 cur_prob = None
                 if prob is not None:
                     cur_prob = prob[cur_indices]
                     cur_prob /= np.sum(cur_prob)
                 sampled_indices = np.random.choice(cur_indices, cur_key_num, p=cur_prob, replace=False)
-                cluster_indices.append(np.arange(len(key_indices), len(key_indices)+len(sampled_indices)))
+                cluster_indices.append(np.arange(len(key_indices), len(key_indices) + len(sampled_indices)))
                 key_indices.extend(sampled_indices)
         else:  # 聚类内部根据各点到聚类中心的距离进行采样
             if prob is not None:
@@ -99,7 +100,7 @@ class KeyPointsGenerator:
                 sorted_indices = np.argsort(cur_dists)
                 cur_key_num = int(len(cur_indices) * key_rate)
                 sampled_indices = cur_indices[sorted_indices[np.linspace(0, len(cur_indices), cur_key_num, dtype=int)]]
-                cluster_indices.append(np.arange(len(key_indices), len(key_indices)+len(sampled_indices)))
+                cluster_indices.append(np.arange(len(key_indices), len(key_indices) + len(sampled_indices)))
                 key_indices.extend(sampled_indices)
 
         exclude_indices = []
@@ -109,9 +110,71 @@ class KeyPointsGenerator:
 
         return data[key_indices], key_indices, cluster_indices, exclude_indices
 
+    @staticmethod
+    def _batch_whole_seq(data, labels, key_data_num, min_samples=20):
+        n_samples = len(np.argwhere(labels >= 0).squeeze())
+
+        key_indices = []
+        cluster_indices = []
+        exclude_indices = []
+        total_cluster_indices = []
+        batch_cluster_num = []
+        unique_labels = np.unique(labels)
+        valid_num = 0
+        selected_labels = []
+        for item in unique_labels:
+            if item < 0:
+                continue
+            cur_indices = np.argwhere(labels == item).squeeze()
+            if len(cur_indices) < min_samples:
+                continue
+            selected_labels.append(item)
+            valid_num += len(cur_indices)
+            np.random.shuffle(cur_indices)
+            total_cluster_indices.append(cur_indices)
+            batch_cluster_num.append(len(cur_indices))
+
+        batch_num = int(np.floor(valid_num / key_data_num))
+        batch_cluster_num = np.floor(np.array(batch_cluster_num) / batch_num).astype(int)
+        # print(batch_cluster_num)
+
+        for i in range(batch_num):
+            cur_k_indices = []
+            cur_c_indices = []
+            idx = 0
+            # print()
+            for item in selected_labels:
+                num = batch_cluster_num[idx]
+                end_idx = min((i+1)*num, len(total_cluster_indices[idx]))
+                select_indices = np.arange(i*num, end_idx)
+
+                if end_idx < (i + 1) * num:     # 需要补齐
+                    # print("current len:", end_idx - i*num)
+                    left = (i + 1) * num - end_idx
+                    select_indices = np.append(select_indices, np.arange(left))
+                # print("batch {} cluster {} add {}".format(i, idx, len(select_indices)))
+
+                cur_indices = total_cluster_indices[idx][select_indices]
+                cur_c_indices.append(np.arange(len(cur_k_indices), len(cur_k_indices) + len(select_indices)))
+                cur_k_indices.extend(cur_indices)
+                idx += 1
+
+            key_indices.append(cur_k_indices)
+            cluster_indices.append(cur_c_indices)
+
+        for i in range(batch_num):
+            cur_e_indices = []
+            total_indices = np.arange(len(key_indices[i]))
+            for item in cluster_indices[i]:
+                cur_e_indices.append(np.setdiff1d(total_indices, item))
+            exclude_indices.append(cur_e_indices)
+
+        return None, key_indices, cluster_indices, exclude_indices
+
 
 class RepDataSampler:
-    def __init__(self, n_neighbors, sample_rate, minimum_sample_data_num, time_based_sample=False, metric_based_sample=False):
+    def __init__(self, n_neighbors, sample_rate, minimum_sample_data_num, time_based_sample=False,
+                 metric_based_sample=False):
         self.time_based_sample = time_based_sample
         self.metric_based_sample = metric_based_sample
         self.n_neighbors = n_neighbors
@@ -197,7 +260,8 @@ class DistributionChangeDetector:
         self.acc_list = []
         self.recall_list = []
 
-    def detect_distribution_shift(self, pred_data, re_fit=True, fit_data=None, fit_labels=None, pred_labels=None, acc=True):
+    def detect_distribution_shift(self, pred_data, re_fit=True, fit_data=None, fit_labels=None, pred_labels=None,
+                                  acc=True):
         if acc and re_fit and fit_labels is not None:
             self._gather_distribution(fit_labels)
 
@@ -282,5 +346,3 @@ class StreamingDataRepo:
                     self.total_label = np.concatenate([self.total_label, labels])
                 else:
                     self.total_label = np.append(self.total_label, labels)
-
-

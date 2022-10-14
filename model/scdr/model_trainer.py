@@ -200,8 +200,9 @@ class IncrementalCDREx(SCDRTrainer):
         self.stream_dataset = None
 
         # 用于计算VC损失
-        self.cluster_indices = None
-        self.exclude_indices = None
+        self.rep_batch_nums = None
+        self.rep_cluster_indices = None
+        self.rep_exclude_indices = None
 
     def active_incremental_learning(self):
         self._is_incremental_learning = True
@@ -216,29 +217,28 @@ class IncrementalCDREx(SCDRTrainer):
                                                                train_indices, [], False, False)
 
     def resume_train(self, resume_epoch, *args):
-        rep_old_data, rep_old_embeddings = args[0], args[1]
-        self.cluster_indices, self.exclude_indices = args[2], args[3]
-
-        self._rep_old_data = torch.tensor(rep_old_data, dtype=torch.float).to(self.device)
-        if not isinstance(rep_old_embeddings, torch.Tensor):
-            self._pre_rep_old_embeddings = torch.tensor(rep_old_embeddings, dtype=torch.float).to(self.device)
+        rep_args = args[0]
+        self._update_rep_data_info(*rep_args)
 
         self.pre_embeddings = super().resume_train(resume_epoch)
         return self.pre_embeddings
 
     def _train_step(self, *args):
         x, x_sim, epoch, indices, sim_indices = args
-
+        idx = self.steps % self.rep_batch_nums if self.rep_batch_nums is not None else -1
         self.optimizer.zero_grad()
 
         with torch.cuda.device(self.device_id):
             _, x_embeddings, _, x_sim_embeddings = self.forward(x, x_sim)
-            rep_old_embeddings = self.model.acquire_latent_code(self._rep_old_data)
+            rep_old_embeddings = self.model.acquire_latent_code(self._rep_old_data[idx] if idx >= 0 else None)
 
         # 使用嵌入编码计算contrastive loss
-        train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, rep_old_embeddings,
-                                             self._pre_rep_old_embeddings, self._is_incremental_learning,
-                                             self.cluster_indices, self.exclude_indices)
+        if self._is_incremental_learning:
+            train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning,
+                                                 rep_old_embeddings, self._pre_rep_old_embeddings[idx],
+                                                 self.rep_cluster_indices[idx], self.rep_exclude_indices[idx])
+        else:
+            train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning)
 
         train_loss.backward()
         self.optimizer.step()
@@ -247,3 +247,11 @@ class IncrementalCDREx(SCDRTrainer):
     def build_dataset(self, *args):
         new_data, new_labels = args[0], args[1]
         self.stream_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size)
+
+    def _update_rep_data_info(self, rep_batch_nums, data, embeddings, cluster_indices, exclude_indices):
+        self.rep_batch_nums = rep_batch_nums
+        self._rep_old_data = torch.tensor(data, dtype=torch.float).to(self.device)
+        if not isinstance(embeddings, torch.Tensor):
+            self._pre_rep_old_embeddings = torch.tensor(embeddings, dtype=torch.float).to(self.device)
+        self.rep_cluster_indices = cluster_indices
+        self.rep_exclude_indices = exclude_indices
