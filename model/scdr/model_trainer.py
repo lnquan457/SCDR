@@ -29,9 +29,9 @@ class SCDRTrainer(CDRsExperiments):
 
     def update_batch_size(self, data_num):
         # TODO: 如何设置batch size也是需要研究的
-        self.batch_size = max(min(data_num, self.configs.method_params.batch_size), int(data_num / 10))
+        self.batch_size = max(min(data_num, self.configs.method_params.batch_size), int(data_num / 5))
         self.streaming_dataset.batch_size = self.batch_size
-        self.model.update_neg_num(int(self.batch_size))
+        self.model.update_batch_size(int(self.batch_size))
 
     def initialize_streaming_dataset(self, dataset):
         self.first_train_data_num = dataset.total_data.shape[0]
@@ -199,8 +199,16 @@ class IncrementalCDREx(SCDRTrainer):
         self._is_incremental_learning = False
         self.stream_dataset = None
 
+        # 用于计算VC损失
+        self.cluster_indices = None
+        self.exclude_indices = None
+
     def active_incremental_learning(self):
         self._is_incremental_learning = True
+
+    def update_neg_num(self, neg_num=None):
+        neg_num = self.model.neg_num if neg_num is None else neg_num
+        self.model.update_neg_num(neg_num)
 
     def update_train_loader(self, train_indices):
         self.train_loader, self.n_samples = \
@@ -209,11 +217,14 @@ class IncrementalCDREx(SCDRTrainer):
 
     def resume_train(self, resume_epoch, *args):
         rep_old_data, rep_old_embeddings = args[0], args[1]
+        self.cluster_indices, self.exclude_indices = args[2], args[3]
+
         self._rep_old_data = torch.tensor(rep_old_data, dtype=torch.float).to(self.device)
         if not isinstance(rep_old_embeddings, torch.Tensor):
             self._pre_rep_old_embeddings = torch.tensor(rep_old_embeddings, dtype=torch.float).to(self.device)
 
-        return super().resume_train(resume_epoch)
+        self.pre_embeddings = super().resume_train(resume_epoch)
+        return self.pre_embeddings
 
     def _train_step(self, *args):
         x, x_sim, epoch, indices, sim_indices = args
@@ -226,7 +237,8 @@ class IncrementalCDREx(SCDRTrainer):
 
         # 使用嵌入编码计算contrastive loss
         train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, rep_old_embeddings,
-                                             self._pre_rep_old_embeddings, self._is_incremental_learning)
+                                             self._pre_rep_old_embeddings, self._is_incremental_learning,
+                                             self.cluster_indices, self.exclude_indices)
 
         train_loss.backward()
         self.optimizer.step()

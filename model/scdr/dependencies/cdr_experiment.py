@@ -38,7 +38,7 @@ class CDRsExperiments(Experiment):
         knn_cache_path = ConfigInfo.NEIGHBORS_CACHE_DIR.format(self.dataset_name, self.n_neighbors)
         pairwise_cache_path = ConfigInfo.PAIRWISE_DISTANCE_DIR.format(self.dataset_name)
 
-        clr_dataset = DataSetWrapper(self.similar_num, self.batch_size)
+        clr_dataset = DataSetWrapper(self.similar_num, self.batch_size, self.n_neighbors)
 
         init_epoch = self.init_epoch
         if self.mixture_optimize:

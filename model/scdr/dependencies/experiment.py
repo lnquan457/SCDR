@@ -51,8 +51,8 @@ def position_vis(c, vis_save_path, z, title=None):
 
     if title is not None:
         plt.title(title, fontsize=18)
-    plt.xticks([])
-    plt.yticks([])
+    # plt.xticks([])
+    # plt.yticks([])
     # plt.axis("equal")
 
     # plt.title("{} Embeddings".format(method_name), fontsize=20)

@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from pynndescent import NNDescent
-
+from fast_soft_sort.pytorch_ops import soft_rank
 from utils.umap_utils import find_ab_params, convert_distance_to_probability
 import networkx as nx
 import bisect
@@ -238,3 +238,28 @@ def get_knng(data, k, max_candidates=60):
     knn_indices, knn_distances = nnd.neighbor_graph
     knn_indices = knn_indices[:, 1:]
     return knn_indices
+
+
+def compute_rank_correlation(att, grad_att):
+    """
+    Function that measures Spearman’s correlation coefficient between target logits and output logits:
+    att: [n, m]
+    grad_att: [n, m]
+    """
+    def _rank_correlation_(pred, target):
+        pred = pred - pred.mean()
+        pred = pred / pred.norm()
+        target = target - target.mean()
+        target = target / target.norm()
+        return (pred * target).sum()
+
+    att_rank = soft_rank(att, regularization_strength=0.5)
+    grad_att_rank = soft_rank(grad_att, regularization_strength=0.5)
+
+    # att = att.sort(dim=1)[1].float()
+    # grad_att = grad_att.sort(dim=1)[1].float()
+
+    # att_rank.requires_grad = True
+    # grad_att_rank.requires_grad = True
+    correlation = _rank_correlation_(att_rank, grad_att_rank)
+    return correlation

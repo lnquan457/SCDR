@@ -46,18 +46,23 @@ def build_dataset(data_file_path, dataset_name, is_image, normalize_method, root
 class DataSetWrapper(object):
     batch_size: object
 
-    def __init__(self, similar_num, batch_size):
+    def __init__(self, similar_num, batch_size, n_neighbor):
         self.similar_num = similar_num
         self.batch_size = batch_size
         self.batch_num = 0
         self.test_batch_num = 0
         self.train_dataset = None
-        self.knn_indices = None
-        self.knn_distances = None
+        self.n_neighbor = n_neighbor
+        self.kNN_manager = KNNManager(self.n_neighbor)
         self.symmetric_nn_indices = None
         self.symmetric_nn_weights = None
         self.raw_knn_weights = None
-        self.n_neighbor = 0
+
+    def get_knn_indices(self):
+        return self.kNN_manager.knn_indices
+
+    def get_knn_dists(self):
+        return self.kNN_manager.knn_dists
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
                          pairwise_cache_path=None, is_image=True, data_file_path=None, symmetric="TSNE", multi=False):
@@ -65,8 +70,10 @@ class DataSetWrapper(object):
         data_augment, test_dataset, train_dataset = build_dataset(data_file_path, dataset_name, is_image,
                                                                   ComponentInfo.UMAP_NORMALIZE, root_dir)
         self.train_dataset = train_dataset
-        self.knn_indices, self.knn_distances = compute_knn_graph(train_dataset.data, knn_cache_path, n_neighbors,
-                                                                 pairwise_cache_path, accelerate=False)
+        if self.kNN_manager.is_empty():
+            knn_indices, knn_distances = compute_knn_graph(train_dataset.data, None, n_neighbors,
+                                                           None, accelerate=False)
+            self.kNN_manager.add_new_kNN(knn_indices, knn_distances)
 
         self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
 
@@ -93,9 +100,10 @@ class DataSetWrapper(object):
     def distance2prob(self, normalize_method, train_dataset, symmetric):
         # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
         if normalize_method == ComponentInfo.UMAP_NORMALIZE:
-            train_dataset.umap_process(self.knn_indices, self.knn_distances, self.n_neighbor, symmetric)
+            train_dataset.umap_process(self.kNN_manager.knn_indices, self.kNN_manager.knn_dists, self.n_neighbor,
+                                       symmetric)
         else:
-            train_dataset.simple_preprocess(self.knn_indices, self.knn_distances)
+            train_dataset.simple_preprocess(self.kNN_manager.knn_indices, self.kNN_manager.knn_dists)
 
         self._update_knn_stat(train_dataset)
 
@@ -170,27 +178,21 @@ def eval_knn_acc(acc_knn_indices, pre_knn_indices):
 
 
 class StreamingDatasetWrapper(DataSetWrapper):
-    def __init__(self, initial_data, initial_label, batch_size, knn_indices=None, knn_dists=None):
-        DataSetWrapper.__init__(self, 1, batch_size)
+    def __init__(self, initial_data, initial_label, batch_size, n_neighbor):
+        DataSetWrapper.__init__(self, 1, batch_size, n_neighbor)
         # initial_data 是一个列表，第一个元素是数据，第二个元素是标签
         self.total_data = initial_data
         self.total_label = initial_label
-        self.kNN_manager = KNNManager(self.n_neighbor)
         self.cur_n_samples = initial_data.shape[0] if initial_data is not None else 0
         self.cached_shifted_indices = []
-
-    def _update_knn_stat(self, train_dataset):
-        super()._update_knn_stat(train_dataset)
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
                          pairwise_cache_path=None, is_image=True, data_file_path=None,
                          symmetric="TSNE", multi=False):
         self.n_neighbor = n_neighbors
-        data_augment = transforms.Compose([
-            transforms.ToTensor()
-        ])
-
+        data_augment = transforms.Compose([transforms.ToTensor()])
         data_augment, train_dataset = self.get_dataset(data_augment, is_image, ComponentInfo.UMAP_NORMALIZE)
+
         self.train_dataset = train_dataset
         if self.kNN_manager.is_empty():
             knn_indices, knn_distances = compute_knn_graph(train_dataset.data, None, n_neighbors,

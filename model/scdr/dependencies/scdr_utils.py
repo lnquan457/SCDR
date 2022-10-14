@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 from scipy.spatial.distance import cdist
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 from sklearn.neighbors import LocalOutlierFactor
 
 from dataset.warppers import extract_csr
@@ -13,18 +13,27 @@ from utils.nn_utils import compute_knn_graph
 from utils.umap_utils import fuzzy_simplicial_set_partial
 
 
-class KeyPointsGenerater:
+class KeyPointsGenerator:
+
+    RANDOM = "random"
+    KMEANS = "kmeans"
+    DBSCAN = "dbscan"
 
     @staticmethod
-    def generate(data, key_rate, is_random=False, cluster_inner_random=True, prob=None, min_num=0):
+    def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, **kwargs):
         if key_rate >= 1:
             return data, np.arange(0, data.shape[0], 1)
-        if is_random:
-            key_data, key_indices = KeyPointsGenerater._generate_randomly(data, key_rate, prob, min_num)
+        if method == KeyPointsGenerator.RANDOM:
+            return KeyPointsGenerator._generate_randomly(data, key_rate, prob, min_num)
+        elif method == KeyPointsGenerator.KMEANS:
+            return KeyPointsGenerator._generate_kmeans_based(data, key_rate, cluster_inner_random,
+                                                                              prob, min_num)
+        elif method == KeyPointsGenerator.DBSCAN:
+            return KeyPointsGenerator._generate_dbscan_based(data, key_rate, cluster_inner_random,
+                                                                              prob, min_num, **kwargs)
         else:
-            key_data, key_indices = KeyPointsGenerater._generate_clustering_based(data, key_rate, cluster_inner_random,
-                                                                                  prob, min_num)
-        return key_data, key_indices
+            raise RuntimeError("Unsupported key data generating method. Please ensure that 'method' is one of random/"
+                               "kmeans/dbscan.")
 
     @staticmethod
     def _generate_randomly(data: np.ndarray, key_rate: float, prob=None, min_num=0):
@@ -36,37 +45,69 @@ class KeyPointsGenerater:
         return data[key_indices], key_indices
 
     @staticmethod
-    def _generate_clustering_based(data: np.ndarray, key_rate: float, is_random=True, prob=None, min_num=0):
+    def _generate_kmeans_based(data: np.ndarray, key_rate: float, is_random=True, prob=None, min_num=0, **kwargs):
         n_samples = data.shape[0]
         cluster_num = int(math.sqrt(n_samples))
         km = KMeans(n_clusters=cluster_num)
         km.fit(data)
-        labels = km.labels_
-        key_indices = []
         key_data_num = max(int(n_samples * key_rate), min_num)
 
-        if is_random:   # 聚类内部随机采样
+        key_data, key_indices, cluster_indices, exclude_indices = \
+            KeyPointsGenerator._sample_in_each_cluster(data, km.labels_, key_data_num, None, prob, is_random)
+        return key_data, key_indices, cluster_indices, exclude_indices
+
+    @staticmethod
+    def _generate_dbscan_based(data, key_rate, is_random=True, prob=None, min_num=0, **kwargs):
+        n_samples = data.shape[0]
+        eps = kwargs['eps']
+        min_samples = kwargs["min_samples"]
+        dbs = DBSCAN(eps, min_samples=min_samples)
+        dbs.fit(data)
+        key_data_num = max(int(n_samples * key_rate), min_num)
+        key_data, key_indices, cluster_indices, exclude_indices = \
+            KeyPointsGenerator._sample_in_each_cluster(data, dbs.labels_, key_data_num, None, prob, is_random)
+        return key_data, key_indices, cluster_indices, exclude_indices
+
+    @staticmethod
+    def _sample_in_each_cluster(data, labels, key_data_num, centroids=None, prob=None, is_random=True):
+        key_indices = []
+        cluster_indices = []
+        n_samples = len(labels)
+        key_rate = key_data_num / len(np.argwhere(labels >= 0).squeeze())
+        if is_random:  # 聚类内部随机采样
             for item in np.unique(labels):
+                if item < 0:
+                    continue
                 cur_indices = np.where(labels == item)[0]
-                cur_key_num = int(len(cur_indices) * key_data_num / n_samples)
+                cur_key_num = int(len(cur_indices) * key_rate)
                 cur_prob = None
                 if prob is not None:
                     cur_prob = prob[cur_indices]
                     cur_prob /= np.sum(cur_prob)
-                key_indices.extend(np.random.choice(cur_indices, cur_key_num, p=cur_prob, replace=False))
-        else:   # 聚类内部根据各点到聚类中心的距离进行采样
+                sampled_indices = np.random.choice(cur_indices, cur_key_num, p=cur_prob, replace=False)
+                cluster_indices.append(np.arange(len(key_indices), len(key_indices)+len(sampled_indices)))
+                key_indices.extend(sampled_indices)
+        else:  # 聚类内部根据各点到聚类中心的距离进行采样
             if prob is not None:
                 raise RuntimeError("Custom sampling probability conflicts with distance-based sampling!")
-            centroids = km.cluster_centers_
             for i, item in enumerate(np.unique(labels)):
+                if item < 0:
+                    continue
                 cur_indices = np.where(labels == item)[0]
-                cur_dists = cdist(centroids[i], data[cur_indices])
+                cur_center = centroids[i] if centroids is not None else np.mean(data[cur_indices], axis=-1)
+                cur_dists = cdist(cur_center, data[cur_indices])
                 sorted_indices = np.argsort(cur_dists)
-                cur_key_num = int(len(cur_indices) * key_data_num / n_samples)
+                cur_key_num = int(len(cur_indices) * key_rate)
                 sampled_indices = cur_indices[sorted_indices[np.linspace(0, len(cur_indices), cur_key_num, dtype=int)]]
+                cluster_indices.append(np.arange(len(key_indices), len(key_indices)+len(sampled_indices)))
                 key_indices.extend(sampled_indices)
 
-        return data[key_indices], key_indices
+        exclude_indices = []
+        total_indices = np.arange(len(key_indices))
+        for item in cluster_indices:
+            exclude_indices.append(np.setdiff1d(total_indices, item))
+
+        return data[key_indices], key_indices, cluster_indices, exclude_indices
 
 
 class RepDataSampler:
@@ -122,7 +163,7 @@ class RepDataSampler:
             sampled_indices = self._random_sample(pre_n_samples)
 
         if sampled_indices is None:
-            sampled_indices = KeyPointsGenerater.generate(pre_data, self.sample_rate, False, prob=prob,
+            sampled_indices = KeyPointsGenerator.generate(pre_data, self.sample_rate, False, prob=prob,
                                                           min_num=self.minimum_sample_data_num)[1]
         if must_indices is not None:
             sampled_indices = np.union1d(sampled_indices, must_indices).astype(int)

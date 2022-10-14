@@ -3,6 +3,8 @@ from model.dr_models.CDRs.NCELoss import NT_Xent, torch_app_skewnorm_func, Mixtu
 from model.dr_models.CDRs.nx_cdr import NxCDRModel
 import torch
 
+from model.dr_models.CDRs.vc_loss import _visual_consistency_loss
+
 
 class CDRModel(NxCDRModel):
     def __init__(self, cfg, device='cuda'):
@@ -35,7 +37,7 @@ class CDRModel(NxCDRModel):
         if self.separate_epoch <= epoch <= self.steady_epoch:
             epoch_ratio = torch.tensor((epoch - self.separate_epoch) / (self.steady_epoch - self.separate_epoch))
             cur_lower_thresh = 0.001 + (self.lower_thresh - 0.001) * epoch_ratio
-            loss = Mixture_NT_Xent.apply(logits, torch.tensor(self.temperature), self.alpha, self.a, self.loc,
+            loss = Mixture_NT_Xent.apply(logits, torch.tensor(self.temperature), torch.tensor(self.alpha), self.a, self.loc,
                                          cur_lower_thresh, self.scale)
         else:
             loss = self.criterion(logits, torch.tensor(self.temperature))
@@ -44,12 +46,49 @@ class CDRModel(NxCDRModel):
 
 
 class LwFCDR(CDRModel):
-    def batch_logits(self, x_embeddings, x_sim_embeddings, *args):
+
+    def __init__(self, cfg, device='cuda', neg_num=None):
+        CDRModel.__init__(self, cfg, device)
+        self.neg_num = None
+        self.update_neg_num(neg_num)
+        # 新数据与旧数据之间进行排斥的对比损失的权重
+        self.alpha = 2.0
+        # 保持旧数据嵌入位置不变的权重
+        self.beta = 2.0
+
+    def update_neg_num(self, new_neg_num):
+        if self.neg_num is not None:
+            self.neg_num = min(new_neg_num, self.batch_size)
+            self.correlated_mask = (1 - torch.eye(self.neg_num)).type(torch.bool)
+
+    def compute_loss(self, x_embeddings, x_sim_embeddings, *args):
+        epoch = args[0]
         is_incremental_learning = args[3]
-        logits = super().batch_logits(x_embeddings, x_sim_embeddings, *args)
+        novel_logits = self.batch_logits(x_embeddings, x_sim_embeddings, *args)
+        novel_loss = self._post_loss(novel_logits, None, epoch, None, *args)
+
         if not is_incremental_learning:
-            return logits
-        rep_old_embeddings = args[1]
+            return novel_loss
+
+        # self.alpha = 8
+
+        rep_old_embeddings, pre_old_embeddings = args[1], args[2]
+        cluster_indices, exclude_indices = args[4], args[5]
+        # cluster_indices, exclude_indices = None, None
+
+        old_logits = self.cal_old_logits(x_embeddings, x_sim_embeddings, rep_old_embeddings, novel_logits)
+        # old_logits[:, 0] = old_logits[:, 0].detach()
+        old_loss = self._post_loss(old_logits, None, epoch, None, *args)
+
+        vc_loss = _visual_consistency_loss(rep_old_embeddings, pre_old_embeddings,
+                                           cluster_indices=cluster_indices, exclude_indices=exclude_indices)
+        print(" vc loss:", vc_loss.item())
+        # print("novel loss:", novel_loss, " old loss:", old_loss, " vc loss:", vc_loss)
+        loss = novel_loss + self.alpha * old_loss + self.beta * vc_loss
+        return loss
+
+    def cal_old_logits(self, x_embeddings, x_sim_embeddings, rep_old_embeddings, novel_logits):
+        pos_similarities = torch.clone(novel_logits[:, 0]).unsqueeze(1)
 
         rep_old_embeddings_matrix = rep_old_embeddings.unsqueeze(0).repeat(x_embeddings.shape[0] * 2, 1, 1)
         x_and_x_sim_embeddings = torch.cat([x_embeddings, x_sim_embeddings], dim=0)
@@ -57,17 +96,33 @@ class LwFCDR(CDRModel):
         # TODO：如果代表性数据与新的数据有来自同一聚类的情况，那一直排斥他们是否会导致模型坍塌呢？
         rep_old_negatives = self.similarity_func(rep_old_embeddings_matrix, x_embeddings_matrix, self.min_dist)[0]
 
-        total_logits = torch.cat([logits, rep_old_negatives], dim=1)
-        return total_logits
+        old_logits = torch.cat([pos_similarities, rep_old_negatives], dim=1)
+        return old_logits
 
-    def compute_loss(self, x_embeddings, x_sim_embeddings, *args):
-        contrastive_loss = super().compute_loss(x_embeddings, x_sim_embeddings, *args)
+    def batch_logits(self, x_embeddings, x_sim_embeddings, *args):
         is_incremental_learning = args[3]
-        if not is_incremental_learning:
-            return contrastive_loss
+        if not is_incremental_learning or self.neg_num is None or self.neg_num == 2 * self.batch_size:
+            logits = super().batch_logits(x_embeddings, x_sim_embeddings, *args)
+        else:
+            queries = torch.cat([x_embeddings, x_sim_embeddings], dim=0)
+            queries_matrix = queries[:self.neg_num+1].unsqueeze(0).repeat(2*self.batch_size, 1, 1)
+            positives = torch.cat([x_sim_embeddings, x_embeddings], dim=0)
+            negatives_p1 = torch.cat([queries_matrix[:self.neg_num, :self.neg_num][self.correlated_mask]
+                                     .view(self.neg_num, self.neg_num-1, -1),
+                                      queries_matrix[:self.neg_num, self.neg_num].unsqueeze(1)], dim=1)
 
-        cur_embeddings, pre_embeddings = args[1], args[2]
-        normalization_loss = torch.mean(torch.norm(cur_embeddings - pre_embeddings, dim=1))
-        # print("normalization_loss", normalization_loss)
-        total_loss = contrastive_loss + normalization_loss
-        return total_loss
+            negatives_p2 = torch.cat([queries_matrix[self.batch_size:self.batch_size+self.neg_num, :self.neg_num]
+                                      [self.correlated_mask].view(self.neg_num, self.neg_num-1, -1),
+                                      queries_matrix[self.batch_size:self.batch_size+self.neg_num, self.neg_num]
+                                     .unsqueeze(1)], dim=1)
+
+            negatives = torch.cat([negatives_p1, queries_matrix[self.neg_num:self.batch_size, :self.neg_num],
+                                   negatives_p2, queries_matrix[self.batch_size+self.neg_num:, :self.neg_num]], dim=0)
+
+            pos_similarities = self.similarity_func(queries, positives, self.min_dist)[0].unsqueeze(1)
+            neg_similarities = self.similarity_func(queries_matrix[:, :self.neg_num], negatives, self.min_dist)[0]
+
+            # 将本地的正例、负例与全局的负例拼接在一起
+            logits = torch.cat((pos_similarities, neg_similarities), dim=1)
+        return logits
+

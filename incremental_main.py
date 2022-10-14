@@ -9,7 +9,7 @@ from scipy.spatial.distance import cdist
 from dataset.warppers import StreamingDatasetWrapper
 from model.dr_models.ModelSets import MODELS
 from model.scdr.dependencies.experiment import position_vis
-from model.scdr.dependencies.scdr_utils import KeyPointsGenerater
+from model.scdr.dependencies.scdr_utils import KeyPointsGenerator
 from utils.common_utils import get_config, time_stamp_to_date_time_adjoin
 from utils.metrics_tool import Metric, knn_score
 
@@ -18,6 +18,7 @@ import torch
 from utils.constant_pool import *
 import argparse
 import time
+from sklearn.cluster import KMeans, DBSCAN
 from model.scdr.dependencies.cdr_experiment import CDRsExperiments
 from model.scdr.model_trainer import IncrementalCDREx
 
@@ -94,6 +95,7 @@ def incremental_cdr_pipeline():
     clr_model = MODELS[METHOD_NAME](cfg, device=device)
     experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, result_save_dir, CONFIG_PATH, shuffle=True,
                                     device=device, log_path=log_path)
+    n_neighbors = experimenter.n_neighbors
 
     with h5py.File(os.path.join(ConfigInfo.DATASET_CACHE_DIR, "{}.h5".format(experimenter.dataset_name)), "r") as hf:
         total_data = np.array(hf['x'])
@@ -110,7 +112,8 @@ def incremental_cdr_pipeline():
     # n_steps = total_cls_num - initial_cls_num + 1
     # batch_indices = indices_generator.slightly_dis_change(total_cls_num=6, initial_cls_num=3)
 
-    initial_cls_num, after_cls_num_list = 3, [2, 2, 3]
+    # initial_cls_num, after_cls_num_list = 3, [2, 2, 3]
+    initial_cls_num, after_cls_num_list = 3, [1, 1, 1, 1]
     n_step = len(after_cls_num_list) + 1
     batch_indices = indices_generator.heavy_dis_change(initial_cls_num, after_cls_num_list)
 
@@ -119,13 +122,15 @@ def incremental_cdr_pipeline():
     # 1.需要创建一个数据整合器，用于从旧数据中采样代表点数据
     initial_data = total_data[batch_indices[0]]
     initial_labels = total_labels[batch_indices[0]]
-    stream_dataset = StreamingDatasetWrapper(initial_data, initial_labels, experimenter.batch_size)
+    stream_dataset = StreamingDatasetWrapper(initial_data, initial_labels, experimenter.batch_size,
+                                             experimenter.n_neighbors)
     initial_embeddings = experimenter.first_train(stream_dataset, INITIAL_EPOCHS)
-    position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "0.jpg"), initial_embeddings, title="Initial Embeddings")
+    position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "0.jpg"), initial_embeddings,
+                 title="Initial Embeddings")
 
     metric_tool = Metric(experimenter.dataset_name, stream_dataset.total_data, stream_dataset.total_label,
-                         stream_dataset.knn_indices, stream_dataset.knn_distances, None, norm=experimenter.is_image,
-                         k=experimenter.fixed_k)
+                         stream_dataset.get_knn_indices(), stream_dataset.get_knn_dists(), None,
+                         norm=experimenter.is_image, k=experimenter.fixed_k)
     eval_res = evaluate(experimenter, metric_tool, initial_embeddings, initial_labels)
     embedding_acc_history[0, 0] = eval_res
     initial_embeddings_list = [initial_embeddings]
@@ -134,8 +139,22 @@ def incremental_cdr_pipeline():
     experimenter.active_incremental_learning()
 
     for i in range(1, n_step):
-        # 之后应该要动态管理，固定代表性数据的规模，然后根据聚类数目动态分配
-        rep_old_data, rep_old_indices = KeyPointsGenerater.generate(total_data[fitted_indices], 0, min_num=100)
+        # TODO：现在是进行聚类，然后从每个聚类中选100个点。确实缓解了聚类内部分散的问题。但是现在使用DBSCAN聚类很不准确
+        # rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
+        #     KeyPointsGenerator.generate(total_data[fitted_indices], 0, method=KeyPointsGenerator.DBSCAN, min_num=50,
+        #                                 eps=np.mean(stream_dataset.get_knn_dists()),
+        #                                 min_samples=experimenter.n_neighbors // 2)
+        ravel_1 = np.reshape(np.repeat(experimenter.pre_embeddings[:, np.newaxis, :], n_neighbors, 1), (-1, 2))
+        ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices())]
+        embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
+        rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
+            KeyPointsGenerator.generate(experimenter.pre_embeddings, 0, method=KeyPointsGenerator.DBSCAN, min_num=100,
+                                        eps=embedding_nn_dist,
+                                        min_samples=experimenter.n_neighbors)
+        print(cluster_indices)
+        print()
+        print(exclude_indices)
+        rep_old_data = total_data[rep_old_indices]
 
         # 更新数据集状态
         cur_batch_data = total_data[batch_indices[i]]
@@ -150,6 +169,7 @@ def incremental_cdr_pipeline():
         stream_dataset.update_knn_graph(total_data[fitted_indices], total_data[batch_indices[i]],
                                         [0, cur_batch_num])
         experimenter.update_batch_size(cur_batch_num)
+        experimenter.update_neg_num(cur_batch_num / 8)
         experimenter.update_dataloader(RESUME_EPOCH, np.arange(fitted_num, fitted_num + cur_batch_num, 1))
 
         # 2.将代表点数据作为候选负例兼容到模型的增量训练中，每次都需要计算代表性数据的嵌入
@@ -157,7 +177,7 @@ def incremental_cdr_pipeline():
                                                                     .to(device), device)
 
         # 3.需要改变模型的损失计算。使用不同的方式进行incremental learning。需要创建一个新的train方法。
-        embeddings = experimenter.resume_train(RESUME_EPOCH, rep_old_data, rep_old_embeddings)
+        embeddings = experimenter.resume_train(RESUME_EPOCH, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices)
         position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "{}.jpg".format(i)), embeddings,
                      title="Step {} Embeddings".format(i))
 
@@ -167,8 +187,8 @@ def incremental_cdr_pipeline():
 
         initial_embeddings_list.append(embeddings[-cur_batch_num:])
         tmp = 0
-        for j in range(i+1):
-            eval_indices = np.arange(tmp, tmp+len(batch_indices[j]), 1)
+        for j in range(i + 1):
+            eval_indices = np.arange(tmp, tmp + len(batch_indices[j]), 1)
             tmp += len(batch_indices[j])
 
             pre_old_data_embeddings = initial_embeddings_list[j]
@@ -208,7 +228,7 @@ if __name__ == '__main__':
         METHOD_NAME = "LwF_CDR"
         CONFIG_PATH = "configs/ParallelSCDR.yaml"
         INDICES_DIR = r"../../Data/indices/single_cluster"
-        INITIAL_EPOCHS = 200
+        INITIAL_EPOCHS = 100
         RESUME_EPOCH = 50
         K = 10
 

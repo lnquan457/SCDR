@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from model.scdr.data_processor import SCDRProcessor
 from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet
-from model.scdr.dependencies.scdr_utils import KeyPointsGenerater, DistributionChangeDetector
+from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, DistributionChangeDetector
 
 
 class SCDRParallel:
@@ -134,7 +134,7 @@ class SCDRParallel:
 
     def _generate_key_points(self, data):
         # if self.key_data is None:
-        self.key_data, self.key_indices = KeyPointsGenerater.generate(data, self.key_data_rate)
+        self.key_data, self.key_indices = KeyPointsGenerator.generate(data, self.key_data_rate)
         # else:
         #     key_data, key_indices = KeyPointsGenerater.generate(data, self.key_data_rate)
         #     self.key_data = np.concatenate([self.key_data, key_data], axis=0)

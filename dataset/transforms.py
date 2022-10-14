@@ -56,8 +56,8 @@ class CDRDataTransform(object):
 
         self.neighbor_sample_repo = None
         self.neighbor_sample_index = None
-        self.init_norm_nn_indices = norm_nn_indices
-        self.init_norm_nn_weights = norm_nn_weights
+        self.pre_norm_nn_indices = norm_nn_indices
+        self.pre_norm_nn_weights = norm_nn_weights
 
         self.build_neighbor_repo(epoch_num, n_neighbors, norm_nn_indices, norm_nn_weights, ex_factor)
 
@@ -67,15 +67,19 @@ class CDRDataTransform(object):
 
     def build_neighbor_repo(self, epoch_num, n_neighbors, norm_nn_indices=None, norm_nn_weights=None, ex_factor=1):
         if norm_nn_indices is None:
-            norm_nn_indices = self.init_norm_nn_indices
+            norm_nn_indices = self.pre_norm_nn_indices
+
         if norm_nn_weights is None:
-            norm_nn_weights = self.init_norm_nn_weights
+            norm_nn_weights = self.pre_norm_nn_weights
+
         self.neighbor_sample_repo = assign_weighted_neighbor_samples(norm_nn_indices,
                                                                      norm_nn_weights, n_neighbors,
                                                                      epoch_num, ex_factor)
         self.neighbor_sample_index = np.zeros(self.n_samples, dtype=np.int)
 
     def update(self, train_dataset, epoch_num, norm_nn_indices, norm_nn_weights):
+        self.pre_norm_nn_weights = norm_nn_weights
+        self.pre_norm_nn_indices = norm_nn_indices
         self.train_dataset = train_dataset
         self.n_samples = train_dataset.data.shape[0]
         self.neighbor_sample_repo = assign_weighted_neighbor_samples(norm_nn_indices,

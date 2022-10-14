@@ -11,10 +11,10 @@ exp_params:
 
 method_params:
   method: "CDR"
-  initial_train_epoch: 200
+  initial_train_epoch: 100
   finetune_epoch: 50
   shift_buffer_size: 30
-  batch_size: 256
+  batch_size: 128
   LR: 0.001
   n_neighbors: 10
   optimizer: "adam" # adam or sgd
@@ -22,7 +22,7 @@ method_params:
   temperature: 0.15
   split_upper: 0.1
   split_lower: 0.005
-  alpha: 5
+  alpha: 6
   separation_begin_ratio: 0.25
   steady_begin_ratio: 0.9
   ckpt_path: None
