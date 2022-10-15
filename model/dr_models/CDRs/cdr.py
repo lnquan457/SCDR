@@ -74,14 +74,15 @@ class LwFCDR(CDRModel):
 
         rep_old_embeddings, pre_old_embeddings = args[2], args[3]
         cluster_indices, exclude_indices = args[4], args[5]
+        pre_embeddings_pw_dists = args[6]
         # cluster_indices, exclude_indices = None, None
 
         old_logits = self.cal_old_logits(x_embeddings, x_sim_embeddings, rep_old_embeddings, novel_logits)
         # old_logits[:, 0] = old_logits[:, 0].detach()
         old_loss = self._post_loss(old_logits, None, epoch, None, *args)
 
-        vc_loss = _visual_consistency_loss(rep_old_embeddings, pre_old_embeddings,
-                                           cluster_indices=cluster_indices, exclude_indices=exclude_indices)
+        vc_loss = _visual_consistency_loss(rep_old_embeddings, pre_old_embeddings, cluster_indices=cluster_indices,
+                                           exclude_indices=exclude_indices, pre_pairwise_dist=pre_embeddings_pw_dists)
         # print(" vc loss:", vc_loss.item())
         # print("novel loss:", novel_loss, " old loss:", old_loss, " vc loss:", vc_loss)
         loss = novel_loss + self.alpha * old_loss + self.beta * vc_loss

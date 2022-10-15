@@ -196,8 +196,10 @@ class IncrementalCDREx(SCDRTrainer):
                                  log_path, multi)
         self._rep_old_data = None
         self._pre_rep_old_embeddings = None
+        self._rep_embeddings_pw_dists = []
         self._is_incremental_learning = False
         self.stream_dataset = None
+        self.incremental_steps = 0
 
         # 用于计算VC损失
         self.rep_batch_nums = None
@@ -225,7 +227,7 @@ class IncrementalCDREx(SCDRTrainer):
 
     def _train_step(self, *args):
         x, x_sim, epoch, indices, sim_indices = args
-        idx = self.steps % self.rep_batch_nums if self.rep_batch_nums is not None else -1
+        idx = self.incremental_steps % self.rep_batch_nums if self.rep_batch_nums is not None else -1
         self.optimizer.zero_grad()
 
         with torch.cuda.device(self.device_id):
@@ -236,22 +238,28 @@ class IncrementalCDREx(SCDRTrainer):
         if self._is_incremental_learning:
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning,
                                                  rep_old_embeddings, self._pre_rep_old_embeddings[idx],
-                                                 self.rep_cluster_indices[idx], self.rep_exclude_indices[idx])
+                                                 self.rep_cluster_indices[idx], self.rep_exclude_indices[idx],
+                                                 self._rep_embeddings_pw_dists[idx])
         else:
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning)
 
         train_loss.backward()
+        self.incremental_steps += 1
         self.optimizer.step()
         return train_loss
 
     def build_dataset(self, *args):
         new_data, new_labels = args[0], args[1]
-        self.stream_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size)
+        self.stream_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size, self.n_neighbors)
 
     def _update_rep_data_info(self, rep_batch_nums, data, embeddings, cluster_indices, exclude_indices):
+        self.incremental_steps = 0
+        self._rep_embeddings_pw_dists = []
         self.rep_batch_nums = rep_batch_nums
         self._rep_old_data = torch.tensor(data, dtype=torch.float).to(self.device)
         if not isinstance(embeddings, torch.Tensor):
             self._pre_rep_old_embeddings = torch.tensor(embeddings, dtype=torch.float).to(self.device)
+        for item in self._pre_rep_old_embeddings:
+            self._rep_embeddings_pw_dists.append(torch.cdist(item, item))
         self.rep_cluster_indices = cluster_indices
         self.rep_exclude_indices = exclude_indices

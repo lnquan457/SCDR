@@ -16,7 +16,7 @@ def _cal_pairwise_dist_change(cur_embeddings, pre_embeddings, corr=False):
 
 
 def _visual_consistency_loss(cur_rep_embeddings, pre_rep_embeddings, position=False, cluster_indices=None,
-                             exclude_indices=None):
+                             exclude_indices=None, pre_pairwise_dist=None):
     if position:
         return torch.mean(torch.norm(cur_rep_embeddings - pre_rep_embeddings, dim=1))
     else:
@@ -24,7 +24,7 @@ def _visual_consistency_loss(cur_rep_embeddings, pre_rep_embeddings, position=Fa
         # return _with_pearson_and_spearman_corr(cur_rep_embeddings.cpu(), pre_rep_embeddings.cpu(), cluster_indices,
         #                                        exclude_indices)
         return _with_pairwise_dist_change(cur_rep_embeddings.cpu(), pre_rep_embeddings.cpu(), cluster_indices,
-                                          exclude_indices)
+                                          exclude_indices, pre_pairwise_dist.cpu())
 
 
 def _with_pearson_and_spearman_corr(cur_embeddings, pre_embeddings, cluster_indices, exclude_indices):
@@ -48,14 +48,14 @@ def _with_pearson_and_spearman_corr(cur_embeddings, pre_embeddings, cluster_indi
     return torch.mean(inner_pearson_corr)
 
 
-def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, exclude_indices):
+def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, exclude_indices, pre_pairwise_dists=None):
     cluster_num = len(cluster_indices)
     inner_dist_change = torch.zeros(cluster_num)
     intra_dist_change = torch.zeros(cluster_num)
     intra_spearman_corr = torch.zeros(cluster_num)
 
     cur_pairwise_dists = torch.cdist(cur_embeddings, cur_embeddings)
-    pre_pairwise_dists = torch.cdist(pre_embeddings, pre_embeddings)
+    pre_pairwise_dists = torch.cdist(pre_embeddings, pre_embeddings) if pre_pairwise_dists is None else pre_pairwise_dists
 
     for i, item in enumerate(cluster_indices):
         other_cluster_indices = exclude_indices[i]
