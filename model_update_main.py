@@ -28,14 +28,17 @@ device = "cuda:0"
 log_path = "logs/log.txt"
 
 
-def query_knn(query_data, data_set, k):
+def query_knn(query_data, data_set, k, return_indices=False):
     dists = cdist(query_data, data_set)
-    knn_indices = np.argsort(dists, axis=1)[:, 1:k + 1]
+    sort_indices = np.argsort(dists, axis=1)
+    knn_indices = sort_indices[:, 1:k + 1]
 
     knn_distances = []
     for i in range(knn_indices.shape[0]):
         knn_distances.append(dists[i, knn_indices[i]])
     knn_distances = np.array(knn_distances)
+    if return_indices:
+        return knn_indices, knn_distances, sort_indices
     return knn_indices, knn_distances
 
 
@@ -87,6 +90,30 @@ class IndicesGenerator:
                 tmp.extend(np.argwhere(self.total_labels == self.cls[i]).squeeze())
             batch_indices.append(tmp)
             pre += item
+        return batch_indices
+
+    # 初始数据集只包含指定流形的80%的数据，之后每个batch中同时包含初始流形和新流形中的数据
+    def mixing(self, initial_manifold_num, total_manifold_num, initial_rate=0.8):
+        assert total_manifold_num > initial_manifold_num
+        initial_batch_indices = []
+        left_indices = []
+        for i in range(initial_manifold_num):
+            indices = np.argwhere(self.total_labels == self.cls[i]).squeeze()
+            # np.random.shuffle(indices)
+            fit_num = int(len(indices) * initial_rate)
+            fit_indices = indices[:fit_num]
+            left_indices.extend(indices[fit_num:])
+            initial_batch_indices.extend(fit_indices)
+        batch_indices = [initial_batch_indices]
+        avg_left_num = len(left_indices) // (total_manifold_num - initial_manifold_num)
+        np.random.shuffle(left_indices)
+
+        for i in range(initial_manifold_num, total_manifold_num):
+            indices = np.argwhere(self.total_labels == self.cls[i]).squeeze()
+            idx = i - initial_manifold_num
+            indices = np.append(indices, left_indices[idx*avg_left_num:(idx+1)*avg_left_num]).astype(int)
+            batch_indices.append(indices)
+
         return batch_indices
 
 

@@ -454,6 +454,8 @@ class Experiment:
         return self.pre_embeddings
 
     def cal_lower_embeddings(self, data):
+        if not isinstance(data, torch.Tensor):
+            data = torch.tensor(data, dtype=torch.float).to(self.device)
         if self.is_image:
             data = data / 255.
         embeddings = self.acquire_latent_code_allin(data, self.device)

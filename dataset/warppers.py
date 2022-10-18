@@ -184,7 +184,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.total_data = initial_data
         self.total_label = initial_label
         self.cur_n_samples = initial_data.shape[0] if initial_data is not None else 0
-        self.cached_shifted_indices = []
+        # 没有重新计算邻居点相似点的数据下标
+        self.cached_neighbor_change_indices = []
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
                          pairwise_cache_path=None, is_image=True, data_file_path=None,
@@ -246,15 +247,12 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.cur_n_samples += new_data.shape[0]
         self.total_data = np.concatenate([self.total_data, new_data], axis=0)
         if new_label is not None:
-            self.total_label = np.concatenate([self.total_label, new_label], axis=0)
+            self.total_label = np.append(self.total_label, new_label)
 
         self.kNN_manager.add_new_kNN(knn_indices, knn_dists)
         self.train_dataset.add_new_data(new_data, new_label)
 
-    def buffer_empty(self):
-        return len(self.cached_shifted_indices) == 0
-
-    def update_knn_graph(self, pre_data, new_data, data_num_list, cut_num=None):
+    def update_knn_graph(self, pre_data, new_data, data_num_list, cut_num=None, update_similarity=True):
         total_data = self.total_data if cut_num is None else self.total_data[:cut_num]
         knn_distances = self.kNN_manager.knn_dists if cut_num is None else self.kNN_manager.knn_dists[:cut_num]
         knn_indices = self.kNN_manager.knn_indices if cut_num is None else self.kNN_manager.knn_indices[:cut_num]
@@ -277,18 +275,30 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.empty(shape=new_n_samples)])
         self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.empty(shape=new_n_samples)])
 
-        # sta = time.time()
-        umap_graph, sigmas, rhos, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
-                                                                                      self.raw_knn_weights,
-                                                                                      neighbor_changed_indices)
-        # print("fuzzy", time.time() - sta)
+        if update_similarity:
+            # sta = time.time()
+            umap_graph, sigmas, rhos, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
+                                                                                          self.raw_knn_weights,
+                                                                                          neighbor_changed_indices)
+            # print("fuzzy", time.time() - sta)
 
-        # sta = time.time()
-        updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, neighbor_changed_indices)
-        # print("extract", time.time() - sta)
+            # sta = time.time()
+            updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, neighbor_changed_indices)
+            # print("extract", time.time() - sta)
 
-        self.symmetric_nn_weights[neighbor_changed_indices] = updated_symm_nn_weights
-        self.symmetric_nn_indices[neighbor_changed_indices] = updated_sym_nn_indices
+            self.symmetric_nn_weights[neighbor_changed_indices] = updated_symm_nn_weights
+            self.symmetric_nn_indices[neighbor_changed_indices] = updated_sym_nn_indices
+        else:
+            self.cached_neighbor_change_indices.extend(neighbor_changed_indices)
+
+    def update_cached_neighbor_similarities(self):
+        umap_graph, sigmas, rhos, self.raw_knn_weights = \
+            fuzzy_simplicial_set_partial(self.kNN_manager.knn_indices, self.kNN_manager.knn_dists, self.raw_knn_weights,
+                                         self.cached_neighbor_change_indices)
+        updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, self.cached_neighbor_change_indices)
+
+        self.symmetric_nn_weights[self.cached_neighbor_change_indices] = updated_symm_nn_weights
+        self.symmetric_nn_indices[self.cached_neighbor_change_indices] = updated_sym_nn_indices
 
 
 # 负责存储以及更新kNN
@@ -370,5 +380,5 @@ def extract_csr(csr_graph, indices, norm=True):
 
 # 将index之后的元素向后移动一位
 def arr_move_one(arr, index, index_val):
-    arr[index+1:] = arr[index:-1]
+    arr[index + 1:] = arr[index:-1]
     arr[index] = index_val
