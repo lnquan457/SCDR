@@ -1,4 +1,6 @@
 import math
+import time
+
 from model.dr_models.CDRs.NCELoss import NT_Xent, torch_app_skewnorm_func, Mixture_NT_Xent
 from model.dr_models.CDRs.nx_cdr import NxCDRModel
 import torch
@@ -52,7 +54,7 @@ class LwFCDR(CDRModel):
         self.neg_num = None
         self.update_neg_num(neg_num)
         # 新数据与旧数据之间进行排斥的对比损失的权重
-        self.alpha = 3.0
+        self.alpha = 4.0
         # 保持旧数据嵌入位置不变的权重
         self.beta = 2.0
 
@@ -70,21 +72,18 @@ class LwFCDR(CDRModel):
         if not is_incremental_learning:
             return novel_loss
 
-        # self.alpha = 8
-
         rep_old_embeddings, pre_old_embeddings = args[2], args[3]
         cluster_indices, exclude_indices = args[4], args[5]
         pre_embeddings_pw_dists = args[6]
-        # cluster_indices, exclude_indices = None, None
 
         old_logits = self.cal_old_logits(x_embeddings, x_sim_embeddings, rep_old_embeddings, novel_logits)
-        # old_logits[:, 0] = old_logits[:, 0].detach()
         old_loss = self._post_loss(old_logits, None, epoch, None, *args)
 
+        sta = time.time()
         vc_loss = _visual_consistency_loss(rep_old_embeddings, pre_old_embeddings, cluster_indices=cluster_indices,
                                            exclude_indices=exclude_indices, pre_pairwise_dist=pre_embeddings_pw_dists)
-        # print(" vc loss:", vc_loss.item())
-        # print("novel loss:", novel_loss, " old loss:", old_loss, " vc loss:", vc_loss)
+        # print("vc loss:", time.time() - sta)
+
         loss = novel_loss + self.alpha * old_loss + self.beta * vc_loss
         return loss
 
@@ -94,7 +93,6 @@ class LwFCDR(CDRModel):
         rep_old_embeddings_matrix = rep_old_embeddings.unsqueeze(0).repeat(x_embeddings.shape[0] * 2, 1, 1)
         x_and_x_sim_embeddings = torch.cat([x_embeddings, x_sim_embeddings], dim=0)
         x_embeddings_matrix = x_and_x_sim_embeddings.unsqueeze(1).repeat(1, rep_old_embeddings.shape[0], 1)
-        # TODO：如果代表性数据与新的数据有来自同一聚类的情况，那一直排斥他们是否会导致模型坍塌呢？
         rep_old_negatives = self.similarity_func(rep_old_embeddings_matrix, x_embeddings_matrix, self.min_dist)[0]
 
         old_logits = torch.cat([pos_similarities, rep_old_negatives], dim=1)

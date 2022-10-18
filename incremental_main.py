@@ -102,7 +102,7 @@ def incremental_cdr_pipeline():
 
     with h5py.File(os.path.join(ConfigInfo.DATASET_CACHE_DIR, "{}.h5".format(experimenter.dataset_name)), "r") as hf:
         total_data = np.array(hf['x'])
-        total_labels = np.array(hf['y'])
+        total_labels = np.array(hf['y'], dtype=int)
 
     METRICS = ["Movement", "Neighbor Hit", "kNN-CA", "Trust", "Continuity", "SC"]
     # 0.需要创建一个索引生成器，根据不同的条件生成一批批的索引列表
@@ -116,7 +116,7 @@ def incremental_cdr_pipeline():
     # batch_indices = indices_generator.slightly_dis_change(total_cls_num=6, initial_cls_num=3)
 
     # initial_cls_num, after_cls_num_list = 3, [2, 2, 3]
-    initial_cls_num, after_cls_num_list = 3, [1, 1, 1, 1]
+    initial_cls_num, after_cls_num_list = 3, [1, 2, 3]
     n_step = len(after_cls_num_list) + 1
     batch_indices = indices_generator.heavy_dis_change(initial_cls_num, after_cls_num_list)
 
@@ -149,16 +149,25 @@ def incremental_cdr_pipeline():
         # TODO：现在是进行聚类，然后从每个聚类中选100个点。确实缓解了聚类内部分散的问题。但是现在使用DBSCAN聚类很不准确
         # rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
         #     KeyPointsGenerator.generate(total_data[fitted_indices], 0, method=KeyPointsGenerator.DBSCAN, min_num=50,
-        #                                 eps=np.mean(stream_dataset.get_knn_dists()),
-        #                                 min_samples=experimenter.n_neighbors // 2)
-        ravel_1 = np.reshape(np.repeat(experimenter.pre_embeddings[:, np.newaxis, :], n_neighbors//2, 1), (-1, 2))
-        ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors//2])]
+        #                                 eps=np.mean(stream_dataset.get_knn_dists()[:, :n_neighbors // 2]),
+        #                                 min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
+
+        ravel_1 = np.reshape(np.repeat(experimenter.pre_embeddings[:, np.newaxis, :], n_neighbors // 2, 1), (-1, 2))
+        ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors // 2])]
         embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
-        print("eps:", embedding_nn_dist)
         rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
             KeyPointsGenerator.generate(experimenter.pre_embeddings, 0, method=KeyPointsGenerator.DBSCAN,
-                                        min_num=REP_NUM, eps=embedding_nn_dist, min_samples=experimenter.n_neighbors,
-                                        batch_whole=BATCH_WHOLE)
+                                        min_num=REP_NUM, batch_whole=BATCH_WHOLE, eps=embedding_nn_dist,
+                                        min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
+
+        # representations = experimenter.cal_lower_representations(total_data[fitted_indices])
+        # ravel_1 = np.reshape(np.repeat(representations[:, np.newaxis, :], n_neighbors // 2, 1),
+        #                      (-1, representations.shape[1]))
+        # ravel_2 = representations[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors // 2])]
+        # rep_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
+        # KeyPointsGenerator.generate(representations, 0, method=KeyPointsGenerator.DBSCAN,
+        #                             min_num=REP_NUM, batch_whole=BATCH_WHOLE, eps=rep_nn_dist,
+        #                             min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
 
         if not BATCH_WHOLE:
             rep_batch_nums = 1
@@ -167,7 +176,7 @@ def incremental_cdr_pipeline():
             exclude_indices = [exclude_indices]
             # 2.将代表点数据作为候选负例兼容到模型的增量训练中，每次都需要计算代表性数据的嵌入
             rep_old_embeddings = [experimenter.acquire_latent_code_allin(torch.tensor(rep_old_data, dtype=torch.float)
-                                                                        .to(device), device)]
+                                                                         .to(device), device)]
 
             # x = rep_old_embeddings[0][:, 0]
             # y = rep_old_embeddings[0][:, 1]
@@ -193,10 +202,9 @@ def incremental_cdr_pipeline():
                 rep_old_data.append(total_data[fitted_indices][item])
                 rep_old_embeddings.append(experimenter.pre_embeddings[item])
 
-        print("cluster num:", len(cluster_indices[0]))
-        print("Distribution_1:", [len(item) for item in cluster_indices[0]])
-        print()
-        print("Exclude:", [len(item) for item in exclude_indices[0]])
+        # print("cluster num:", len(cluster_indices[0]))
+        # print("Distribution_1:", [len(item) for item in cluster_indices[0]])
+        # print("Exclude:", [len(item) for item in exclude_indices[0]])
 
         # 更新数据集状态
         cur_batch_data = total_data[batch_indices[i]]
@@ -250,7 +258,8 @@ def incremental_cdr_pipeline():
         print()
 
 
-def evaluate(cost_time, experimenter, metric_tool, embeddings, labels, eval_indices=None, pre_embeddings=None, record=True):
+def evaluate(cost_time, experimenter, metric_tool, embeddings, labels, eval_indices=None, pre_embeddings=None,
+             record=True):
     if pre_embeddings is not None:
         assert eval_indices is not None
         movements = np.mean(np.linalg.norm(embeddings[eval_indices] - pre_embeddings, axis=1))
@@ -266,8 +275,9 @@ def evaluate(cost_time, experimenter, metric_tool, embeddings, labels, eval_indi
 
     if record:
         output_template = "Movements: %.4f Neighbor Hit: %.4f kNN(%d): " \
-                          "%.4f Trust: %.4f Cont: %.4f SC: %.4f Time: %.2f" % (movements, neighbor_hit, k, knn_ca, trust,
-                                                                               cont, sc, cost_time)
+                          "%.4f Trust: %.4f Cont: %.4f SC: %.4f Time: %.2f" % (
+                          movements, neighbor_hit, k, knn_ca, trust,
+                          cont, sc, cost_time)
         if experimenter.tmp_log_file is None:
             experimenter.tmp_log_file = open(experimenter.tmp_log_path, "w")
         experimenter.tmp_log_file.write(output_template + "\n")

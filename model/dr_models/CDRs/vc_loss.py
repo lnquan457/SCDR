@@ -51,7 +51,7 @@ def _with_pearson_and_spearman_corr(cur_embeddings, pre_embeddings, cluster_indi
 def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, exclude_indices, pre_pairwise_dists=None):
     cluster_num = len(cluster_indices)
     inner_dist_change = torch.zeros(cluster_num)
-    intra_dist_change = torch.zeros(cluster_num)
+    # intra_dist_change = torch.zeros(cluster_num)
     intra_spearman_corr = torch.zeros(cluster_num)
 
     cur_pairwise_dists = torch.cdist(cur_embeddings, cur_embeddings)
@@ -62,8 +62,8 @@ def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, 
         inner_dist_change[i] = torch.mean(torch.norm(cur_pairwise_dists[item][:, item] -
                                                      pre_pairwise_dists[item][:, item], dim=-1))
 
-        intra_dist_change[i] = torch.mean(torch.norm(cur_pairwise_dists[item][:, other_cluster_indices] -
-                                                     pre_pairwise_dists[item][:, other_cluster_indices], dim=-1))
+        # intra_dist_change[i] = torch.mean(torch.norm(cur_pairwise_dists[item][:, other_cluster_indices] -
+        #                                              pre_pairwise_dists[item][:, other_cluster_indices], dim=-1))
 
         intra_spearman_corr[i] = compute_rank_correlation(cur_pairwise_dists[item][:, other_cluster_indices],
                                                           pre_pairwise_dists[item][:, other_cluster_indices])

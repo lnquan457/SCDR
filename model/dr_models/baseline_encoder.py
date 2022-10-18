@@ -25,7 +25,8 @@ class ConvEncoder(nn.Module):
     def __init__(self, input_size, in_channels=1, hidden_dims=None):
         super(ConvEncoder, self).__init__()
         if hidden_dims is None:
-            hidden_dims = [64, 128, 256, 512]
+            # hidden_dims = [64, 128, 256, 512]
+            hidden_dims = [512, 256, 128, 64]
         self.hidden_dims = hidden_dims
         self.input_size = input_size
         self.in_channels = in_channels
@@ -33,7 +34,6 @@ class ConvEncoder(nn.Module):
         for h_dim in self.hidden_dims:
             modules.append(nn.Sequential(
                 nn.Conv2d(in_channels, h_dim, kernel_size=3, stride=2, padding=1),
-                nn.BatchNorm2d(h_dim),
                 nn.ReLU()
             ))
             in_channels = h_dim
@@ -53,11 +53,7 @@ class FCEncoder(nn.Module):
         nn.Module.__init__(self)
 
         if hidden_dims is None:
-            # hidden_dims = [128, 256, 256, 512]
             hidden_dims = [512, 256, 256, 128]
-            # hidden_dims = [512, 256, 256]
-            # hidden_dims = [256, 128, 64, 32]
-            # hidden_dims = [256, 128, 64]
 
         self.hidden_dims = hidden_dims
         modules = []
@@ -66,7 +62,6 @@ class FCEncoder(nn.Module):
         for dim in hidden_dims:
             modules.append(nn.Sequential(
                 nn.Linear(in_dim, dim),
-                # nn.BatchNorm1d(dim),
                 nn.ReLU()
             ))
             in_dim = dim

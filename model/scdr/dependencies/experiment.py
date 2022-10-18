@@ -2,6 +2,8 @@
 # -*- coding:utf-8 -*-
 import time
 
+import torch
+
 from model.dr_models.ModelSets import *
 import pandas as pd
 import math
@@ -456,6 +458,21 @@ class Experiment:
             data = data / 255.
         embeddings = self.acquire_latent_code_allin(data, self.device)
         return embeddings
+
+    def cal_lower_representations(self, data):
+        if not isinstance(data, torch.Tensor):
+            data = torch.tensor(data, dtype=torch.float).to(self.device)
+        if self.is_image:
+            data = data / 255.
+
+        with torch.no_grad():
+            self.model.eval()
+
+            representations = self.model.acquire_representations(data)
+            self.model.train()
+
+            representations = representations.cpu().numpy()
+        return representations
 
     def visualize(self, vis_save_path=None, device="cuda"):
         # InfoLogger.info("Start Visualization")

@@ -240,12 +240,14 @@ class IncrementalCDREx(SCDRTrainer):
                                                  rep_old_embeddings, self._pre_rep_old_embeddings[idx],
                                                  self.rep_cluster_indices[idx], self.rep_exclude_indices[idx],
                                                  self._rep_embeddings_pw_dists[idx])
+            self.incremental_steps += 1
         else:
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning)
 
+        sta = time.time()
         train_loss.backward()
-        self.incremental_steps += 1
         self.optimizer.step()
+        # print("optimization:", time.time() - sta)
         return train_loss
 
     def build_dataset(self, *args):

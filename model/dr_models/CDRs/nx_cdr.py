@@ -105,6 +105,10 @@ class NxCDRModel(Module):
         reps, embeddings = self.encode(inputs)
         return embeddings
 
+    def acquire_representations(self, inputs):
+        reps, embeddings = self.encode(inputs)
+        return reps
+
     # 未约束项和约束项进行加权损失
     def compute_loss(self, x_embeddings, x_sim_embeddings, *args):
         # 构建普通未加约束情况下的logits项

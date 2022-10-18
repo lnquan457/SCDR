@@ -61,9 +61,14 @@ class KeyPointsGenerator:
         n_samples = data.shape[0]
         eps = kwargs['eps']
         min_samples = kwargs["min_samples"]
+        sta = time.time()
         dbs = DBSCAN(eps, min_samples=min_samples)
         dbs.fit(data)
+        # print("cost time:", time.time() - sta)
         key_data_num = max(int(n_samples * key_rate), min_num)
+
+        cal_cluster_acc(dbs.labels_, kwargs["labels"])
+
         if not batch_whole:
             return KeyPointsGenerator._sample_in_each_cluster(data, dbs.labels_, key_data_num, None, prob, is_random)
         else:
@@ -346,3 +351,44 @@ class StreamingDataRepo:
                     self.total_label = np.concatenate([self.total_label, labels])
                 else:
                     self.total_label = np.append(self.total_label, labels)
+
+
+def cal_cluster_acc(cluster_labels, gt_labels):
+    n_samples = len(gt_labels)
+    labels_maps = []
+    labels_counts = []
+    unique_cluster_labels = np.unique(cluster_labels)
+    for idx, item in enumerate(unique_cluster_labels):
+        if item < 0:
+            labels_maps.append(-1)
+            labels_counts.append(0)
+            continue
+
+        cur_indices = np.argwhere(cluster_labels == item).squeeze()
+        cur_u_labels, cur_u_counts = np.unique(gt_labels[cur_indices], return_counts=True)
+        cur_gt_idx = int(np.argmax(cur_u_counts).squeeze())
+
+        true_label = cur_u_labels[cur_gt_idx]
+        if true_label in labels_maps:
+            i = labels_maps.index(true_label)
+            if labels_counts[i] < cur_u_counts[cur_gt_idx]:
+                labels_maps[i] = -1
+                labels_maps.append(true_label)
+                labels_counts.append(cur_u_counts[cur_gt_idx])
+            else:
+                labels_maps.append(-1)
+                labels_counts.append(cur_u_counts[cur_gt_idx])
+        else:
+            labels_maps.append(true_label)
+            labels_counts.append(cur_u_counts[cur_gt_idx])
+
+    # print(labels_maps)
+    # print(labels_counts)
+
+    acc_num = 0
+    for i in range(len(labels_maps)):
+        if labels_maps[i] < 0:
+            continue
+        acc_num += labels_counts[i]
+
+    print("clustering acc:", acc_num/n_samples)
