@@ -34,10 +34,40 @@ def dists_loss(center_embedding, neighbor_embeddings):
     return np.mean(cur_dist)
 
 
-def umap_loss(center_embedding, neighbor_embeddings, high_sims, a, b):
+def optimize_single(center_embedding, neighbors_embeddings, target_sims, a, b):
+    res = scipy.optimize.minimize(umap_loss_single, center_embedding, method="BFGS",
+                                  args=(neighbors_embeddings, target_sims, a, b),
+                                  options={'gtol': 1e-6, 'disp': False, 'return_all': False})
+    return res.x
+
+
+def optimize_multiple(optimize_indices, knn_indices, total_embeddings, target_sims, a, b):
+    n_neighbors = knn_indices.shape[1]
+    changed_knn_indices = knn_indices[optimize_indices]
+    neighbor_embeddings = np.reshape(total_embeddings[np.ravel(changed_knn_indices)],
+                                     (len(optimize_indices), n_neighbors, -1))
+    updated_embedding = optimize_oneway_neighbors(total_embeddings[optimize_indices],
+                                                  neighbor_embeddings, target_sims[optimize_indices], a, b)
+    return updated_embedding
+
+
+def optimize_oneway_neighbors(center_embeddings, neighbor_embeddings, target_sims, a, b):
+    n_samples = center_embeddings.shape[0]
+    updated_embeddings = np.empty((n_samples, center_embeddings.shape[-1]))
+    for i in range(n_samples):
+        updated_embeddings[i] = optimize_single(center_embeddings[i], neighbor_embeddings[i], target_sims[i], a, b)
+
+    return updated_embeddings
+
+
+def umap_loss_single(center_embedding, neighbor_embeddings, high_sims, a, b):
     cur_dist = np.linalg.norm(center_embedding - neighbor_embeddings, axis=-1)
     low_sims = convert_distance_to_probability(cur_dist, a, b)
+    # print("high sims:", high_sims)
+    # print("low sims:", low_sims)
     loss = np.sum(-(high_sims * np.log(low_sims) + (1 - high_sims) * np.log(1 - low_sims)))
+    # loss = np.sum(np.square(high_sims - low_sims))
+    # print("loss:", loss)
     return loss
 
 
@@ -97,9 +127,6 @@ def incremental_cdr_pipeline():
     fitted_indices = batch_indices[0]
     total_neighbor_cover_list = [[], []]
     total_avg_rank_list = [[], []]
-    before_embedding = []
-    after_embedding = []
-    changed_indices = []
     before_t_list = []
     after_t_list = []
 
@@ -111,6 +138,7 @@ def incremental_cdr_pipeline():
 
         for j in range(cur_batch_num):
             cur_data_idx = batch_indices[i][j]
+            cur_data_seq_idx = experimenter.pre_embeddings.shape[0]
             cur_data = cur_batch_data[j][np.newaxis, :]
             cur_label = total_labels[cur_data_idx]
             cur_embedding = experimenter.cal_lower_embeddings(cur_data)[np.newaxis, :]
@@ -145,23 +173,38 @@ def incremental_cdr_pipeline():
             if not dis_change:
                 final_embedding = cur_embedding
             else:
-                changed_indices.append(len(fitted_indices))
-                before_embedding.append(cur_embedding)
-
                 cur_neighbor_embeddings = experimenter.pre_embeddings[knn_indices[0]]
                 neighbor_sims = stream_dataset.raw_knn_weights[-1]
                 normed_neighbor_sims = neighbor_sims / np.sum(neighbor_sims)
-                # cur_initial_embedding = cur_embedding
-                cur_initial_embedding = np.sum(normed_neighbor_sims[:, np.newaxis] * cur_neighbor_embeddings, axis=0)
-                # 这里还是需要计算数据到高维邻居的相似度
-                # res = bfgs_optimize(cur_initial_embedding, umap_loss, experimenter.pre_embeddings[knn_indices[0]],
-                #                     neighbor_sims, a, b)
-                res = scipy.optimize.minimize(dists_loss, cur_initial_embedding, method="BFGS",
-                                              args=(experimenter.pre_embeddings[knn_indices[0]]),
-                                              options={'gtol': 1e-6, 'disp': False})
+                cur_initial_embedding = np.sum(normed_neighbor_sims[:, np.newaxis] *
+                                               cur_neighbor_embeddings, axis=0)[np.newaxis, :]
 
-                final_embedding = res.x[np.newaxis, :]
-                after_embedding.append(final_embedding)
+                # ====================================1. 只对新数据本身的嵌入进行更新=======================================
+                final_embedding = optimize_single(cur_initial_embedding, cur_neighbor_embeddings, neighbor_sims, a, b)
+                final_embedding = final_embedding[np.newaxis, :]
+                # =====================================================================================================
+
+                # ====================================2. 对新数据及其邻居点的嵌入进行更新====================================
+                tmp_total_embeddings = np.concatenate([experimenter.pre_embeddings, cur_initial_embedding], axis=0)
+                # 注意！并不是所有邻居点都跟他互相是邻居！
+                if OPTIMIZE_SHARED_NEIGHBORS:
+                    shared_neighbor_indices = stream_dataset.get_pre_neighbor_changed_positions(-1)[0]
+                    if len(shared_neighbor_indices) > 0:
+                        updated_embeddings = optimize_multiple(shared_neighbor_indices, stream_dataset.get_knn_indices(),
+                                                               tmp_total_embeddings, stream_dataset.raw_knn_weights, a, b)
+                        experimenter.pre_embeddings[shared_neighbor_indices] = updated_embeddings
+                # ======================================================================================================
+
+                # ====================================3. 对新数据、新数据的邻居以及将新数据视为邻居的点的嵌入进行更新============
+                # 需要在2的基础上再对另一批嵌入进行更新
+                if OPTIMIZE_ONEWAY_NEIGHBORS:
+                    neighbor_changed_indices = np.setdiff1d(stream_dataset.cur_neighbor_changed_indices,
+                                                            np.append(knn_indices[0], cur_data_seq_idx))
+                    if len(neighbor_changed_indices) > 0:
+                        updated_embeddings = optimize_multiple(neighbor_changed_indices, stream_dataset.get_knn_indices(),
+                                                               tmp_total_embeddings, stream_dataset.raw_knn_weights, a, b)
+                        experimenter.pre_embeddings[neighbor_changed_indices] = updated_embeddings
+                # =====================================================================================================
 
                 after_low_knn_indices, after_low_knn_dists = \
                     query_knn(final_embedding, np.concatenate([experimenter.pre_embeddings, final_embedding], axis=0),
@@ -204,6 +247,8 @@ if __name__ == '__main__':
         METHOD_NAME = "LwF_CDR"
         CONFIG_PATH = "configs/ParallelSCDR.yaml"
 
+        OPTIMIZE_SHARED_NEIGHBORS = False
+        OPTIMIZE_ONEWAY_NEIGHBORS = False
         MIN_DIST = 0.1
         INITIAL_EPOCHS = 100
         RESUME_EPOCH = 50
