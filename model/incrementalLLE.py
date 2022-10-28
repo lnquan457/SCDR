@@ -14,7 +14,7 @@ from model.incrementalLE import kNNBasedIncrementalMethods
 
 
 class IncrementalLLE(LocallyLinearEmbedding, kNNBasedIncrementalMethods):
-    def __init__(self, train_num, n_components, n_neighbors, iter_num=100):
+    def __init__(self, train_num, n_components, n_neighbors, iter_num=50):
         LocallyLinearEmbedding.__init__(self, n_neighbors=n_neighbors, n_components=n_components)
         kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors)
         self.weight_matrix = None
@@ -128,11 +128,11 @@ class IncrementalLLE(LocallyLinearEmbedding, kNNBasedIncrementalMethods):
 
 
 if __name__ == '__main__':
-    with h5py.File("../../../Data/H5 Data/wethers.h5", "r") as hf:
+    with h5py.File("../../../Data/H5 Data/Anuran Calls_10c.h5", "r") as hf:
         X = np.array(hf['x'])
         Y = np.array(hf['y'])
 
-    train_num = 400
+    train_num = 2000
     train_data = X[:train_num]
     train_labels = Y[:train_num]
 
@@ -141,7 +141,7 @@ if __name__ == '__main__':
     first_embeddings = ile.fit_new_data(train_data)
     position_vis(train_labels, None, first_embeddings, "first")
 
-    second_embeddings = ile.fit_new_data(X[train_num:train_num + 400])
-    position_vis(Y[train_num:train_num + 400], None, second_embeddings[train_num:], "second new")
+    second_embeddings = ile.fit_new_data(X[train_num:train_num + 1000])
+    position_vis(Y[train_num:train_num + 1000], None, second_embeddings[train_num:], "second new")
     position_vis(train_labels, None, second_embeddings[:train_num], "second pre")
-    position_vis(Y[:train_num + 400], None, second_embeddings, "second whole")
+    position_vis(Y[:train_num + 1000], None, second_embeddings, "second whole")

@@ -187,6 +187,11 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # 没有重新计算邻居点相似点的数据下标
         self.cached_neighbor_change_indices = []
         self.cur_neighbor_changed_indices = None
+        self.replaced_raw_weights_s = None
+        self.replaced_raw_weights_o = None
+
+    def get_replaced_raw_weights(self, shared):
+        return self.replaced_raw_weights_s if shared else self.replaced_raw_weights_o
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
                          pairwise_cache_path=None, is_image=True, data_file_path=None,
@@ -272,10 +277,18 @@ class StreamingDatasetWrapper(DataSetWrapper):
         neighbor_changed_indices = self.kNN_manager.update_previous_kNN(new_n_samples, pre_n_samples, dists,
                                                                         data_num_list, neighbor_changed_indices)
 
-        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.zeros((new_n_samples, self.n_neighbor))],
+        shared_neighbor_meta, oneway_neighbor_meta = self.get_pre_neighbor_changed_positions(-1)
+        if len(shared_neighbor_meta) > 0:
+            shared_neighbor_sims = self.raw_knn_weights[shared_neighbor_meta[:, 0]]
+            self.replaced_raw_weights_s = shared_neighbor_sims[:, -1] / np.sum(shared_neighbor_sims, axis=1)
+        if len(oneway_neighbor_meta) > 0:
+            oneway_neighbor_sims = self.raw_knn_weights[oneway_neighbor_meta[:, 0]]
+            self.replaced_raw_weights_o = oneway_neighbor_sims[:, -1] / np.sum(oneway_neighbor_sims, axis=1)
+
+        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((new_n_samples, self.n_neighbor))],
                                               axis=0)
-        self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.empty(shape=new_n_samples)])
-        self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.empty(shape=new_n_samples)])
+        self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(shape=new_n_samples)])
+        self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(shape=new_n_samples)])
 
         if update_similarity:
             # sta = time.time()
@@ -301,6 +314,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         self.symmetric_nn_weights[self.cached_neighbor_change_indices] = updated_symm_nn_weights
         self.symmetric_nn_indices[self.cached_neighbor_change_indices] = updated_sym_nn_indices
+        self.cached_neighbor_change_indices = []
 
     def get_pre_neighbor_changed_positions(self, idx=None):
         return self.kNN_manager.get_pre_neighbor_changed_positions(idx)
@@ -312,18 +326,19 @@ class KNNManager:
         self.k = k
         self.knn_indices = None
         self.knn_dists = None
-        # 分别表示新数据在与新数据互为kNN和单向kNN的数据点的kNN中的位置
-        self._pre_neighbor_changed_position = [[], []]
-        self._shared_neighbor_indices = []
+        # 分别表示新数据在与新数据互为kNN和单向kNN的数据点的kNN中的位置，每个list里面是一个三元组，
+        # 分别表示kNN发生变化的数据下标、新数据插入的位置、以及被替换数据的下标
+        self._s_pre_neighbor_changed_meta = []
+        self._o_pre_neighbor_changed_meta = []
 
     def is_empty(self):
         return self.knn_indices is None
 
     def get_pre_neighbor_changed_positions(self, idx=None):
         if idx is None:
-            return self._shared_neighbor_indices, self._pre_neighbor_changed_position
+            return self._s_pre_neighbor_changed_meta, self._o_pre_neighbor_changed_meta
 
-        return self._shared_neighbor_indices[idx], self._pre_neighbor_changed_position[0][idx], self._pre_neighbor_changed_position[1][idx]
+        return self._s_pre_neighbor_changed_meta[idx], self._o_pre_neighbor_changed_meta[idx]
 
     def add_new_kNN(self, new_knn_indices, new_knn_dists):
         if self.knn_indices is None:
@@ -338,8 +353,8 @@ class KNNManager:
 
     def update_previous_kNN(self, new_data_num, pre_n_samples, dists2pre_data, data_num_list=None,
                             neighbor_changed_indices=None, symm=True):
-        self._pre_neighbor_changed_position = [[], []]
-        self._shared_neighbor_indices = []
+        self._s_pre_neighbor_changed_meta = []
+        self._o_pre_neighbor_changed_meta = []
         farest_neighbor_dist = self.knn_dists[:, -1]
 
         if neighbor_changed_indices is None:
@@ -349,7 +364,6 @@ class KNNManager:
         for i in range(new_data_num):
             cur_knn_indices = self.knn_indices[-new_data_num+i]
             tmp_neighbor_changed_position = [[], []]
-            tmp_shared_neighbor_indices = []
             indices = np.where(dists2pre_data[i] < farest_neighbor_dist)[0]
             flag = True
 
@@ -375,16 +389,16 @@ class KNNManager:
                         neighbor_changed_indices.append(self.knn_indices[j][-1])
 
                     pos = 0 if j in cur_knn_indices else 1
-                    tmp_neighbor_changed_position[pos].append(insert_index + 1)
-                    if pos == 0:
-                        tmp_shared_neighbor_indices.append(j)
+                    tmp_neighbor_changed_position[pos].append([j, insert_index + 1, self.knn_indices[j][-1]])
                     # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
                     arr_move_one(self.knn_dists[j], insert_index + 1, dists2pre_data[i][j])
                     arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
 
-            self._pre_neighbor_changed_position[0].append(tmp_neighbor_changed_position[0])
-            self._pre_neighbor_changed_position[1].append(tmp_neighbor_changed_position[1])
-            self._shared_neighbor_indices.append(tmp_shared_neighbor_indices)
+            self._s_pre_neighbor_changed_meta.append(tmp_neighbor_changed_position[0])
+            self._o_pre_neighbor_changed_meta.append(tmp_neighbor_changed_position[1])
+
+        # self._s_pre_neighbor_changed_meta = np.array(self._s_pre_neighbor_changed_meta, dtype=int)
+        # self._o_pre_neighbor_changed_meta = np.array(self._o_pre_neighbor_changed_meta, dtype=int)
 
         return neighbor_changed_indices
 

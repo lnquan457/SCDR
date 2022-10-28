@@ -195,7 +195,7 @@ if __name__ == '__main__':
         X = np.array(hf['x'])
         Y = np.array(hf['y'])
 
-    train_num = 1000
+    train_num = 2000
     train_data = X[:train_num]
     train_labels = Y[:train_num]
 
