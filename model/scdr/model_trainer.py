@@ -45,7 +45,7 @@ class SCDRTrainer(CDRsExperiments):
         self.result_save_dir_modified = True
         self.do_test = False
         self.do_vis = False
-        self.save_model = False
+        self.save_model = True
         self.save_final_embeddings = False
         self.draw_loss = False
         self.print_time_info = False

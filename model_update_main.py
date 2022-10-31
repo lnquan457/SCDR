@@ -106,7 +106,7 @@ class IndicesGenerator:
             initial_batch_indices.extend(fit_indices)
         batch_indices = [initial_batch_indices]
         avg_left_num = len(left_indices) // (total_manifold_num - initial_manifold_num)
-        np.random.shuffle(left_indices)
+        # np.random.shuffle(left_indices)
 
         for i in range(initial_manifold_num, total_manifold_num):
             indices = np.argwhere(self.total_labels == self.cls[i]).squeeze()

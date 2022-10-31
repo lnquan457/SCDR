@@ -13,7 +13,7 @@ from model.scdr.model_trainer import IncrementalCDREx
 from model_update_main import IndicesGenerator, query_knn
 from utils.common_utils import time_stamp_to_date_time_adjoin, get_config
 from utils.constant_pool import ConfigInfo
-from utils.metrics_tool import Metric
+from utils.metrics_tool import Metric, knn_score
 from sklearn.manifold import TSNE
 from utils.umap_utils import find_ab_params, convert_distance_to_probability
 from scipy import optimize
@@ -21,7 +21,7 @@ from scipy import optimize
 device = "cuda:0"
 
 
-def trust(high_nn_indices, high_knn_indices, low_knn_indices, k):
+def trust_single(high_nn_indices, high_knn_indices, low_knn_indices, k):
     U = np.setdiff1d(low_knn_indices, high_knn_indices)
     N, n = high_nn_indices.shape
     sum_j = 0
@@ -29,6 +29,21 @@ def trust(high_nn_indices, high_knn_indices, low_knn_indices, k):
         high_rank = np.where(high_nn_indices.squeeze() == U[j])[0][0]
         sum_j += high_rank - k
     return 1 - (2 / (N * k * (2 * n - 3 * k - 1)) * sum_j)
+
+
+def cont_single(low_nn_indices, high_knn_indices, low_knn_indices, k):
+    V = np.setdiff1d(high_knn_indices, low_knn_indices)
+    N, n = low_nn_indices.shape
+    sum_j = 0
+    for j in range(V.shape[0]):
+        low_rank = np.where(low_nn_indices.squeeze() == V[j])[0][0]
+        sum_j += low_rank - k
+    return 1 - (2 / (N * k * (2 * n - 3 * k - 1)) * sum_j)
+
+
+def neighbor_hit_single(labels, gt_label, low_knn_indices):
+    pred_labels = labels[low_knn_indices]
+    return np.sum(pred_labels == gt_label) / low_knn_indices.shape[1]
 
 
 def dists_loss(center_embedding, neighbor_embeddings):
@@ -65,15 +80,6 @@ def optimize_multiple(optimize_indices, knn_indices, total_embeddings, target_si
     # back = replaced_sims[:, np.newaxis] * total_embeddings[replaced_neighbor_indices]
     # updated_embedding = total_embeddings[optimize_indices] + move - back
     return updated_embedding
-
-
-def optimize_oneway_neighbors(center_embeddings, neighbor_embeddings, target_sims, a, b):
-    n_samples = center_embeddings.shape[0]
-    updated_embeddings = np.empty((n_samples, center_embeddings.shape[-1]))
-    for i in range(n_samples):
-        updated_embeddings[i] = optimize_single(center_embeddings[i], neighbor_embeddings[i], target_sims[i], a, b)
-
-    return updated_embeddings
 
 
 def umap_loss_single(center_embedding, neighbor_embeddings, high_sims, a, b):
@@ -135,7 +141,9 @@ def incremental_cdr_pipeline():
     fitted_manifolds = set(np.unique(initial_labels))
     stream_dataset = StreamingDatasetWrapper(initial_data, initial_labels, experimenter.batch_size,
                                              experimenter.n_neighbors)
-    initial_embeddings = experimenter.first_train(stream_dataset, INITIAL_EPOCHS)
+    ckpt_path = r"results\embedding_ex\comparison_ex\only_model\initial\CDR_100.pth.tar"
+    # ckpt_path = None
+    initial_embeddings = experimenter.first_train(stream_dataset, INITIAL_EPOCHS, ckpt_path)
     position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "0.jpg"), initial_embeddings,
                  title="Initial Embeddings")
 
@@ -147,11 +155,15 @@ def incremental_cdr_pipeline():
     after_t_list = []
     before_c_list = []
     after_c_list = []
+    before_nh_list = []
+    after_nh_list = []
+
     self_optimize_time = 0
     s_neighbor_time = 0
     o_neighbor_time = 0
     knn_update_time = 0
     eval_time = 0
+    # print(batch_indices)
 
     for i in range(1, n_step):
         cur_batch_data = total_data[batch_indices[i]]
@@ -169,11 +181,9 @@ def incremental_cdr_pipeline():
             knn_indices, knn_dists, sort_indices = \
                 query_knn(cur_data, np.concatenate([stream_dataset.total_data, cur_data], axis=0), k=K,
                           return_indices=True)
-            low_knn_indices, low_knn_dists = query_knn(cur_embedding, np.concatenate([experimenter.pre_embeddings,
-                                                                                      cur_embedding], axis=0), k=K)
-            before_mean_dist = np.mean(low_knn_dists)
 
-            neighbor_cover = len(np.intersect1d(knn_indices[0], low_knn_indices[0])) / n_neighbors
+            # before_mean_dist = np.mean(low_knn_dists)
+
             # 比较简单高效的方法就是直接基于neighbor cover来判断，低于之前的均值-sigma就使用插值法来确定初始嵌入
             dis_change = int(cur_label) not in fitted_manifolds
             # dis_change = neighbor_cover < 0.21 - 0.14   # mean - alpha * std
@@ -185,10 +195,8 @@ def incremental_cdr_pipeline():
             #     tmp_idx = int(np.argwhere(sort_indices == item).squeeze())
             #     average_rank += tmp_idx
 
-            rec_idx = 1 if dis_change else 0
-            # avg_rank = average_rank / n_neighbors
-            batch_neighbor_cover_list[rec_idx].append(neighbor_cover)
-            batch_avg_rank_list[rec_idx].append(0)
+            # DEBUG
+            # dis_change = False
 
             stream_dataset.add_new_data(cur_data, knn_indices, knn_dists, cur_label)
             sta = time.time()
@@ -196,10 +204,13 @@ def incremental_cdr_pipeline():
             stream_dataset.update_knn_graph(total_data[fitted_indices], cur_data, [0], update_similarity=True)
             knn_update_time += time.time() - sta
 
-            if not dis_change:
-                final_embedding = cur_embedding
-                tmp_total_embeddings = np.concatenate([experimenter.pre_embeddings, cur_embedding], axis=0)
-            else:
+            low_knn_indices, low_knn_dists, low_nn_indices = \
+                query_knn(cur_embedding, np.concatenate([experimenter.pre_embeddings, cur_embedding], axis=0), k=K,
+                          return_indices=True)
+
+            final_embedding = cur_embedding
+
+            if dis_change:
                 cur_neighbor_embeddings = experimenter.pre_embeddings[knn_indices[0]]
                 neighbor_sims = stream_dataset.raw_knn_weights[-1]
                 normed_neighbor_sims = neighbor_sims / np.sum(neighbor_sims)
@@ -207,13 +218,15 @@ def incremental_cdr_pipeline():
                                                cur_neighbor_embeddings, axis=0)[np.newaxis, :]
 
                 # ====================================1. 只对新数据本身的嵌入进行更新=======================================
-                sta = time.time()
-                final_embedding = optimize_single(cur_initial_embedding, cur_neighbor_embeddings, neighbor_sims, a, b)
-                final_embedding = final_embedding[np.newaxis, :]
-                self_optimize_time += time.time() - sta
+                if OPTIMIZE_NEW_DATA_EMBEDDING:
+                    sta = time.time()
+                    final_embedding = optimize_single(cur_initial_embedding, cur_neighbor_embeddings, neighbor_sims, a, b)
+                    final_embedding = final_embedding[np.newaxis, :]
+                    self_optimize_time += time.time() - sta
                 # =====================================================================================================
 
                 # ====================================2. 对新数据及其邻居点的嵌入进行更新====================================
+                # TODO: 无论新数据是否来自新的流形，更新kNN发生变化的旧数据嵌入都是必要的
                 # TODO：对共享邻居和单向邻居的嵌入优化都非常耗时
                 sta = time.time()
                 tmp_total_embeddings = np.concatenate([experimenter.pre_embeddings, cur_initial_embedding], axis=0)
@@ -255,19 +268,27 @@ def incremental_cdr_pipeline():
                         experimenter.pre_embeddings[neighbor_changed_indices] = updated_embeddings
                 o_neighbor_time += time.time() - sta
                 # =====================================================================================================
+            # 之前的一些数据的嵌入位置不再是模型嵌入的了，所以导致计算的kNN也发生了变化，使得kNN不一样。
+            sta = time.time()
+            after_low_knn_indices, after_low_knn_dists, after_low_nn_indices = \
+                query_knn(final_embedding, np.concatenate([experimenter.pre_embeddings, final_embedding], axis=0), k=K, return_indices=True)
+            before_trust = trust_single(sort_indices, knn_indices, low_knn_indices, n_neighbors)
+            after_trust = trust_single(sort_indices, knn_indices, after_low_knn_indices, n_neighbors)
+            before_cont = cont_single(low_nn_indices, knn_indices, low_knn_indices, n_neighbors)
+            after_cont = cont_single(after_low_nn_indices, knn_indices, after_low_knn_indices, n_neighbors)
+            before_nh = neighbor_hit_single(stream_dataset.total_label, cur_label, low_knn_indices)
+            after_nh = neighbor_hit_single(stream_dataset.total_label, cur_label, after_low_knn_indices)
+            # print(before_trust, after_trust)
 
-                sta = time.time()
-                after_low_knn_indices, after_low_knn_dists = \
-                    query_knn(final_embedding, np.concatenate([experimenter.pre_embeddings, final_embedding], axis=0),
-                              k=K)
-                before_trust = trust(sort_indices, knn_indices, low_knn_indices, n_neighbors)
-                after_trust = trust(sort_indices, knn_indices, after_low_knn_indices, n_neighbors)
-                # print(before_trust, after_trust)
+            rec_idx = 1 if dis_change else 0
+            before_t_list.append(before_trust)
+            after_t_list.append(after_trust)
+            before_c_list.append(before_cont)
+            after_c_list.append(after_cont)
+            before_nh_list.append(before_nh)
+            after_nh_list.append(after_nh)
 
-                before_t_list.append(before_trust)
-                after_t_list.append(after_trust)
-
-                eval_time += time.time() - sta
+            eval_time += time.time() - sta
 
             fitted_indices.append(cur_data_idx)
             experimenter.pre_embeddings = np.concatenate([experimenter.pre_embeddings, final_embedding], axis=0)
@@ -295,10 +316,18 @@ def incremental_cdr_pipeline():
         position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "{}.jpg".format(i)),
                      experimenter.pre_embeddings, title="Step {} Embeddings".format(i))
 
+    metric_tool = Metric(experimenter.dataset_name, stream_dataset.total_data, stream_dataset.total_label, None, None, k=K)
+    total_trust = metric_tool.metric_trustworthiness(K, experimenter.pre_embeddings)
+    total_cont = metric_tool.metric_continuity(K, experimenter.pre_embeddings)
+    total_nh = metric_tool.metric_neighborhood_hit(K, experimenter.pre_embeddings)
+    total_knn = knn_score(experimenter.pre_embeddings, stream_dataset.total_label, K, knn_indices=metric_tool.low_knn_indices)
+
     _print_some("No Change!", total_neighbor_cover_list[0], total_avg_rank_list[0])
     _print_some("Change!", total_neighbor_cover_list[1], total_avg_rank_list[1])
     # TODO：需要对比一下直接使用模型嵌入，和基于牛顿法优化的嵌入质量差异
-    print("Before Trust: %.4f After Trust: %.4f" % (np.mean(before_t_list), np.mean(after_t_list)))
+    print("Before Trust: %.4f Before Cont: %.4f Before NH: %.4f" % (np.mean(before_t_list), np.mean(before_c_list), np.mean(before_nh_list)))
+    print("After Trust: %.4f After Cont: %.4f After NH: %.4f" % (np.mean(after_t_list), np.mean(after_c_list), np.mean(after_nh_list)))
+    print("Total Trust: %.4f Total Cont: %.4f Total NH: %.4f Total kNN: %.4f" % (total_trust, total_cont, total_nh, total_knn))
     print("Eval: %.4f kNN Update: %.4f Self: %.4f Shared: %.4f Oneway: %.4f"
           % (eval_time, knn_update_time, self_optimize_time, s_neighbor_time, o_neighbor_time))
 
@@ -311,8 +340,9 @@ if __name__ == '__main__':
         METHOD_NAME = "LwF_CDR"
         CONFIG_PATH = "configs/ParallelSCDR.yaml"
 
-        OPTIMIZE_SHARED_NEIGHBORS = True
-        OPTIMIZE_ONEWAY_NEIGHBORS = True
+        OPTIMIZE_NEW_DATA_EMBEDDING = True
+        OPTIMIZE_SHARED_NEIGHBORS = False
+        OPTIMIZE_ONEWAY_NEIGHBORS = False
         MIN_DIST = 0.05
         INITIAL_EPOCHS = 100
         K = 10

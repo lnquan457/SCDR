@@ -397,8 +397,8 @@ class KNNManager:
             self._s_pre_neighbor_changed_meta.append(tmp_neighbor_changed_position[0])
             self._o_pre_neighbor_changed_meta.append(tmp_neighbor_changed_position[1])
 
-        # self._s_pre_neighbor_changed_meta = np.array(self._s_pre_neighbor_changed_meta, dtype=int)
-        # self._o_pre_neighbor_changed_meta = np.array(self._o_pre_neighbor_changed_meta, dtype=int)
+        self._s_pre_neighbor_changed_meta = np.array(self._s_pre_neighbor_changed_meta, dtype=int)
+        self._o_pre_neighbor_changed_meta = np.array(self._o_pre_neighbor_changed_meta, dtype=int)
 
         return neighbor_changed_indices
 
