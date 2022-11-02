@@ -243,7 +243,7 @@ def incremental_cdr_pipeline():
 
         stream_dataset.add_new_data(cur_batch_data, knn_indices, knn_dists, total_labels[batch_indices[i]])
 
-        stream_dataset.update_knn_graph(total_data[fitted_indices], total_data[batch_indices[i]],
+        stream_dataset.update_knn_graph(len(total_data[fitted_indices]), total_data[batch_indices[i]],
                                         [0, cur_batch_num])
         experimenter.update_batch_size(cur_batch_num)
         experimenter.update_neg_num(cur_batch_num / 8)

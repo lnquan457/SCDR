@@ -156,14 +156,16 @@ def construct_edge_dataset(
     #     edge_dataset = edge_dataset.prefetch(10)
     # return edge_dataset, batch_size, len(edges_to_exp), head, tail, weight
 
+smooth_t = 0
+member_t = 0
+
 
 def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_weights, update_indices,
-                                 set_op_mix_ratio=1.0, local_connectivity=1.0,
-                                 apply_set_operations=True, symmetric="TSNE", return_dists=None):
+                                 set_op_mix_ratio=1.0, local_connectivity=1.0, apply_set_operations=True,
+                                 symmetric="TSNE", return_dists=None, return_coo_results=True):
     updated_knn_indices = all_knn_indices[update_indices]
     updated_knn_dists = all_knn_dists[update_indices].astype(np.float32)
     n_neighbors = all_knn_indices.shape[1]
-
     # 最耗时的！ 90+%
     # sigmas, rhos = smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
     sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
@@ -173,8 +175,9 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
         updated_knn_indices, updated_knn_dists, sigmas, rhos, return_dists
     )
 
-    cur_updated_knn_weights = vals.reshape(updated_knn_indices.shape)
-    all_raw_knn_weights[update_indices] = cur_updated_knn_weights
+    all_raw_knn_weights[update_indices] = vals.reshape(updated_knn_indices.shape)
+    if not return_coo_results:
+        return None, sigmas, rhos, all_raw_knn_weights
 
     total_n_samples = all_knn_indices.shape[0]
     new_rows = np.ravel(np.repeat(np.expand_dims(np.arange(0, total_n_samples, 1), axis=1), axis=1, repeats=n_neighbors))
@@ -186,10 +189,12 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
     )
     result.eliminate_zeros()
 
+    # TODO：这一段的代码是目前最耗时的
+    # 这一步只在模型更新中是必要的
     if apply_set_operations:
         result = apply_set(all_raw_knn_weights, result, set_op_mix_ratio, symmetric)
-    result.eliminate_zeros()
 
+    result.eliminate_zeros()
     return result, sigmas, rhos, all_raw_knn_weights
 
 
@@ -487,6 +492,7 @@ def compute_local_membership(knn_dist, knn_indices, local_connectivity=1):
     return vals
 
 
+@jit(forceobj=True)
 def simplified_smooth_knn_dist(distances, k, n_iter=64, local_connectivity=1.0, bandwidth=1.0):
     """
     Compute a continuous version of the distance to the kth nearest
@@ -495,7 +501,7 @@ def simplified_smooth_knn_dist(distances, k, n_iter=64, local_connectivity=1.0, 
     computing the distance such that the cardinality of fuzzy set we generate
     is k.
     """
-    target = np.log2(k) * bandwidth
+    target = numpy.log2(k) * bandwidth
     rho = np.zeros(distances.shape[0], dtype=np.float32)
     result = np.zeros(distances.shape[0], dtype=np.float32)
 

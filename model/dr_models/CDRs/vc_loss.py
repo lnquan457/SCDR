@@ -72,5 +72,6 @@ def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, 
     # print("intra dist change:", torch.mean(intra_dist_change).item())
     # print("spearman corr:", torch.mean(intra_spearman_corr).item())
     # return torch.mean(inner_pearson_corr) + torch.mean(intra_spearman_corr)
+    # 约束inner_dist_change的变化可以看作是用于增量学习。但是仅依靠这一点无法保持视觉一致性，所以我们加上了intra_spearman_correlation。
     return torch.mean(inner_dist_change) - torch.mean(intra_spearman_corr)
     # return torch.mean(inner_dist_change)

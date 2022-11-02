@@ -258,7 +258,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.kNN_manager.add_new_kNN(knn_indices, knn_dists)
         self.train_dataset.add_new_data(new_data, new_label)
 
-    def update_knn_graph(self, pre_data, new_data, data_num_list, cut_num=None, update_similarity=True):
+    def update_knn_graph(self, pre_n_samples, new_data, data_num_list, cut_num=None, update_similarity=True, symmetric=True):
         total_data = self.total_data if cut_num is None else self.total_data[:cut_num]
         knn_distances = self.kNN_manager.knn_dists if cut_num is None else self.kNN_manager.knn_dists[:cut_num]
         knn_indices = self.kNN_manager.knn_indices if cut_num is None else self.kNN_manager.knn_indices[:cut_num]
@@ -267,8 +267,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # O(m*n*D)
         dists = cdist(new_data, total_data)
 
-        pre_n_samples = pre_data.shape[0]
-        neighbor_changed_indices = list(np.arange(0, new_n_samples, 1) + pre_n_samples)
+        new_sample_indices = np.arange(new_n_samples) + pre_n_samples
+        neighbor_changed_indices = list(new_sample_indices)
         self.cur_neighbor_changed_indices = neighbor_changed_indices
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
@@ -290,21 +290,26 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(shape=new_n_samples)])
         self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(shape=new_n_samples)])
 
-        if update_similarity:
-            # sta = time.time()
-            umap_graph, sigmas, rhos, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
-                                                                                          self.raw_knn_weights,
-                                                                                          neighbor_changed_indices)
-            # print("fuzzy", time.time() - sta)
-
-            # sta = time.time()
-            updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, neighbor_changed_indices)
-            # print("extract", time.time() - sta)
-
-            self.symmetric_nn_weights[neighbor_changed_indices] = updated_symm_nn_weights
-            self.symmetric_nn_indices[neighbor_changed_indices] = updated_sym_nn_indices
+        if not update_similarity:
+            cur_update_indices = new_sample_indices
         else:
-            self.cached_neighbor_change_indices.extend(neighbor_changed_indices)
+            cur_update_indices = neighbor_changed_indices
+
+        umap_graph, _, _, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
+                                                                              self.raw_knn_weights, cur_update_indices,
+                                                                              apply_set_operations=symmetric,
+                                                                              return_coo_results=symmetric)
+
+        if symmetric:
+            updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, cur_update_indices)
+
+            self.symmetric_nn_weights[cur_update_indices] = updated_symm_nn_weights
+            self.symmetric_nn_indices[cur_update_indices] = updated_sym_nn_indices
+
+        if not update_similarity:
+            self.cached_neighbor_change_indices.extend(np.delete(neighbor_changed_indices, np.arange(new_n_samples)))
+
+        return None
 
     def update_cached_neighbor_similarities(self):
         umap_graph, sigmas, rhos, self.raw_knn_weights = \
@@ -362,7 +367,7 @@ class KNNManager:
 
         tmp_index = 0
         for i in range(new_data_num):
-            cur_knn_indices = self.knn_indices[-new_data_num+i]
+            cur_knn_indices = self.knn_indices[-new_data_num + i]
             tmp_neighbor_changed_position = [[], []]
             indices = np.where(dists2pre_data[i] < farest_neighbor_dist)[0]
             flag = True
