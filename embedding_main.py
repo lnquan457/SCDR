@@ -113,36 +113,36 @@ def optimize_single_nce(center_embedding, neighbors_embeddings, neg_embeddings, 
 
 count = 0
 
+changed_indices = []
+changed_indices_knn_dist_list = np.zeros(shape=2500, dtype=object)
+avg_dist = []
 
-def optimize_multiple(optimize_indices, knn_indices, knn_dists, total_embeddings, target_sims, anchor_position,
-                      replaced_neighbor_indices, replaced_sims, a, b, neg_nums=20, thresh_dists=None):
+
+def optimize_multiple(optimize_indices, knn_indices, total_embeddings, target_sims, anchor_position,
+                      replaced_neighbor_indices, replaced_sims, a, b, local_move_mask, neg_nums=50,
+                      nce_opt_update_thresh=10):
     # 使用BFGS算法进行优化
     neg_indices = random.sample(list(np.arange(total_embeddings.shape[0])), neg_nums)
 
     for i, item in enumerate(optimize_indices):
-        neg_embeddings = total_embeddings[neg_indices]
-        dists2anchor = np.linalg.norm(total_embeddings[item] - total_embeddings[-1])
-
-        if thresh_dists is not None and dists2anchor < thresh_dists:
+        if local_move_mask[i]:
             anchor_sims = target_sims[item, anchor_position[i]] / np.sum(target_sims[item])
-
             back = replaced_sims[i] * (total_embeddings[replaced_neighbor_indices[i]] - total_embeddings[item])
             total_embeddings[item] -= back
 
             move = anchor_sims * (total_embeddings[-1] - total_embeddings[item])
-            # print(move)
             total_embeddings[item] = total_embeddings[item] + move
         else:
+            neg_embeddings = total_embeddings[neg_indices]
             optimized_e = optimize_single_nce(total_embeddings[item][np.newaxis, :], total_embeddings[knn_indices[item]],
                                               neg_embeddings, a, b)
             update_step = optimized_e - total_embeddings[item]
-            thresh = 10
-            update_step[update_step > thresh] = 0
-            update_step[update_step < -thresh] = -0
-            # print("optim diff:", update_step)
+            # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
+            update_step[update_step > nce_opt_update_thresh] = 0
+            update_step[update_step < -nce_opt_update_thresh] = -0
             total_embeddings[item] += update_step
 
-    updated_embedding = total_embeddings[optimize_indices]
+    return total_embeddings[optimize_indices]
 
     # 在局部结构发生变化的方向上进行修正，跟原嵌入比较接近
     # 被替换的都是低相似度的，新数据都是高相似度的，就导致嵌入严重偏向新数据的嵌入方向。
@@ -165,7 +165,23 @@ def optimize_multiple(optimize_indices, knn_indices, knn_dists, total_embeddings
     # updated_embedding = np.sum(neighbor_embeddings * np.repeat(optimize_sims[:, :, np.newaxis],
     #                                                            total_embeddings.shape[1], -1), axis=1)
 
-    return updated_embedding
+    # return updated_embedding
+
+
+def optimize_all_waits(indices, knn_indices, total_embeddings, a, b, neg_num=50, nce_opt_update_thresh=10):
+    neg_indices = random.sample(list(np.arange(total_embeddings.shape[0])), neg_num)
+    for i, item in enumerate(indices):
+        neg_embeddings = total_embeddings[neg_indices]
+        optimized_e = optimize_single_nce(total_embeddings[item][np.newaxis, :],
+                                          total_embeddings[knn_indices[item]],
+                                          neg_embeddings, a, b)
+        update_step = optimized_e - total_embeddings[item]
+        # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
+        update_step[update_step > nce_opt_update_thresh] = 0
+        update_step[update_step < -nce_opt_update_thresh] = -0
+        total_embeddings[item] += update_step
+
+    return total_embeddings[indices]
 
 
 def mae_loss_gard(center_embedding, neighbor_embeddings, high_sims, a, b, sigma=None):
@@ -215,8 +231,7 @@ def huber_loss_gard(center_embedding, neighbor_embeddings, high_sims, a, b, sigm
     return np.mean(grad_per, axis=0)
 
 
-def nce_loss_grad(center_embedding, neighbor_embeddings, neg_embeddings, a, b,
-                  t=0.15):
+def nce_loss_grad(center_embedding, neighbor_embeddings, neg_embeddings, a, b, t=0.15):
     center_embedding = center_embedding[np.newaxis, :]
     neighbor_num = neighbor_embeddings.shape[0]
 
@@ -434,15 +449,20 @@ def incremental_cdr_pipeline():
 
     pre_neighbor_mean_dist = np.mean(stream_dataset.get_knn_dists())
     pre_neighbor_std_dist = np.std(stream_dataset.get_knn_dists())
+    print(pre_neighbor_mean_dist, pre_neighbor_std_dist)
     pre_low_neighbor_embedding_dists = np.linalg.norm(experimenter.pre_embeddings[:, np.newaxis, :] - np.reshape(
-            experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices())],
-            (experimenter.pre_embeddings.shape[0], K, -1)), axis=-1)
+        experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices())],
+        (experimenter.pre_embeddings.shape[0], K, -1)), axis=-1)
     pre_neighbor_embedding_m_dist = np.mean(pre_low_neighbor_embedding_dists)
     pre_neighbor_embedding_s_dist = np.std(pre_low_neighbor_embedding_dists)
     print(pre_neighbor_embedding_m_dist)
     print(pre_neighbor_embedding_s_dist)
     new_changed_num = 0
     old_changed_num = 0
+
+    wait_for_optimize_meta = None
+    total_pre_optimize = 0
+    total_skip_opt = 0
 
     total_sta = time.time()
     for i in range(1, n_step):
@@ -544,66 +564,106 @@ def incremental_cdr_pipeline():
                 # TODO：对共享邻居和单向邻居的嵌入优化都非常耗时
                 sta = time.time()
                 # 注意！并不是所有邻居点都跟他互相是邻居！
-                oneway_neighbor_meta = None
                 if OPTIMIZE_SHARED_NEIGHBORS:
+                    pre_left_wait_meta = None
+                    time_wait_optimized_indices = []
+                    if SKIP_OPT:
+                        if wait_for_optimize_meta is not None:
+                            time_wait_optimized_indices = \
+                                np.where(time.time() - wait_for_optimize_meta[:, 1] >= INTER_THRESH)[0]
+                            if len(time_wait_optimized_indices) > 0:
+                                total_pre_optimize += len(time_wait_optimized_indices)
+                                # print("pre optimize", total_pre_optimize)
+                                experimenter.pre_embeddings[time_wait_optimized_indices] = \
+                                    optimize_all_waits(time_wait_optimized_indices, stream_dataset.get_knn_indices(),
+                                                       np.concatenate([experimenter.pre_embeddings, final_embedding],
+                                                                      axis=0), a, b)
+
                     shared_neighbor_meta, oneway_neighbor_meta = stream_dataset.get_pre_neighbor_changed_positions(-1)
                     shared_neighbor_indices = shared_neighbor_meta[:, 0] if len(shared_neighbor_meta) > 0 else []
-                    if len(shared_neighbor_indices) > 0:
-                        cur_old_changed_num = len(np.where(shared_neighbor_indices < len(initial_labels))[0])
-                        old_changed_num += cur_old_changed_num
-                        new_changed_num += len(shared_neighbor_indices) - cur_old_changed_num
-                        changed_data_avg_knn_dist.extend(
-                            np.mean(stream_dataset.get_knn_dists()[shared_neighbor_indices], axis=1))
+                    replaced_raw_weights_s = stream_dataset.get_replaced_raw_weights(shared=True)
+                    replaced_indices_s = shared_neighbor_meta[:, 2] if len(shared_neighbor_meta) > 0 else []
+                    anchor_position_shared = shared_neighbor_meta[:, 1] if len(shared_neighbor_meta) > 0 else []
 
-                        replaced_raw_weights_s = stream_dataset.get_replaced_raw_weights(shared=True)
-                        replaced_indices_by_s_neighbor = shared_neighbor_meta[:, 2]
-                        anchor_position_shared = shared_neighbor_meta[:, 1]
-                        updated_embeddings = optimize_multiple(shared_neighbor_indices,
-                                                               stream_dataset.get_knn_indices(),
-                                                               stream_dataset.get_knn_dists(),
-                                                               np.concatenate(
-                                                                   [experimenter.pre_embeddings, final_embedding],
-                                                                   axis=0),
-                                                               stream_dataset.raw_knn_weights,
-                                                               anchor_position_shared, replaced_indices_by_s_neighbor,
-                                                               replaced_raw_weights_s, a, b,
-                                                               thresh_dists=pre_neighbor_embedding_m_dist)
-                        experimenter.pre_embeddings[shared_neighbor_indices] = updated_embeddings
+                    oneway_neighbor_indices = np.setdiff1d(oneway_neighbor_meta[:, 0], [cur_data_seq_idx]) \
+                        if len(oneway_neighbor_meta) > 0 else []
+                    replaced_raw_weights_o = stream_dataset.get_replaced_raw_weights(shared=False)
+                    replaced_indices_o = oneway_neighbor_meta[:, 2] if len(oneway_neighbor_indices) > 0 else []
+                    anchor_position_oneway = oneway_neighbor_meta[:, 1] if len(oneway_neighbor_indices) > 0 else []
+
+                    neighbor_changed_indices = np.concatenate([shared_neighbor_indices, oneway_neighbor_indices]).astype(int)
+                    replaced_raw_weights = np.concatenate([replaced_raw_weights_s, replaced_raw_weights_o], axis=0)
+                    replaced_indices = np.concatenate([replaced_indices_s, replaced_indices_o], axis=0)
+                    anchor_positions = np.concatenate([anchor_position_shared, anchor_position_oneway], axis=0)
+
+                    if len(neighbor_changed_indices) > 0:
+                        cur_local_move_thresh = pre_neighbor_embedding_m_dist
+                        cur_local_move_mask = np.linalg.norm(experimenter.pre_embeddings[neighbor_changed_indices] -
+                                                             final_embedding, axis=-1) < cur_local_move_thresh
+
+                        # print("origin:", len(neighbor_changed_indices))
+                        # print("origin opt num:", np.sum(~cur_local_move_mask))
+
+                        cur_optimize_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
+                        cur_optimize_mask = np.mean(stream_dataset.get_knn_dists()[neighbor_changed_indices],
+                                                    axis=1) < cur_optimize_thresh
+                        embedding_update_mask = (cur_local_move_mask + cur_optimize_mask) > 0
+
+                        cur_update_indices = neighbor_changed_indices[embedding_update_mask]
+                        cur_wait_indices = neighbor_changed_indices[~embedding_update_mask]
+
+                        total_skip_opt += len(cur_wait_indices)
+                        # print("wait optimize:", total_skip_opt)
+
+                        neighbor_changed_indices = neighbor_changed_indices[embedding_update_mask]
+                        anchor_positions = anchor_positions[embedding_update_mask].astype(int)
+                        replaced_indices = replaced_indices[embedding_update_mask].astype(int)
+                        replaced_raw_weights = replaced_raw_weights[embedding_update_mask]
+                        cur_local_move_mask = cur_local_move_mask[embedding_update_mask]
+
+                        # print("after:", len(neighbor_changed_indices))
+                        # print("after opt num:", np.sum(~cur_local_move_mask))
+
+                        t_sta = time.time()
+                        updated_embeddings = \
+                            optimize_multiple(neighbor_changed_indices, stream_dataset.get_knn_indices(),
+                                              np.concatenate([experimenter.pre_embeddings, final_embedding], axis=0),
+                                              stream_dataset.raw_knn_weights, anchor_positions,
+                                              replaced_indices, replaced_raw_weights, a, b, cur_local_move_mask)
+                        embedding_concat_time += time.time() - t_sta
+
+                        experimenter.pre_embeddings[neighbor_changed_indices] = updated_embeddings
+
+                        if SKIP_OPT:
+                            if wait_for_optimize_meta is not None:
+                                pre_left_wait_meta_indices = np.setdiff1d(np.arange(wait_for_optimize_meta.shape[0]),
+                                                                          time_wait_optimized_indices)
+                                pre_left_wait_meta = wait_for_optimize_meta[pre_left_wait_meta_indices]
+                                neighbor_wait_optimized_indices, position_1, _ = \
+                                    np.intersect1d(pre_left_wait_meta[:, 0], cur_update_indices, return_indices=True)
+
+                                pre_left_meta_indices = np.setdiff1d(np.arange(len(pre_left_wait_meta_indices)),
+                                                                     position_1)
+                                pre_left_wait_meta = pre_left_wait_meta[pre_left_meta_indices]
+
+                            if pre_left_wait_meta is not None:
+                                if len(pre_left_wait_meta.shape) < 2:
+                                    pre_left_wait_meta = pre_left_wait_meta[np.newaxis, :]
+
+                                cur_wait_indices = np.setdiff1d(cur_wait_indices, pre_left_wait_meta[:, 0])
+                                cur_wait_meta = np.zeros(shape=(len(cur_wait_indices), 2))
+                                cur_wait_meta[:, 0] = cur_wait_indices
+                                cur_wait_meta[:, 1] = time.time()
+
+                                wait_for_optimize_meta = np.concatenate([pre_left_wait_meta, cur_wait_meta], axis=0)
+                            else:
+                                wait_for_optimize_meta = np.zeros(shape=(len(cur_wait_indices), 2))
+                                wait_for_optimize_meta[:, 0] = cur_wait_indices
+                                wait_for_optimize_meta[:, 1] = time.time()
+
                 s_neighbor_time += time.time() - sta
                 # ======================================================================================================
 
-                # ====================================3. 对新数据、新数据的邻居以及将新数据视为邻居的点的嵌入进行更新============
-                # 需要在2的基础上再对另一批嵌入进行更新
-                sta = time.time()
-                if OPTIMIZE_ONEWAY_NEIGHBORS:
-                    if oneway_neighbor_meta is None:
-                        oneway_neighbor_meta = stream_dataset.get_pre_neighbor_changed_positions(-1)[-1]
-
-                    if len(oneway_neighbor_meta) > 0:
-                        neighbor_changed_indices = np.setdiff1d(oneway_neighbor_meta[:, 0], [cur_data_seq_idx])
-
-                        cur_old_changed_num = len(np.where(neighbor_changed_indices < len(initial_labels))[0])
-                        old_changed_num += cur_old_changed_num
-                        new_changed_num += len(neighbor_changed_indices) - cur_old_changed_num
-                        changed_data_avg_knn_dist.extend(
-                            np.mean(stream_dataset.get_knn_dists()[neighbor_changed_indices], axis=1))
-
-                        replaced_indices_by_o_neighbor = oneway_neighbor_meta[:, 2]
-                        replaced_raw_weights_o = stream_dataset.get_replaced_raw_weights(shared=False)
-                        anchor_position_oneway = oneway_neighbor_meta[:, 1]
-                        updated_embeddings = optimize_multiple(neighbor_changed_indices,
-                                                               stream_dataset.get_knn_indices(),
-                                                               stream_dataset.get_knn_dists(),
-                                                               np.concatenate(
-                                                                   [experimenter.pre_embeddings, final_embedding],
-                                                                   axis=0),
-                                                               stream_dataset.raw_knn_weights,
-                                                               anchor_position_oneway, replaced_indices_by_o_neighbor,
-                                                               replaced_raw_weights_o, a, b,
-                                                               thresh_dists=pre_neighbor_embedding_m_dist)
-                        experimenter.pre_embeddings[neighbor_changed_indices] = updated_embeddings
-                o_neighbor_time += time.time() - sta
-                # =====================================================================================================
             # 之前的一些数据的嵌入位置不再是模型嵌入的了，所以导致计算的kNN也发生了变化，使得kNN不一样。
             sta = time.time()
             after_low_knn_indices, after_low_knn_dists, after_low_nn_indices = \
@@ -657,9 +717,23 @@ def incremental_cdr_pipeline():
                      experimenter.pre_embeddings, title="Step {} Embeddings".format(i))
         vis_time += time.time() - sta
 
+    if wait_for_optimize_meta is not None:
+        if len(wait_for_optimize_meta.shape) < 2:
+            left_indices = [int(wait_for_optimize_meta[0])]
+        else:
+            left_indices = wait_for_optimize_meta[:, 0].astype(int)
+        print("left", len(left_indices))
+        experimenter.pre_embeddings[left_indices] = optimize_all_waits(left_indices, stream_dataset.get_knn_indices(),
+                                                                       experimenter.pre_embeddings, a, b)
+
+    sta = time.time()
+    position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "final.jpg"),
+                 experimenter.pre_embeddings, title="Final Embeddings")
+    vis_time += time.time() - sta
+
     # plt.title("Pre Mean: %.4f" % pre_neighbor_mean_dist)
-    plt.violinplot(changed_data_avg_knn_dist, showmeans=True)
-    plt.show()
+    # plt.violinplot(changed_data_avg_knn_dist, showmeans=True)
+    # plt.show()
 
     sta = time.time()
     metric_tool = Metric(experimenter.dataset_name, stream_dataset.total_data, stream_dataset.total_label, None, None,
@@ -705,6 +779,8 @@ if __name__ == '__main__':
         MIN_DIST = 0.1
         INITIAL_EPOCHS = 100
         K = 10
+        INTER_THRESH = 1.0
+        SKIP_OPT = False
 
         cfg = get_config()
         cfg.merge_from_file(CONFIG_PATH)

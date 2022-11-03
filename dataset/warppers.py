@@ -187,8 +187,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # 没有重新计算邻居点相似点的数据下标
         self.cached_neighbor_change_indices = []
         self.cur_neighbor_changed_indices = None
-        self.replaced_raw_weights_s = None
-        self.replaced_raw_weights_o = None
+        self.replaced_raw_weights_s = []
+        self.replaced_raw_weights_o = []
 
     def get_replaced_raw_weights(self, shared):
         return self.replaced_raw_weights_s if shared else self.replaced_raw_weights_o
@@ -273,7 +273,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
-
+        self.replaced_raw_weights_s = []
+        self.replaced_raw_weights_o = []
         neighbor_changed_indices = self.kNN_manager.update_previous_kNN(new_n_samples, pre_n_samples, dists,
                                                                         data_num_list, neighbor_changed_indices)
 
