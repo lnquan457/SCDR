@@ -84,7 +84,9 @@ class LwFCDR(CDRModel):
                                            exclude_indices=exclude_indices, pre_pairwise_dist=pre_embeddings_pw_dists)
         # print("vc loss:", time.time() - sta)
 
+        # TODO: vc_loss的梯度计算和传播较为耗时！
         loss = novel_loss + self.alpha * old_loss + self.beta * vc_loss
+        # loss = novel_loss + self.alpha * old_loss
         return loss
 
     def cal_old_logits(self, x_embeddings, x_sim_embeddings, rep_old_embeddings, novel_logits):

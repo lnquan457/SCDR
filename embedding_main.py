@@ -104,9 +104,10 @@ def optimize_single_umap(center_embedding, neighbors_embeddings, target_sims, a,
 
 def optimize_single_nce(center_embedding, neighbors_embeddings, neg_embeddings, a, b, t=0.15):
     # sta = time.time()
+    # eps参数控制的就是差分近似时候的步长，默认值非常小，是1e-8。这个值越小越快. 可能是因为越小就越容易满足最小误差。
     res = scipy.optimize.minimize(nce_loss_single, center_embedding, method="BFGS", jac=None,
                                   args=(neighbors_embeddings, neg_embeddings, a, b, t),
-                                  options={'gtol': 1e-5, 'disp': False, 'return_all': False})
+                                  options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
     # print("optimize cost:", time.time() - sta)
     return res.x
 

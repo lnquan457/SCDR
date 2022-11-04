@@ -44,8 +44,8 @@ def _with_pearson_and_spearman_corr(cur_embeddings, pre_embeddings, cluster_indi
                                                           pre_pairwise_dists[item][:, other_cluster_indices])
     # print("pearson corr:", torch.mean(inner_pearson_corr).item())
     # print("spearman corr:", torch.mean(intra_spearman_corr).item())
-    # return torch.mean(inner_pearson_corr) + torch.mean(intra_spearman_corr)
-    return torch.mean(inner_pearson_corr)
+    return torch.mean(inner_pearson_corr) + torch.mean(intra_spearman_corr)
+    # return torch.mean(inner_pearson_corr)
 
 
 def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices, exclude_indices, pre_pairwise_dists=None):

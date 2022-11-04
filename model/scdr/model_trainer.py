@@ -29,7 +29,7 @@ class SCDRTrainer(CDRsExperiments):
 
     def update_batch_size(self, data_num):
         # TODO: 如何设置batch size也是需要研究的
-        self.batch_size = max(min(data_num, self.configs.method_params.batch_size), int(data_num / 5))
+        self.batch_size = min(data_num, 1024)
         self.streaming_dataset.batch_size = self.batch_size
         self.model.update_batch_size(int(self.batch_size))
 
@@ -40,7 +40,7 @@ class SCDRTrainer(CDRsExperiments):
     def first_train(self, dataset: StreamingDatasetWrapper, epochs, ckpt_path=None):
         self.preprocess(load_data=False)
         self.initialize_streaming_dataset(dataset)
-        self.update_batch_size(self.first_train_data_num)
+        self.batch_size = self.configs.method_params.batch_size
         self.update_dataloader(epochs)
         self.result_save_dir_modified = True
         self.do_test = False
