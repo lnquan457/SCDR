@@ -50,8 +50,8 @@ class SCDRProcessor(Process):
                 continue
 
             self.data_num_list.append(query_data.shape[0] + self.data_num_list[-1])
-            fitted_embeddings = self.dataset.total_embeddings[:fitted_num]
-            fitted_data = self.dataset.total_data[:fitted_num]
+            fitted_embeddings = self.dataset._total_embeddings[:fitted_num]
+            fitted_data = self.dataset._total_data[:fitted_num]
             sta = time.time()
             nn_indices, nn_dists = self.knn_searcher_approx.search(self.n_neighbors, fitted_embeddings, fitted_data,
                                                                    query_embeddings, query_data, self.unfitted_data)
@@ -89,5 +89,5 @@ class SCDRProcessor(Process):
         self.pre_train_num = self.dataset.get_n_samples()
         self.model_update_queue_set.training_data_queue.put(
             [fitted_data_num, data_num_list, self.pre_train_num,
-             self.dataset.total_embeddings[:pre_n_samples], must_indices])
+             self.dataset._total_embeddings[:pre_n_samples], must_indices])
 

@@ -230,7 +230,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
 
         print("cluster number:", idx)
         for item in cluster_indices:
-            labels = self.stream_dataset.total_label[item]
+            labels = self.stream_dataset._total_label[item]
             cls, counts = np.unique(labels, return_counts=True)
             idx = np.argmax(counts)
             self.cluster_real_cls.append(cls[idx])

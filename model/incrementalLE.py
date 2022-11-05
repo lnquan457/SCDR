@@ -38,7 +38,7 @@ class kNNBasedIncrementalMethods:
 
     def _cal_new_data_kNN(self, new_data, include_self=True):
         new_data_num = new_data.shape[0]
-        dists = cdist(new_data, self.stream_dataset.total_data)
+        dists = cdist(new_data, self.stream_dataset._total_data)
         if include_self:
             knn_indices = np.argsort(dists, axis=1)[:, :self.n_neighbors]
         else:
@@ -64,7 +64,7 @@ class kNNBasedIncrementalMethods:
             if self.stream_dataset.get_n_samples() < self.train_num:
                 return None
             self.trained = True
-            self._first_train(self.stream_dataset.total_data)
+            self._first_train(self.stream_dataset._total_data)
         else:
             self._incremental_embedding(x)
 
@@ -77,7 +77,7 @@ class kNNBasedIncrementalMethods:
             if not self.trained:
                 if self.stream_dataset.get_n_samples() >= self.train_num:
                     self.trained = True
-                    self._first_train(self.stream_dataset.total_data)
+                    self._first_train(self.stream_dataset._total_data)
             else:
                 self._incremental_embedding(item)
 
@@ -162,9 +162,9 @@ class IncrementalLE(SpectralEmbedding, kNNBasedIncrementalMethods):
         pass
 
     def _update_previous_embeddings(self, neighbor_changed_indices):
-        neighbor_changed_data = self.stream_dataset.total_data[neighbor_changed_indices]
+        neighbor_changed_data = self.stream_dataset._total_data[neighbor_changed_indices]
         indices = self.knn_manager.knn_indices[neighbor_changed_indices]
-        weights = barycenter_weights(neighbor_changed_data, self.stream_dataset.total_data, indices)
+        weights = barycenter_weights(neighbor_changed_data, self.stream_dataset._total_data, indices)
 
         for i, idx in enumerate(neighbor_changed_indices):
             self.pre_embeddings[idx] = np.sum(np.expand_dims(weights[i], axis=1) * self.pre_embeddings[indices[i]], axis=0)

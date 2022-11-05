@@ -34,7 +34,7 @@ class SCDRTrainer(CDRsExperiments):
         self.model.update_batch_size(int(self.batch_size))
 
     def initialize_streaming_dataset(self, dataset):
-        self.first_train_data_num = dataset.total_data.shape[0]
+        self.first_train_data_num = dataset._total_data.shape[0]
         self.streaming_dataset = dataset
 
     def first_train(self, dataset: StreamingDatasetWrapper, epochs, ckpt_path=None):
@@ -72,7 +72,7 @@ class SCDRTrainer(CDRsExperiments):
                 multi=self.multi)
         else:
             if sampled_indices is None:
-                sampled_indices = np.arange(0, self.streaming_dataset.total_data.shape[0], 1)
+                sampled_indices = np.arange(0, self.streaming_dataset._total_data.shape[0], 1)
             self.train_loader, self.n_samples = self.streaming_dataset.update_data_loaders(epochs, sampled_indices)
 
     def quantitative_test_all(self, epoch, embedding_data=None, mid_embeddings=None, device='cuda', val=False):

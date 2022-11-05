@@ -7,7 +7,7 @@ from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.neighbors import LocalOutlierFactor
 
-from dataset.warppers import extract_csr
+from dataset.warppers import extract_csr, KNNManager
 from utils.metrics_tool import metric_neighbor_preserve_introduce
 from utils.nn_utils import compute_knn_graph
 from utils.umap_utils import fuzzy_simplicial_set_partial
@@ -319,38 +319,59 @@ class DistributionChangeDetector:
         print("Avg Acc: %.4f Avg Recall: %.4f" % (avg_acc, avg_recall))
 
 
-class StreamingDataRepo:
-    # 主要负责记录当前的流数据，以及更新它们的k近邻
-    def __init__(self, n_neighbors):
-        self.n_neighbor = n_neighbors
-        self.total_data = None
-        self.total_label = None
-        self.total_embeddings = None
+class EmbeddingQualitySupervisor:
+    def __init__(self, interval_seconds, manifold_change_num_thresh, bad_embedding_num_thresh, d_thresh=None, e_thresh=None):
+        self.__last_update_time = None
+        # 当新数据到最近流形中心的距离高于d_thresh时，就认为可能来自新的流形。d_thresh可以通过计算模型拟合过的数据到最近流形中心的平均距离得到
+        self.__d_thresh = d_thresh
+        # 当新数据的嵌入到k近邻的嵌入的平均距离高于e_thresh时，就认为模型嵌入的质量较差。e_thresh可以通过计算模型拟合过的数据嵌入到k近邻嵌入的平均距离得到
+        self.__e_thresh = e_thresh
+        self.__interval_seconds = interval_seconds
+        # manifold_change_num_thresh应该要小于bad_embedding_num_thresh，因为来自新的流形的数据对嵌入的可信度影响较大
+        self.__manifold_change_num_thresh = manifold_change_num_thresh
+        self.__bad_embedding_num_thresh = bad_embedding_num_thresh
+        self.__new_manifold_data_num = 0
+        self.__bad_embedding_data_num = 0
 
-    def get_n_samples(self):
-        return self.total_data.shape[0] if self.total_data is not None else 0
+    def update_model_update_time(self, update_time):
+        self.__last_update_time = update_time
 
-    def add_new_data(self, data=None, embeddings=None, labels=None):
-        if data is not None:
-            if self.total_data is None:
-                self.total_data = data
-            else:
-                self.total_data = np.concatenate([self.total_data, data], axis=0)
+    def _judge_model_update(self):
+        # 当累积了指定数量的新的流形数据时，或者是累积了指定数量的嵌入质量差的数据时，就更新模型
+        update = False
+        if self.__last_update_time is not None and time.time() - self.__last_update_time >= self.__interval_seconds:
+            update = True
+        elif self.__new_manifold_data_num >= self.__manifold_change_num_thresh:
+            update = True
+        elif self.__bad_embedding_data_num >= self.__bad_embedding_num_thresh:
+            update = True
 
-        if embeddings is not None:
-            if self.total_embeddings is None:
-                self.total_embeddings = embeddings
-            else:
-                self.total_embeddings = np.concatenate([self.total_embeddings, embeddings], axis=0)
+        if update:
+            # TODO: 模型更新完成后需要回调update_model_update_time
+            self.__new_manifold_data_num = 0
+            self.__bad_embedding_data_num = 0
 
-        if labels is not None:
-            if self.total_label is None:
-                self.total_label = np.array(labels)
-            else:
-                if isinstance(labels, list):
-                    self.total_label = np.concatenate([self.total_label, labels])
-                else:
-                    self.total_label = np.append(self.total_label, labels)
+        return update
+
+    def quality_record(self, data, embedding, cluster_centers=None, neighbor_embeddings=None):
+        manifold_change = False
+        need_optimize = False
+        if cluster_centers is not None:
+            assert data is not None
+            min_dist = np.min(np.linalg.norm(data - cluster_centers), axis=-1)
+            if min_dist >= self.__d_thresh:
+                self.__manifold_change_num_thresh += 1
+                manifold_change = True
+                need_optimize = True
+
+        if not manifold_change and neighbor_embeddings is not None:
+            assert embedding is not None
+            avg_dist = np.mean(np.linalg.norm(embedding - neighbor_embeddings), axis=-1)
+            if avg_dist >= self.__e_thresh:
+                self.__bad_embedding_data_num += 1
+                need_optimize = True
+
+        return need_optimize, self._judge_model_update()
 
 
 def cal_cluster_acc(cluster_labels, gt_labels):
