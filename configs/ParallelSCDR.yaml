@@ -14,7 +14,7 @@ method_params:
   initial_train_epoch: 100
   finetune_epoch: 50
   shift_buffer_size: 30
-  batch_size: 256
+  batch_size: 512
   LR: 0.001
   n_neighbors: 10
   optimizer: "adam" # adam or sgd

@@ -245,7 +245,8 @@ class CLR_Text_Dataset(MyTextDataset):
         return x
 
     def add_new_data(self, data, labels=None):
-        self.data = data if self.data is None else np.concatenate([self.data, data], axis=0)
+        if data is not None:
+            self.data = data if self.data is None else np.concatenate([self.data, data], axis=0)
         if labels is not None:
             self.targets = labels if self.targets is None else np.append(self.targets, labels)
 

@@ -299,7 +299,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         train_sampler = CustomSampler(train_indices) if not multi else DistributedSampler(train_dataset)
 
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, sampler=train_sampler,
-                                  drop_last=True, shuffle=False)
+                                  drop_last=False, shuffle=False)
         return train_loader
 
     def update_knn_graph(self, pre_n_samples, new_data, data_num_list, cut_num=None, update_similarity=True,
@@ -372,6 +372,11 @@ class StreamingDatasetWrapper(DataSetWrapper):
         replaced_indices = pre_changed_neighbor_meta[:, 3] if len(pre_changed_neighbor_meta) > 0 else []
         anchor_positions = pre_changed_neighbor_meta[:, 2] if len(pre_changed_neighbor_meta) > 0 else []
         return neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions
+
+    def add_new_data(self, data=None, embeddings=None, labels=None, knn_indices=None, knn_dists=None):
+        super().add_new_data(data, embeddings, labels, knn_indices, knn_dists)
+        if self.train_dataset is not None:
+            self.train_dataset.add_new_data(data, labels)
 
 
 # 负责存储以及更新kNN

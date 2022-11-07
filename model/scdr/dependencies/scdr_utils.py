@@ -3,6 +3,7 @@ import random
 import time
 
 import numpy as np
+import torch
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.neighbors import LocalOutlierFactor
@@ -19,17 +20,18 @@ class KeyPointsGenerator:
     DBSCAN = "dbscan"
 
     @staticmethod
-    def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, batch_whole=False, **kwargs):
-        if key_rate >= 1 or (batch_whole and method == KeyPointsGenerator.RANDOM):
+    def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, cover_all=False, **kwargs):
+        # cover_all = True：表示将在一次epoch中采样之前的所有数据，每个batch中均包含来自不同聚类的数据
+        if key_rate >= 1 or (cover_all and method == KeyPointsGenerator.RANDOM):
             return data, np.arange(0, data.shape[0], 1)
         if method == KeyPointsGenerator.RANDOM:
             return KeyPointsGenerator._generate_randomly(data, key_rate, prob, min_num)
         elif method == KeyPointsGenerator.KMEANS:
             return KeyPointsGenerator._generate_kmeans_based(data, key_rate, cluster_inner_random,
-                                                             prob, min_num, batch_whole)
+                                                             prob, min_num, cover_all)
         elif method == KeyPointsGenerator.DBSCAN:
             return KeyPointsGenerator._generate_dbscan_based(data, key_rate, cluster_inner_random,
-                                                             prob, min_num, batch_whole, **kwargs)
+                                                             prob, min_num, cover_all, **kwargs)
         else:
             raise RuntimeError("Unsupported key data generating method. Please ensure that 'method' is one of random/"
                                "kmeans/dbscan.")
@@ -44,17 +46,17 @@ class KeyPointsGenerator:
         return data[key_indices], key_indices
 
     @staticmethod
-    def _generate_kmeans_based(data, key_rate, is_random=True, prob=None, min_num=0, batch_whole=False):
+    def _generate_kmeans_based(data, key_rate, is_random=True, prob=None, min_num=0, cover_all=False):
         n_samples = data.shape[0]
         cluster_num = int(math.sqrt(n_samples))
         km = KMeans(n_clusters=cluster_num)
         km.fit(data)
         key_data_num = max(int(n_samples * key_rate), min_num)
 
-        if not batch_whole:
+        if not cover_all:
             return KeyPointsGenerator._sample_in_each_cluster(data, km.labels_, key_data_num, None, prob, is_random)
         else:
-            return KeyPointsGenerator._batch_whole_seq(data, km.labels_, key_data_num)
+            return KeyPointsGenerator._cover_all_seq(data, km.labels_, key_data_num)
 
     @staticmethod
     def _generate_dbscan_based(data, key_rate, is_random=True, prob=None, min_num=0, batch_whole=False, **kwargs):
@@ -72,7 +74,7 @@ class KeyPointsGenerator:
         if not batch_whole:
             return KeyPointsGenerator._sample_in_each_cluster(data, dbs.labels_, key_data_num, None, prob, is_random)
         else:
-            return KeyPointsGenerator._batch_whole_seq(data, dbs.labels_, key_data_num, min_samples * 3)
+            return KeyPointsGenerator._cover_all_seq(data, dbs.labels_, key_data_num, min_samples * 3)
 
     @staticmethod
     def _sample_in_each_cluster(data, labels, key_data_num, centroids=None, prob=None, is_random=True):
@@ -116,7 +118,7 @@ class KeyPointsGenerator:
         return data[key_indices], key_indices, cluster_indices, exclude_indices
 
     @staticmethod
-    def _batch_whole_seq(data, labels, key_data_num, min_samples=20):
+    def _cover_all_seq(data, labels, key_data_num, min_samples=20):
         n_samples = len(np.argwhere(labels >= 0).squeeze())
 
         key_indices = []
@@ -231,8 +233,8 @@ class RepDataSampler:
             sampled_indices = self._random_sample(pre_n_samples)
 
         if sampled_indices is None:
-            sampled_indices = KeyPointsGenerator.generate(pre_data, self.sample_rate, False, prob=prob,
-                                                          min_num=self.minimum_sample_data_num)[1]
+            sampled_indices = KeyPointsGenerator.generate(pre_data, self.sample_rate, KeyPointsGenerator.RANDOM, False,
+                                                          prob=prob, min_num=self.minimum_sample_data_num)[1]
         if must_indices is not None:
             sampled_indices = np.union1d(sampled_indices, must_indices).astype(int)
 
@@ -255,6 +257,38 @@ class RepDataSampler:
         np.random.shuffle(all_indices)
         sampled_indices = all_indices[:sampled_num]
         return sampled_indices
+
+
+class ClusterRepDataSampler:
+    def __init__(self, sample_rate=0, min_num=100, cover_all=False):
+        self.sample_rate = sample_rate
+        self.min_num = min_num
+        self.cover_all = cover_all
+
+    def sample(self, fitted_data, fitted_embeddings, embedding_func, eps, min_samples, device, labels=None):
+        rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
+            KeyPointsGenerator.generate(fitted_embeddings, self.sample_rate, method=KeyPointsGenerator.DBSCAN,
+                                        min_num=self.min_num, cover_all=self.cover_all, eps=eps,
+                                        min_samples=min_samples, labels=labels)
+
+        if not self.cover_all:
+            rep_batch_nums = 1
+            rep_old_data = [fitted_data[rep_old_indices]]
+            cluster_indices = [cluster_indices]
+            exclude_indices = [exclude_indices]
+            # 2.将代表点数据作为候选负例兼容到模型的增量训练中，每次都需要计算代表性数据的嵌入
+            rep_old_embeddings = [embedding_func(torch.tensor(rep_old_data, dtype=torch.float).to(device), device)]
+
+        else:
+            rep_batch_nums = len(rep_old_indices)
+            rep_old_data = []
+            rep_old_embeddings = []
+            for item in rep_old_indices:
+                # print("num:", len(item))
+                rep_old_data.append(fitted_data[item])
+                rep_old_embeddings.append(fitted_embeddings[item])
+
+        return rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices
 
 
 class DistributionChangeDetector:

@@ -26,15 +26,17 @@ class SCDRTrainer(CDRsExperiments):
         self.finetune_data_num = 0
         self.cur_time = 0
         self.first_train_data_num = 0
+        self.max_batch_size = 1024
 
     def update_batch_size(self, data_num):
         # TODO: 如何设置batch size也是需要研究的
-        self.batch_size = min(data_num, 1024)
+        self.batch_size = min(data_num, self.max_batch_size)
         self.streaming_dataset.batch_size = self.batch_size
         self.model.update_batch_size(int(self.batch_size))
+        self.model.reset_partial_corr_mask()
 
     def initialize_streaming_dataset(self, dataset):
-        self.first_train_data_num = dataset._total_data.shape[0]
+        self.first_train_data_num = dataset.get_total_data().shape[0]
         self.streaming_dataset = dataset
 
     def first_train(self, dataset: StreamingDatasetWrapper, epochs, ckpt_path=None):
@@ -72,7 +74,7 @@ class SCDRTrainer(CDRsExperiments):
                 multi=self.multi)
         else:
             if sampled_indices is None:
-                sampled_indices = np.arange(0, self.streaming_dataset._total_data.shape[0], 1)
+                sampled_indices = np.arange(0, self.streaming_dataset.get_total_data().shape[0], 1)
             self.train_loader, self.n_samples = self.streaming_dataset.update_data_loaders(epochs, sampled_indices)
 
     def quantitative_test_all(self, epoch, embedding_data=None, mid_embeddings=None, device='cuda', val=False):
@@ -85,14 +87,16 @@ class SCDRTrainer(CDRsExperiments):
         eval_used_data = self.train_loader.dataset.get_all_data()
         eval_used_data = np.reshape(eval_used_data, (eval_used_data.shape[0], np.product(eval_used_data.shape[1:])))
 
-        self.metric_tool = MetricProcess(self.model_update_queue_set, self.message_queue, self.dataset_name, eval_used_data,
+        self.metric_tool = MetricProcess(self.model_update_queue_set, self.message_queue, self.dataset_name,
+                                         eval_used_data,
                                          self.train_loader.dataset.targets, None, None, None,
                                          self.result_save_dir, norm=self.is_image, k=self.fixed_k)
         self.metric_tool.start()
 
 
 class SCDRTrainerProcess(Process, SCDRTrainer):
-    def __init__(self, cal_time_queue_set, model_update_queue_set, model, dataset_name, config_path, configs, result_save_dir, device='cuda:0',
+    def __init__(self, cal_time_queue_set, model_update_queue_set, model, dataset_name, config_path, configs,
+                 result_save_dir, device='cuda:0',
                  log_path="log_streaming.txt", finetune_data_rate=0.3, finetune_epoch=50):
         self.name = "SCDR模型更新进程"
         Process.__init__(self, name=self.name)
@@ -106,7 +110,7 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
         self.data_stream_ended = False
 
     def initialize_streaming_dataset(self, dataset):
-        self.first_train_data_num = self.streaming_dataset.total_data.shape[0]
+        self.first_train_data_num = self.streaming_dataset.get_total_data().shape[0]
 
     def run(self) -> None:
         while True:
@@ -185,15 +189,14 @@ class SCDRTrainerProcess(Process, SCDRTrainer):
         num = 0
         while num < target_num:
             new_data, nn_indices, nn_dists, new_labels = self.model_update_queue_set.raw_data_queue.get()
-            self.streaming_dataset.add_new_data(new_data, nn_indices, nn_dists, new_label=new_labels)
+            self.streaming_dataset.add_new_data(new_data, None, new_labels, nn_indices, nn_dists)
             num += new_data.shape[0]
 
 
 class IncrementalCDREx(SCDRTrainer):
-    def __init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, shuffle=True, device='cuda',
-                 log_path="logs.txt", multi=False):
-        CDRsExperiments.__init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, shuffle, device,
-                                 log_path, multi)
+    def __init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, device='cuda',
+                 log_path="logs.txt"):
+        SCDRTrainer.__init__(self, clr_model, dataset_name, config_path, configs, result_save_dir, device, log_path)
         self._rep_old_data = None
         self._pre_rep_old_embeddings = None
         self._rep_embeddings_pw_dists = []
@@ -217,6 +220,13 @@ class IncrementalCDREx(SCDRTrainer):
         self.train_loader, self.n_samples = \
             self.clr_dataset.get_train_validation_data_loaders(self.clr_dataset.train_dataset, None,
                                                                train_indices, [], False, False)
+
+    def prepare_resume(self, fitted_num, train_num, resume_epoch):
+        # 应该要增强新数据对负例的排斥力度
+        self.lr *= 1
+        self.update_batch_size(train_num)
+        self.update_neg_num(train_num / 5)
+        self.update_dataloader(resume_epoch, np.arange(fitted_num, fitted_num + train_num, 1))
 
     def resume_train(self, resume_epoch, *args):
         rep_args = args[0]

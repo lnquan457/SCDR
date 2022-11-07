@@ -9,7 +9,7 @@ from scipy.spatial.distance import cdist
 from dataset.warppers import StreamingDatasetWrapper
 from model.dr_models.ModelSets import MODELS
 from model.scdr.dependencies.experiment import position_vis
-from model.scdr.dependencies.scdr_utils import KeyPointsGenerator
+from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, ClusterRepDataSampler
 from utils.common_utils import get_config, time_stamp_to_date_time_adjoin
 from utils.metrics_tool import Metric, knn_score, metric_silhouette_score
 
@@ -111,7 +111,7 @@ class IndicesGenerator:
         for i in range(initial_manifold_num, total_manifold_num):
             indices = np.argwhere(self.total_labels == self.cls[i]).squeeze()
             idx = i - initial_manifold_num
-            indices = np.append(indices, left_indices[idx*avg_left_num:(idx+1)*avg_left_num]).astype(int)
+            indices = np.append(indices, left_indices[idx * avg_left_num:(idx + 1) * avg_left_num]).astype(int)
             batch_indices.append(indices)
 
         return batch_indices
@@ -123,7 +123,7 @@ def incremental_cdr_pipeline():
     #                                                     cfg.exp_params.latent_dim)
     clr_model = MODELS[METHOD_NAME](cfg, device=device)
     t_log_path = os.path.join(RESULT_SAVE_DIR, "logs.txt")
-    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH, shuffle=True,
+    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH,
                                     device=device, log_path=t_log_path)
     n_neighbors = experimenter.n_neighbors
 
@@ -154,14 +154,15 @@ def incremental_cdr_pipeline():
     initial_labels = total_labels[batch_indices[0]]
     stream_dataset = StreamingDatasetWrapper(initial_data, initial_labels, experimenter.batch_size,
                                              experimenter.n_neighbors)
-    experimenter.update_neg_num(initial_data.shape[0] / 8)
+    experimenter.update_neg_num(initial_data.shape[0] / 5)
     sta = time.time()
     initial_embeddings = experimenter.first_train(stream_dataset, INITIAL_EPOCHS)
     cost_time = time.time() - sta
-    position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "0.jpg"), initial_embeddings,
+    stream_dataset.add_new_data(embeddings=initial_embeddings)
+    position_vis(stream_dataset.get_total_label(), os.path.join(RESULT_SAVE_DIR, "0.jpg"), initial_embeddings,
                  title="Initial Embeddings")
 
-    metric_tool = Metric(experimenter.dataset_name, stream_dataset.total_data, stream_dataset.total_label,
+    metric_tool = Metric(experimenter.dataset_name, stream_dataset.get_total_data(), stream_dataset.get_total_label(),
                          stream_dataset.get_knn_indices(), stream_dataset.get_knn_dists(), None,
                          norm=experimenter.is_image, k=experimenter.fixed_k)
     eval_res = evaluate(cost_time, experimenter, metric_tool, initial_embeddings, initial_labels)
@@ -171,21 +172,25 @@ def incremental_cdr_pipeline():
     fitted_indices = batch_indices[0]
     experimenter.active_incremental_learning()
 
+    rep_data_sampler = ClusterRepDataSampler(sample_rate=0, min_num=REP_NUM, cover_all=COVER_ALL)
+
     for i in range(1, n_step):
         sta = time.time()
-        # TODO：现在是进行聚类，然后从每个聚类中选100个点。确实缓解了聚类内部分散的问题。但是现在使用DBSCAN聚类很不准确
         # rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
         #     KeyPointsGenerator.generate(total_data[fitted_indices], 0, method=KeyPointsGenerator.DBSCAN, min_num=50,
         #                                 eps=np.mean(stream_dataset.get_knn_dists()[:, :n_neighbors // 2]),
         #                                 min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
 
+        # TODO: 需要注意这边使用的embedding，不能包含optimize后的embedding，只能是模型拟合过的embedding。
         ravel_1 = np.reshape(np.repeat(experimenter.pre_embeddings[:, np.newaxis, :], n_neighbors // 2, 1), (-1, 2))
         ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors // 2])]
         embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
-        rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
-            KeyPointsGenerator.generate(experimenter.pre_embeddings, 0, method=KeyPointsGenerator.DBSCAN,
-                                        min_num=REP_NUM, batch_whole=BATCH_WHOLE, eps=embedding_nn_dist,
-                                        min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
+
+        rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices = \
+            rep_data_sampler.sample(total_data[fitted_indices], experimenter.pre_embeddings,
+                                    experimenter.acquire_latent_code_allin, eps=embedding_nn_dist,
+                                    min_samples=experimenter.n_neighbors, device=device,
+                                    labels=total_labels[fitted_indices])
 
         # representations = experimenter.cal_lower_representations(total_data[fitted_indices])
         # ravel_1 = np.reshape(np.repeat(representations[:, np.newaxis, :], n_neighbors // 2, 1),
@@ -196,39 +201,6 @@ def incremental_cdr_pipeline():
         #                             min_num=REP_NUM, batch_whole=BATCH_WHOLE, eps=rep_nn_dist,
         #                             min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
 
-        if not BATCH_WHOLE:
-            rep_batch_nums = 1
-            rep_old_data = [total_data[fitted_indices][rep_old_indices]]
-            cluster_indices = [cluster_indices]
-            exclude_indices = [exclude_indices]
-            # 2.将代表点数据作为候选负例兼容到模型的增量训练中，每次都需要计算代表性数据的嵌入
-            rep_old_embeddings = [experimenter.acquire_latent_code_allin(torch.tensor(rep_old_data, dtype=torch.float)
-                                                                         .to(device), device)]
-
-            # x = rep_old_embeddings[0][:, 0]
-            # y = rep_old_embeddings[0][:, 1]
-            # c = []
-            # for ttt, item in enumerate(cluster_indices[0]):
-            #     c.extend([ttt] * len(item))
-            #
-            # plt.figure(figsize=(8, 8))
-            # c = np.array(c, dtype=int)
-            # sns.scatterplot(x=experimenter.pre_embeddings[:, 0], y=experimenter.pre_embeddings[:, 1], color="gray",
-            #                 s=8, legend=False, alpha=1.0)
-            # sns.scatterplot(x=x, y=y, hue=c, s=16, palette="tab10", legend=False, alpha=1.0)
-            #
-            # plt.title("rep data", fontsize=28)
-            # plt.show()
-
-        else:
-            rep_batch_nums = len(rep_old_indices)
-            rep_old_data = []
-            rep_old_embeddings = []
-            for item in rep_old_indices:
-                # print("num:", len(item))
-                rep_old_data.append(total_data[fitted_indices][item])
-                rep_old_embeddings.append(experimenter.pre_embeddings[item])
-
         # print("cluster num:", len(cluster_indices[0]))
         # print("Distribution_1:", [len(item) for item in cluster_indices[0]])
         # print("Exclude:", [len(item) for item in exclude_indices[0]])
@@ -238,28 +210,25 @@ def incremental_cdr_pipeline():
         cur_batch_num = len(batch_indices[i])
         fitted_num = len(fitted_indices)
 
-        knn_indices, knn_dists = query_knn(cur_batch_data, np.concatenate([stream_dataset.total_data, cur_batch_data],
-                                                                          axis=0), k=K)
-
-        stream_dataset.add_new_data(cur_batch_data, knn_indices, knn_dists, total_labels[batch_indices[i]])
-
+        knn_indices, knn_dists = query_knn(cur_batch_data,
+                                           np.concatenate([stream_dataset.get_total_data(), cur_batch_data],
+                                                          axis=0), k=K)
+        stream_dataset.add_new_data(cur_batch_data, None, total_labels[batch_indices[i]], knn_indices, knn_dists)
         stream_dataset.update_knn_graph(len(total_data[fitted_indices]), total_data[batch_indices[i]],
                                         [0, cur_batch_num])
-        experimenter.update_batch_size(cur_batch_num)
-        experimenter.update_neg_num(cur_batch_num / 8)
-        experimenter.update_dataloader(RESUME_EPOCH, np.arange(fitted_num, fitted_num + cur_batch_num, 1))
 
         # 3.需要改变模型的损失计算。使用不同的方式进行incremental learning。需要创建一个新的train方法。
-        embeddings = experimenter.resume_train(RESUME_EPOCH,
-                                               (rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices,
-                                                exclude_indices))
+        experimenter.prepare_resume(fitted_num, cur_batch_num, RESUME_EPOCH)
+        embeddings = experimenter.resume_train(RESUME_EPOCH, (rep_batch_nums, rep_old_data, rep_old_embeddings,
+                                                              cluster_indices, exclude_indices))
         cost_time = time.time() - sta
-        position_vis(stream_dataset.total_label, os.path.join(RESULT_SAVE_DIR, "{}.jpg".format(i)), embeddings,
+        position_vis(stream_dataset.get_total_label(), os.path.join(RESULT_SAVE_DIR, "{}.jpg".format(i)), embeddings,
                      title="Step {} Embeddings".format(i))
 
         # 4.需要比较新的模型对之前数据的投影质量，并且评估对新数据的投影质量
-        metric_tool = Metric(experimenter.dataset_name, stream_dataset.total_data, stream_dataset.total_label,
-                             None, None, None, norm=experimenter.is_image, k=experimenter.fixed_k)
+        metric_tool = Metric(experimenter.dataset_name, stream_dataset.get_total_data(),
+                             stream_dataset.get_total_label(), None, None, None, norm=experimenter.is_image,
+                             k=experimenter.fixed_k)
 
         initial_embeddings_list.append(embeddings[-cur_batch_num:])
         tmp = 0
@@ -271,7 +240,7 @@ def incremental_cdr_pipeline():
             # 新数据的加入可能导致旧数据的kNN发生变化，那么其嵌入标准实际上也发生了改变。这种情况下如何比较投影质量的变化呢？
             # 衍生出的另一个问题就是，被选作代表点的数据，应该是kNN没有发生变化或者变化非常小的数据。
             record = i == j
-            eval_res = evaluate(cost_time, experimenter, metric_tool, embeddings, stream_dataset.total_label,
+            eval_res = evaluate(cost_time, experimenter, metric_tool, embeddings, stream_dataset.get_total_label(),
                                 eval_indices, pre_old_data_embeddings, record=record)
             embedding_acc_history[j, i] = eval_res
 
@@ -303,8 +272,8 @@ def evaluate(cost_time, experimenter, metric_tool, embeddings, labels, eval_indi
     if record:
         output_template = "Movements: %.4f Neighbor Hit: %.4f kNN(%d): " \
                           "%.4f Trust: %.4f Cont: %.4f SC: %.4f Time: %.2f" % (
-                          movements, neighbor_hit, k, knn_ca, trust,
-                          cont, sc, cost_time)
+                              movements, neighbor_hit, k, knn_ca, trust,
+                              cont, sc, cost_time)
         if experimenter.tmp_log_file is None:
             experimenter.tmp_log_file = open(experimenter.tmp_log_path, "w")
         experimenter.tmp_log_file.write(output_template + "\n")
@@ -323,8 +292,8 @@ if __name__ == '__main__':
 
         INITIAL_EPOCHS = 100
         RESUME_EPOCH = 50
-        REP_NUM = 100
-        BATCH_WHOLE = True
+        REP_NUM = 150
+        COVER_ALL = True
         K = 10
 
         cfg = get_config()

@@ -265,7 +265,7 @@ def incremental_cdr_pipeline():
     # embedding_quality_supervisor = EmbeddingQualitySupervisor(60, 150, 200, d_thresh, e_thresh)
     # embedding_quality_supervisor.update_model_update_time(time.time())
 
-    embedding_optimizer = EmbeddingOptimizer(pre_neighbor_embedding_m_dist,
+    embedding_optimizer = EmbeddingOptimizer(pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist,
                                              pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist, skip_opt=SKIP_OPT)
 
     total_sta = time.time()
@@ -275,13 +275,11 @@ def incremental_cdr_pipeline():
 
         for j in range(cur_batch_num):
             cur_data_idx = batch_indices[i][j]
-            cur_data_seq_idx = experimenter.pre_embeddings.shape[0]
             cur_data = cur_batch_data[j][np.newaxis, :]
             cur_label = total_labels[cur_data_idx]
             sta = time.time()
             cur_embedding = experimenter.cal_lower_embeddings(cur_data)[np.newaxis, :]
             infer_time += time.time() - sta
-            # previous_knn_indices, previous_knn_dists = stream_dataset.get_knn_indices(), stream_dataset.get_knn_dists()
 
             sta = time.time()
             knn_indices, knn_dists, sort_indices = \
@@ -337,138 +335,26 @@ def incremental_cdr_pipeline():
                         cur_neighbor_embeddings, experimenter.pre_embeddings)
                     final_embedding = final_embedding[np.newaxis, :]
 
-                    # # 这里选择出来的点，邻域相似度都太高了，就导致新数据的嵌入非常紧凑。这是因为考虑嵌入质量时就是使用紧密程度作为参考的。
-                    #
-                    # neighbor_sims = stream_dataset.raw_knn_weights[-1]
-                    # normed_neighbor_sims = neighbor_sims / np.sum(neighbor_sims)
-                    # cur_initial_embedding = np.sum(normed_neighbor_sims[:, np.newaxis] *
-                    #                                cur_neighbor_embeddings, axis=0)[np.newaxis, :]
-                    # # final_embedding = cur_initial_embedding.squeeze()
-                    #
-                    # # sigma = 0
-                    # # low_neighbor_dists = np.linalg.norm(experimenter.pre_embeddings[:, np.newaxis, :] -
-                    # #                                     np.reshape(
-                    # #                                         experimenter.pre_embeddings[np.ravel(previous_knn_indices)],
-                    # #                                         (experimenter.pre_embeddings.shape[0], K, -1)), axis=-1)
-                    # # target_dists, sigma = imitate_previous(knn_dists, previous_knn_dists, low_neighbor_dists,
-                    # #                                        with_e_quality=True)
-                    # # imitate_sims = convert_distance_to_probability(target_dists, a, b)
-                    # # final_embedding = optimize_single_umap(cur_initial_embedding, cur_neighbor_embeddings,
-                    # #                                        imitate_sims, a, b, sigma)
-                    #
-                    # neg_nums = 20
-                    # sta = time.time()
-                    # if np.mean(knn_dists) <= pre_neighbor_mean_dist + 10 * pre_neighbor_std_dist:
-                    #     neg_embeddings = experimenter.pre_embeddings[
-                    #         random.sample(list(np.arange(experimenter.pre_embeddings.shape[0])), neg_nums)]
-                    #     final_embedding = optimize_single_nce(cur_initial_embedding, cur_neighbor_embeddings,
-                    #                                           neg_embeddings, a, b)
-                    #     final_embedding = final_embedding[np.newaxis, :]
-                    # else:
-                    #     final_embedding = cur_initial_embedding
-
                     self_optimize_time += time.time() - sta
                 # =====================================================================================================
 
-                # ====================================2. 对新数据及其邻居点的嵌入进行更新====================================
-                # TODO: 无论新数据是否来自新的流形，更新kNN发生变化的旧数据嵌入都是必要的
-                sta = time.time()
-                # 注意！并不是所有邻居点都跟他互相是邻居！
-                if OPTIMIZE_SHARED_NEIGHBORS:
-                    pre_left_wait_meta = None
-                    time_wait_optimized_indices = []
+            # ====================================2. 对新数据及其邻居点的嵌入进行更新====================================
+            # TODO: 无论新数据是否来自新的流形，更新kNN发生变化的旧数据嵌入都是必要的
+            sta = time.time()
+            # 注意！并不是所有邻居点都跟他互相是邻居！
+            if OPTIMIZE_SHARED_NEIGHBORS:
 
-                    neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
-                        stream_dataset.get_pre_neighbor_changed_info()
+                neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
+                    stream_dataset.get_pre_neighbor_changed_info()
 
-                    experimenter.pre_embeddings = embedding_optimizer.update_old_data_embedding(
-                        final_embedding, experimenter.pre_embeddings, neighbor_changed_indices,
-                        stream_dataset.get_knn_indices(), stream_dataset.get_knn_dists(),
-                        stream_dataset.raw_knn_weights[neighbor_changed_indices], anchor_positions, replaced_indices,
-                        replaced_raw_weights)
+                experimenter.pre_embeddings = embedding_optimizer.update_old_data_embedding(
+                    final_embedding, experimenter.pre_embeddings, neighbor_changed_indices,
+                    stream_dataset.get_knn_indices(), stream_dataset.get_knn_dists(),
+                    stream_dataset.raw_knn_weights[neighbor_changed_indices], anchor_positions, replaced_indices,
+                    replaced_raw_weights)
 
-                    # if SKIP_OPT:
-                    #     if wait_for_optimize_meta is not None:
-                    #         time_wait_optimized_indices = \
-                    #             np.where(time.time() - wait_for_optimize_meta[:, 1] >= INTER_THRESH)[0]
-                    #         if len(time_wait_optimized_indices) > 0:
-                    #             total_pre_optimize += len(time_wait_optimized_indices)
-                    #             # print("pre optimize", total_pre_optimize)
-                    #             experimenter.pre_embeddings[time_wait_optimized_indices] = \
-                    #                 optimize_all_waits(time_wait_optimized_indices, stream_dataset.get_knn_indices(),
-                    #                                    np.concatenate([experimenter.pre_embeddings, final_embedding],
-                    #                                                   axis=0), a, b)
-                    #
-                    # neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
-                    #     stream_dataset.get_pre_neighbor_changed_info()
-                    #
-                    # if len(neighbor_changed_indices) > 0:
-                    #     cur_local_move_thresh = pre_neighbor_embedding_m_dist
-                    #     cur_local_move_mask = np.linalg.norm(experimenter.pre_embeddings[neighbor_changed_indices] -
-                    #                                          final_embedding, axis=-1) < cur_local_move_thresh
-                    #
-                    #     # print("origin:", len(neighbor_changed_indices))
-                    #     # print("origin opt num:", np.sum(~cur_local_move_mask))
-                    #
-                    #     cur_optimize_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
-                    #     cur_optimize_mask = np.mean(stream_dataset.get_knn_dists()[neighbor_changed_indices],
-                    #                                 axis=1) < cur_optimize_thresh
-                    #     embedding_update_mask = (cur_local_move_mask + cur_optimize_mask) > 0
-                    #
-                    #     cur_update_indices = neighbor_changed_indices[embedding_update_mask]
-                    #     cur_wait_indices = neighbor_changed_indices[~embedding_update_mask]
-                    #
-                    #     total_skip_opt += len(cur_wait_indices)
-                    #     # print("wait optimize:", total_skip_opt)
-                    #
-                    #     neighbor_changed_indices = neighbor_changed_indices[embedding_update_mask]
-                    #     anchor_positions = anchor_positions[embedding_update_mask].astype(int)
-                    #     replaced_indices = replaced_indices[embedding_update_mask].astype(int)
-                    #     replaced_raw_weights = replaced_raw_weights[embedding_update_mask]
-                    #     cur_local_move_mask = cur_local_move_mask[embedding_update_mask]
-                    #
-                    #     # print("after:", len(neighbor_changed_indices))
-                    #     # print("after opt num:", np.sum(~cur_local_move_mask))
-                    #
-                    #     t_sta = time.time()
-                    #     updated_embeddings = \
-                    #         optimize_multiple(neighbor_changed_indices, stream_dataset.get_knn_indices(),
-                    #                           np.concatenate([experimenter.pre_embeddings, final_embedding], axis=0),
-                    #                           stream_dataset.raw_knn_weights, anchor_positions,
-                    #                           replaced_indices, replaced_raw_weights, a, b, cur_local_move_mask)
-                    #     embedding_concat_time += time.time() - t_sta
-                    #
-                    #     experimenter.pre_embeddings[neighbor_changed_indices] = updated_embeddings
-                    #
-                    #     if SKIP_OPT:
-                    #         if wait_for_optimize_meta is not None:
-                    #             pre_left_wait_meta_indices = np.setdiff1d(np.arange(wait_for_optimize_meta.shape[0]),
-                    #                                                       time_wait_optimized_indices)
-                    #             pre_left_wait_meta = wait_for_optimize_meta[pre_left_wait_meta_indices]
-                    #             neighbor_wait_optimized_indices, position_1, _ = \
-                    #                 np.intersect1d(pre_left_wait_meta[:, 0], cur_update_indices, return_indices=True)
-                    #
-                    #             pre_left_meta_indices = np.setdiff1d(np.arange(len(pre_left_wait_meta_indices)),
-                    #                                                  position_1)
-                    #             pre_left_wait_meta = pre_left_wait_meta[pre_left_meta_indices]
-                    #
-                    #         if pre_left_wait_meta is not None:
-                    #             if len(pre_left_wait_meta.shape) < 2:
-                    #                 pre_left_wait_meta = pre_left_wait_meta[np.newaxis, :]
-                    #
-                    #             cur_wait_indices = np.setdiff1d(cur_wait_indices, pre_left_wait_meta[:, 0])
-                    #             cur_wait_meta = np.zeros(shape=(len(cur_wait_indices), 2))
-                    #             cur_wait_meta[:, 0] = cur_wait_indices
-                    #             cur_wait_meta[:, 1] = time.time()
-                    #
-                    #             wait_for_optimize_meta = np.concatenate([pre_left_wait_meta, cur_wait_meta], axis=0)
-                    #         else:
-                    #             wait_for_optimize_meta = np.zeros(shape=(len(cur_wait_indices), 2))
-                    #             wait_for_optimize_meta[:, 0] = cur_wait_indices
-                    #             wait_for_optimize_meta[:, 1] = time.time()
-
-                s_neighbor_time += time.time() - sta
-                # ======================================================================================================
+            s_neighbor_time += time.time() - sta
+            # ======================================================================================================
 
             # 之前的一些数据的嵌入位置不再是模型嵌入的了，所以导致计算的kNN也发生了变化，使得kNN不一样。
             sta = time.time()

@@ -51,6 +51,7 @@ class NxCDRModel(Module):
         self.pro_head = None
         self.criterion = None
         self.correlated_mask = _get_correlated_mask(2 * self.batch_size)
+        self.partial_corr_mask = None
 
         self.min_dist = 0.1
         # 第一个参数表示低维空间中所有点使用的固定的方差rho
@@ -60,6 +61,9 @@ class NxCDRModel(Module):
         self.cur_dist_matrix = None
 
         self.reduction = "mean"
+
+    def reset_partial_corr_mask(self):
+        self.partial_corr_mask = None
 
     def update_batch_size(self, new_batch_size):
         self.batch_size = new_batch_size
@@ -133,11 +137,19 @@ class NxCDRModel(Module):
                                                                 self.min_dist)
         self.cur_dist_matrix = pairwise_dist
 
+        cur_batch_size = x_embeddings.shape[0]
+        if cur_batch_size != self.batch_size:
+            if self.partial_corr_mask is None:
+                self.partial_corr_mask = _get_correlated_mask(2 * cur_batch_size)
+            correlated_mask = self.partial_corr_mask
+        else:
+            correlated_mask = self.correlated_mask
+
         # 筛选出正例之间的相似度
-        l_pos = torch.diag(similarity_matrix, self.batch_size)
-        r_pos = torch.diag(similarity_matrix, -self.batch_size)
+        l_pos = torch.diag(similarity_matrix, cur_batch_size)
+        r_pos = torch.diag(similarity_matrix, -cur_batch_size)
         positives = torch.cat([l_pos, r_pos]).view(all_embeddings.shape[0], 1)
-        negatives = similarity_matrix[self.correlated_mask].view(all_embeddings.shape[0], -1)
+        negatives = similarity_matrix[correlated_mask].view(all_embeddings.shape[0], -1)
 
         # 将本地的正例、负例与全局的负例拼接在一起
         logits = torch.cat((positives, negatives), dim=1)

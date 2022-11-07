@@ -105,23 +105,36 @@ class LwFCDR(CDRModel):
         if not is_incremental_learning or self.neg_num is None or self.neg_num == 2 * self.batch_size:
             logits = super().batch_logits(x_embeddings, x_sim_embeddings, *args)
         else:
-            queries = torch.cat([x_embeddings, x_sim_embeddings], dim=0)
-            queries_matrix = queries[:self.neg_num+1].unsqueeze(0).repeat(2*self.batch_size, 1, 1)
-            positives = torch.cat([x_sim_embeddings, x_embeddings], dim=0)
-            negatives_p1 = torch.cat([queries_matrix[:self.neg_num, :self.neg_num][self.correlated_mask]
-                                     .view(self.neg_num, self.neg_num-1, -1),
-                                      queries_matrix[:self.neg_num, self.neg_num].unsqueeze(1)], dim=1)
+            cur_batch_size = x_embeddings.shape[0]
+            cur_available_neg_num = 2 * cur_batch_size - 2
 
-            negatives_p2 = torch.cat([queries_matrix[self.batch_size:self.batch_size+self.neg_num, :self.neg_num]
-                                      [self.correlated_mask].view(self.neg_num, self.neg_num-1, -1),
-                                      queries_matrix[self.batch_size:self.batch_size+self.neg_num, self.neg_num]
+            if cur_available_neg_num < self.neg_num:
+                neg_num = cur_available_neg_num
+                if self.partial_corr_mask is None:
+                    self.partial_corr_mask = (1 - torch.eye(neg_num)).type(torch.bool)
+
+                corr_mask = self.partial_corr_mask
+            else:
+                neg_num = self.neg_num
+                corr_mask = self.correlated_mask
+
+            queries = torch.cat([x_embeddings, x_sim_embeddings], dim=0)
+            queries_matrix = queries[:neg_num+1].unsqueeze(0).repeat(2*cur_batch_size, 1, 1)
+            positives = torch.cat([x_sim_embeddings, x_embeddings], dim=0)
+            negatives_p1 = torch.cat([queries_matrix[:neg_num, :neg_num][corr_mask]
+                                     .view(neg_num, neg_num-1, -1),
+                                      queries_matrix[:neg_num, neg_num].unsqueeze(1)], dim=1)
+
+            negatives_p2 = torch.cat([queries_matrix[cur_batch_size:cur_batch_size+neg_num, :neg_num]
+                                      [corr_mask].view(neg_num, neg_num-1, -1),
+                                      queries_matrix[cur_batch_size:cur_batch_size+neg_num, neg_num]
                                      .unsqueeze(1)], dim=1)
 
-            negatives = torch.cat([negatives_p1, queries_matrix[self.neg_num:self.batch_size, :self.neg_num],
-                                   negatives_p2, queries_matrix[self.batch_size+self.neg_num:, :self.neg_num]], dim=0)
+            negatives = torch.cat([negatives_p1, queries_matrix[neg_num:cur_batch_size, :neg_num],
+                                   negatives_p2, queries_matrix[cur_batch_size+neg_num:, :neg_num]], dim=0)
 
             pos_similarities = self.similarity_func(queries, positives, self.min_dist)[0].unsqueeze(1)
-            neg_similarities = self.similarity_func(queries_matrix[:, :self.neg_num], negatives, self.min_dist)[0]
+            neg_similarities = self.similarity_func(queries_matrix[:, :neg_num], negatives, self.min_dist)[0]
 
             # 将本地的正例、负例与全局的负例拼接在一起
             logits = torch.cat((pos_similarities, neg_similarities), dim=1)
