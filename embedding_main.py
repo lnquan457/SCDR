@@ -335,6 +335,7 @@ def incremental_cdr_pipeline():
                     final_embedding = embedding_optimizer.optimize_new_data_embedding(
                         stream_dataset.raw_knn_weights[-1],
                         cur_neighbor_embeddings, experimenter.pre_embeddings)
+                    final_embedding = final_embedding[np.newaxis, :]
 
                     # # 这里选择出来的点，邻域相似度都太高了，就导致新数据的嵌入非常紧凑。这是因为考虑嵌入质量时就是使用紧密程度作为参考的。
                     #
@@ -545,12 +546,12 @@ def incremental_cdr_pipeline():
     # plt.show()
 
     sta = time.time()
-    metric_tool = Metric(experimenter.dataset_name, stream_dataset.total_data, stream_dataset.total_label, None, None,
-                         k=K)
+    metric_tool = Metric(experimenter.dataset_name, stream_dataset.get_total_data(), stream_dataset.get_total_label(),
+                         None, None, k=K)
     total_trust = metric_tool.metric_trustworthiness(K, experimenter.pre_embeddings)
     total_cont = metric_tool.metric_continuity(K, experimenter.pre_embeddings)
     total_nh = metric_tool.metric_neighborhood_hit(K, experimenter.pre_embeddings)
-    total_knn = knn_score(experimenter.pre_embeddings, stream_dataset.total_label, K,
+    total_knn = knn_score(experimenter.pre_embeddings, stream_dataset.get_total_label(), K,
                           knn_indices=metric_tool.low_knn_indices)
     eval_time += time.time() - sta
 

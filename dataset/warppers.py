@@ -281,15 +281,15 @@ class StreamingDatasetWrapper(DataSetWrapper):
         if is_image:
             if normalize_method == ComponentInfo.UMAP_NORMALIZE:
                 train_dataset = UMAP_CLR_Image_Dataset(None, None, True, data_augment,
-                                                       train_data=[self.total_data, self.total_label])
+                                                       train_data=[self.get_total_data(), self.get_total_label()])
             else:
                 train_dataset = CLR_Image_Dataset(None, None, True, data_augment,
-                                                  train_data=[self.total_data, self.total_label])
+                                                  train_data=[self.get_total_data(), self.get_total_label()])
         else:
             if normalize_method == ComponentInfo.UMAP_NORMALIZE:
-                train_dataset = UMAP_CLR_Text_Dataset(None, None, True, train_data=[self.total_data, self.total_label])
+                train_dataset = UMAP_CLR_Text_Dataset(None, None, True, train_data=[self.get_total_data(), self.get_total_label()])
             else:
-                train_dataset = CLR_Text_Dataset(None, None, True, train_data=[self.total_data, self.total_label])
+                train_dataset = CLR_Text_Dataset(None, None, True, train_data=[self.get_total_data(), self.get_total_label()])
             data_augment = None
         return data_augment, train_dataset
 
@@ -322,9 +322,9 @@ class StreamingDatasetWrapper(DataSetWrapper):
         neighbor_changed_indices = self._knn_manager.update_previous_kNN(new_n_samples, pre_n_samples, dists,
                                                                          data_num_list, neighbor_changed_indices)
 
-        knn_changed_neighbor_meta = self.get_pre_neighbor_changed_positions()
+        knn_changed_neighbor_meta = self._knn_manager.get_pre_neighbor_changed_positions()
         if len(knn_changed_neighbor_meta) > 0:
-            changed_neighbor_sims = self.raw_knn_weights[knn_changed_neighbor_meta[:, 0]]
+            changed_neighbor_sims = self.raw_knn_weights[knn_changed_neighbor_meta[:, 1]]
             self.__replaced_raw_weights = changed_neighbor_sims[:, -1] / np.sum(changed_neighbor_sims, axis=1)
 
         self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((new_n_samples, self.n_neighbor))],
@@ -366,10 +366,11 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
     def get_pre_neighbor_changed_info(self):
         pre_changed_neighbor_meta = self._knn_manager.get_pre_neighbor_changed_positions()
-        neighbor_changed_indices = pre_changed_neighbor_meta[:, 0] if len(pre_changed_neighbor_meta) > 0 else []
+        new_indices = pre_changed_neighbor_meta[:, 0] if len(pre_changed_neighbor_meta) > 0 else []
+        neighbor_changed_indices = pre_changed_neighbor_meta[:, 1] if len(pre_changed_neighbor_meta) > 0 else []
         replaced_raw_weights = self.__replaced_raw_weights
-        replaced_indices = pre_changed_neighbor_meta[:, 2] if len(pre_changed_neighbor_meta) > 0 else []
-        anchor_positions = pre_changed_neighbor_meta[:, 1] if len(pre_changed_neighbor_meta) > 0 else []
+        replaced_indices = pre_changed_neighbor_meta[:, 3] if len(pre_changed_neighbor_meta) > 0 else []
+        anchor_positions = pre_changed_neighbor_meta[:, 2] if len(pre_changed_neighbor_meta) > 0 else []
         return neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions
 
 
@@ -379,8 +380,8 @@ class KNNManager:
         self.k = k
         self.knn_indices = None
         self.knn_dists = None
-        # 分别表示新数据在与新数据互为kNN和单向kNN的数据点的kNN中的位置，每个list里面是一个三元组，
-        # 分别表示kNN发生变化的数据下标、新数据插入的位置、以及被替换数据的下标
+        # 分别表示新数据在与新数据互为kNN和单向kNN的数据点的kNN中的位置，每个list里面是一个四元组，
+        # 分别表示新数据的下标、kNN发生变化的数据下标、新数据插入的位置、以及被替换数据的下标
         self._pre_neighbor_changed_meta = []
 
     def is_empty(self):
@@ -410,8 +411,7 @@ class KNNManager:
 
         tmp_index = 0
         for i in range(new_data_num):
-            cur_knn_indices = self.knn_indices[-new_data_num + i]
-            tmp_neighbor_changed_position = []
+            # cur_knn_indices = self.knn_indices[-new_data_num + i]
             indices = np.where(dists2pre_data[i] < farest_neighbor_dist)[0]
             flag = True
 
@@ -436,12 +436,10 @@ class KNNManager:
                     if symm and self.knn_indices[j][-1] not in neighbor_changed_indices:
                         neighbor_changed_indices.append(self.knn_indices[j][-1])
 
-                    tmp_neighbor_changed_position.append([j, insert_index + 1, self.knn_indices[j][-1]])
+                    self._pre_neighbor_changed_meta.append([i+pre_n_samples, j, insert_index + 1, self.knn_indices[j][-1]])
                     # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
                     arr_move_one(self.knn_dists[j], insert_index + 1, dists2pre_data[i][j])
                     arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
-
-            self._pre_neighbor_changed_meta.append(tmp_neighbor_changed_position[0])
 
         self._pre_neighbor_changed_meta = np.array(self._pre_neighbor_changed_meta, dtype=int)
 

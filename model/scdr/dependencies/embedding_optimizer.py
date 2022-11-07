@@ -109,35 +109,35 @@ class EmbeddingOptimizer:
     def _update(self, update_indices, corr_knn_indices, new_embeddings, old_embeddings, target_sims, anchor_position,
                 replaced_neighbor_indices, replaced_sims, local_move_mask):
         # 使用BFGS算法进行优化
-        total_n_samples = old_embeddings.shape[0] + new_embeddings.shape[0]
+        total_embeddings = np.concatenate([old_embeddings, new_embeddings], axis=0)
+        total_n_samples = total_embeddings.shape[0]
         neg_indices = random.sample(list(np.arange(total_n_samples)), self.__neg_num)
 
         for i, item in enumerate(update_indices):
             if local_move_mask[i]:
                 anchor_sims = target_sims[i, anchor_position[i]] / np.sum(target_sims[i])
-                back = replaced_sims[i] * (old_embeddings[replaced_neighbor_indices[i]] - old_embeddings[item])
-                old_embeddings[item] -= back
+                back = replaced_sims[i] * (total_embeddings[replaced_neighbor_indices[i]] - total_embeddings[item])
+                total_embeddings[item] -= back
 
-                move = anchor_sims * (new_embeddings - old_embeddings[item])
-                old_embeddings[item] = old_embeddings[item] + move
+                move = anchor_sims * (new_embeddings - total_embeddings[item])
+                total_embeddings[item] = total_embeddings[item] + move
             else:
-                old_embeddings[item] = self._nce_optimize_step(old_embeddings[item],
-                                                               old_embeddings[corr_knn_indices[i]],
-                                                               old_embeddings[neg_indices])
+                total_embeddings[item] = self._nce_optimize_step(total_embeddings[item],
+                                                                 total_embeddings[corr_knn_indices[i]],
+                                                                 total_embeddings[neg_indices])
 
-        return old_embeddings[update_indices]
+        return total_embeddings[update_indices]
 
     def _nce_optimize_step(self, optimize_embedding, positive_embeddings, neg_embeddings):
-        optimized_e = scipy.optimize.minimize(nce_loss_single, optimize_embedding,
-                                              method="BFGS", jac=None,
-                                              args=(positive_embeddings, neg_embeddings,
-                                                    self.__a, self.__b, self.__temperature),
-                                              options={'gtol': 1e-5, 'disp': False, 'return_all': False,
-                                                       'eps': 1e-10})
+        res = scipy.optimize.minimize(nce_loss_single, optimize_embedding,
+                                      method="BFGS", jac=None,
+                                      args=(positive_embeddings, neg_embeddings, self.__a, self.__b, self.__temperature),
+                                      options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
+        optimized_e = res.x
         update_step = optimized_e - optimize_embedding
         # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
         update_step[update_step > self.nce_opt_update_thresh] = 0
-        update_step[update_step < -self.nce_opt_update_thresh] = -0
+        update_step[update_step < -self.nce_opt_update_thresh] = 0
         optimize_embedding += update_step
         return optimize_embedding
 
