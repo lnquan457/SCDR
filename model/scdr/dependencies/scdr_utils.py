@@ -79,9 +79,18 @@ class KeyPointsGenerator:
     @staticmethod
     def _sample_in_each_cluster(data, labels, key_data_num, centroids=None, prob=None, is_random=True):
         key_indices = []
+        total_cluster_indices = []
         cluster_indices = []
         n_samples = len(labels)
         key_rate = key_data_num / len(np.argwhere(labels >= 0).squeeze())
+
+        unique_labels = np.unique(labels)
+        for item in unique_labels:
+            if item < 0:
+                continue
+            cur_indices = np.argwhere(labels == item).squeeze()
+            total_cluster_indices.append(cur_indices)
+
         if is_random:  # 聚类内部随机采样
             for item in np.unique(labels):
                 if item < 0:
@@ -115,7 +124,7 @@ class KeyPointsGenerator:
         for item in cluster_indices:
             exclude_indices.append(np.setdiff1d(total_indices, item))
 
-        return data[key_indices], key_indices, cluster_indices, exclude_indices
+        return data[key_indices], key_indices, cluster_indices, exclude_indices, total_cluster_indices
 
     @staticmethod
     def _cover_all_seq(data, labels, key_data_num, min_samples=20):
@@ -176,7 +185,7 @@ class KeyPointsGenerator:
                 cur_e_indices.append(np.setdiff1d(total_indices, item))
             exclude_indices.append(cur_e_indices)
 
-        return None, key_indices, cluster_indices, exclude_indices
+        return None, key_indices, cluster_indices, exclude_indices, total_cluster_indices
 
 
 class RepDataSampler:
@@ -261,17 +270,17 @@ class RepDataSampler:
 
 class ClusterRepDataSampler:
     def __init__(self, sample_rate=0, min_num=100, cover_all=False):
-        self.sample_rate = sample_rate
-        self.min_num = min_num
-        self.cover_all = cover_all
+        self.__sample_rate = sample_rate
+        self.__min_num = min_num
+        self.__cover_all = cover_all
 
     def sample(self, fitted_data, fitted_embeddings, embedding_func, eps, min_samples, device, labels=None):
-        rep_old_data, rep_old_indices, cluster_indices, exclude_indices = \
-            KeyPointsGenerator.generate(fitted_embeddings, self.sample_rate, method=KeyPointsGenerator.DBSCAN,
-                                        min_num=self.min_num, cover_all=self.cover_all, eps=eps,
+        rep_old_data, rep_old_indices, cluster_indices, exclude_indices, total_cluster_indices = \
+            KeyPointsGenerator.generate(fitted_embeddings, self.__sample_rate, method=KeyPointsGenerator.DBSCAN,
+                                        min_num=self.__min_num, cover_all=self.__cover_all, eps=eps,
                                         min_samples=min_samples, labels=labels)
 
-        if not self.cover_all:
+        if not self.__cover_all:
             rep_batch_nums = 1
             rep_old_data = [fitted_data[rep_old_indices]]
             cluster_indices = [cluster_indices]
@@ -288,7 +297,18 @@ class ClusterRepDataSampler:
                 rep_old_data.append(fitted_data[item])
                 rep_old_embeddings.append(fitted_embeddings[item])
 
-        return rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices
+        return rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices, total_cluster_indices
+
+    def dist_to_nearest_cluster_centroids(self, fitted_data, cluster_indices):
+        centroids = []
+        all_indices = []
+        for item in cluster_indices:
+            centroids.append(np.mean(fitted_data[item], axis=0))
+            all_indices.extend(item)
+
+        dist_matrix = cdist(fitted_data[all_indices], np.array(centroids))
+        min_dist = np.min(dist_matrix, axis=1)
+        return centroids, np.mean(min_dist), np.std(min_dist)
 
 
 class DistributionChangeDetector:
@@ -392,7 +412,8 @@ class EmbeddingQualitySupervisor:
         need_optimize = False
         if cluster_centers is not None:
             assert data is not None
-            min_dist = np.min(np.linalg.norm(data - cluster_centers), axis=-1)
+            min_dist = np.min(cdist(data, cluster_centers))
+            print("min dist:", min_dist)
             if min_dist >= self.__d_thresh:
                 self.__manifold_change_num_thresh += 1
                 manifold_change = True
@@ -400,7 +421,8 @@ class EmbeddingQualitySupervisor:
 
         if not manifold_change and neighbor_embeddings is not None:
             assert embedding is not None
-            avg_dist = np.mean(np.linalg.norm(embedding - neighbor_embeddings), axis=-1)
+            avg_dist = np.mean(cdist(embedding, neighbor_embeddings))
+            print("neighbor embedding dist:", avg_dist)
             if avg_dist >= self.__e_thresh:
                 self.__bad_embedding_data_num += 1
                 need_optimize = True

@@ -186,7 +186,7 @@ def incremental_cdr_pipeline():
         ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors // 2])]
         embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
 
-        rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices = \
+        rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices, _ = \
             rep_data_sampler.sample(total_data[fitted_indices], experimenter.pre_embeddings,
                                     experimenter.acquire_latent_code_allin, eps=embedding_nn_dist,
                                     min_samples=experimenter.n_neighbors, device=device,
@@ -216,6 +216,8 @@ def incremental_cdr_pipeline():
         stream_dataset.add_new_data(cur_batch_data, None, total_labels[batch_indices[i]], knn_indices, knn_dists)
         stream_dataset.update_knn_graph(len(total_data[fitted_indices]), total_data[batch_indices[i]],
                                         [0, cur_batch_num])
+
+        steady_constraints = stream_dataset.cal_old2new_relationship(old_n_samples=fitted_num)
 
         # 3.需要改变模型的损失计算。使用不同的方式进行incremental learning。需要创建一个新的train方法。
         experimenter.prepare_resume(fitted_num, cur_batch_num, RESUME_EPOCH)

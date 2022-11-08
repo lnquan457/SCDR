@@ -12,7 +12,7 @@ from dataset.warppers import StreamingDatasetWrapper
 from model.dr_models.ModelSets import MODELS
 from model.scdr.dependencies.embedding_optimizer import EmbeddingOptimizer
 from model.scdr.dependencies.experiment import position_vis
-from model.scdr.dependencies.scdr_utils import EmbeddingQualitySupervisor
+from model.scdr.dependencies.scdr_utils import EmbeddingQualitySupervisor, ClusterRepDataSampler
 from model.scdr.model_trainer import IncrementalCDREx
 from model_update_main import IndicesGenerator, query_knn
 from utils.common_utils import time_stamp_to_date_time_adjoin, get_config
@@ -184,7 +184,7 @@ def incremental_cdr_pipeline():
     cfg.merge_from_file(CONFIG_PATH)
     clr_model = MODELS[METHOD_NAME](cfg, device=device)
     t_log_path = os.path.join(RESULT_SAVE_DIR, "logs.txt")
-    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH, shuffle=True,
+    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH,
                                     device=device, log_path=t_log_path)
     n_neighbors = experimenter.n_neighbors
     a, b = find_ab_params(1.0, MIN_DIST)
@@ -256,14 +256,19 @@ def incremental_cdr_pipeline():
     new_changed_num = 0
     old_changed_num = 0
 
-    wait_for_optimize_meta = None
-    total_pre_optimize = 0
-    total_skip_opt = 0
+    quality_supervisor_acc = 0
 
-    # d_thresh = 0
-    # e_thresh = pre_neighbor_embedding_m_dist + pre_neighbor_embedding_s_dist
-    # embedding_quality_supervisor = EmbeddingQualitySupervisor(60, 150, 200, d_thresh, e_thresh)
-    # embedding_quality_supervisor.update_model_update_time(time.time())
+    cluster_rep_data_sampler = ClusterRepDataSampler(sample_rate=0, min_num=150, cover_all=True)
+    cluster_indices = cluster_rep_data_sampler.sample(initial_data, initial_embeddings,
+                                                      experimenter.acquire_latent_code_allin,
+                                                      pre_neighbor_embedding_m_dist, experimenter.n_neighbors, device,
+                                                      initial_labels)[-1]
+    cluster_centers, mean_d, std_d = cluster_rep_data_sampler.dist_to_nearest_cluster_centroids(initial_data, cluster_indices)
+    d_thresh = mean_d + 1 * std_d
+    e_thresh = pre_neighbor_embedding_m_dist + 0 * pre_neighbor_embedding_s_dist
+    print("d thresh:", d_thresh, " e thresh:", e_thresh)
+    embedding_quality_supervisor = EmbeddingQualitySupervisor(60, 150, 200, d_thresh, e_thresh)
+    embedding_quality_supervisor.update_model_update_time(time.time())
 
     embedding_optimizer = EmbeddingOptimizer(pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist,
                                              pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist, skip_opt=SKIP_OPT)
@@ -277,9 +282,6 @@ def incremental_cdr_pipeline():
             cur_data_idx = batch_indices[i][j]
             cur_data = cur_batch_data[j][np.newaxis, :]
             cur_label = total_labels[cur_data_idx]
-            sta = time.time()
-            cur_embedding = experimenter.cal_lower_embeddings(cur_data)[np.newaxis, :]
-            infer_time += time.time() - sta
 
             sta = time.time()
             knn_indices, knn_dists, sort_indices = \
@@ -287,25 +289,6 @@ def incremental_cdr_pipeline():
                           return_indices=True)
             new_data_avg_knn_dist.append(np.mean(knn_dists))
             knn_cal_time += time.time() - sta
-
-            # before_mean_dist = np.mean(low_knn_dists)
-
-            # need_optimize, need_update_model = \
-            #     embedding_quality_supervisor.quality_record(cur_data, cur_embedding, None,
-            #                                                 experimenter.pre_embeddings[knn_indices.squeeze()])
-
-            need_optimize = int(cur_label) not in fitted_manifolds
-            # dis_change = neighbor_cover < 0.21 - 0.14   # mean - alpha * std
-
-            # dists2pre_embeddings = cdist(cur_embedding, experimenter.pre_embeddings)
-            # sort_indices = np.argsort(dists2pre_embeddings).squeeze()
-            # average_rank = 0
-            # for item in knn_indices[0]:
-            #     tmp_idx = int(np.argwhere(sort_indices == item).squeeze())
-            #     average_rank += tmp_idx
-
-            # DEBUG
-            # dis_change = False
 
             sta = time.time()
             stream_dataset.add_new_data(cur_data, None, cur_label, knn_indices, knn_dists)
@@ -316,6 +299,41 @@ def incremental_cdr_pipeline():
                                             symmetric=False)
             knn_update_time += time.time() - sta
 
+            sta = time.time()
+            cur_neighbors = stream_dataset.get_total_data()[knn_indices.squeeze()]
+            need_embedding_data = np.concatenate([cur_data, cur_neighbors], axis=0)
+            embeddings = experimenter.cal_lower_embeddings(need_embedding_data)
+            cur_embedding = embeddings[0][np.newaxis, :]
+            cur_neighbor_model_embeddings = embeddings[1:]
+
+            # cur_embedding = experimenter.cal_lower_embeddings(cur_data)[np.newaxis, :]
+            infer_time += time.time() - sta
+
+            # before_mean_dist = np.mean(low_knn_dists)
+
+            p_need_optimize, need_update_model = \
+                embedding_quality_supervisor.quality_record(cur_data, cur_embedding, cluster_centers,
+                                                            cur_neighbor_model_embeddings)
+
+            # p_need_optimize, need_update_model = \
+            #     embedding_quality_supervisor.quality_record(cur_data, None, cluster_centers, None)
+
+            # p_need_optimize, need_update_model = \
+            #     embedding_quality_supervisor.quality_record(None, cur_embedding, None,
+            #                                                 experimenter.pre_embeddings[knn_indices.squeeze()])
+
+            # p_need_optimize, need_update_model = \
+            #     embedding_quality_supervisor.quality_record(None, cur_embedding, None, cur_neighbor_model_embeddings)
+
+            need_optimize = int(cur_label) not in fitted_manifolds
+
+            if p_need_optimize == need_optimize:
+                quality_supervisor_acc += 1
+
+            # DEBUG
+            # need_optimize = False
+
+            # 低维的kNN目前仅用于评估
             sta = time.time()
             low_knn_indices, low_knn_dists, low_nn_indices = \
                 query_knn(cur_embedding, np.concatenate([experimenter.pre_embeddings, cur_embedding], axis=0), k=K,
@@ -343,7 +361,6 @@ def incremental_cdr_pipeline():
             sta = time.time()
             # 注意！并不是所有邻居点都跟他互相是邻居！
             if OPTIMIZE_SHARED_NEIGHBORS:
-
                 neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
                     stream_dataset.get_pre_neighbor_changed_info()
 
@@ -441,7 +458,7 @@ def incremental_cdr_pipeline():
                           knn_indices=metric_tool.low_knn_indices)
     eval_time += time.time() - sta
 
-    print("old change: %d new change: %d" % (old_changed_num, new_changed_num))
+    print("quality supervisor acc:", quality_supervisor_acc / len(new_data_avg_knn_dist))
 
     # _print_some("No Change!", total_neighbor_cover_list[0], total_avg_rank_list[0])
     # _print_some("Change!", total_neighbor_cover_list[1], total_avg_rank_list[1])

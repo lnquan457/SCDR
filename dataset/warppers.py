@@ -158,13 +158,10 @@ class DataSetWrapper(DataRepo):
         self.batch_num = math.floor(train_num / self.batch_size)
         return train_num
 
-    def distance2prob(self, normalize_method, train_dataset, symmetric):
+    def distance2prob(self, train_dataset, symmetric):
         # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
-        if normalize_method == ComponentInfo.UMAP_NORMALIZE:
-            train_dataset.umap_process(self._knn_manager.knn_indices, self._knn_manager.knn_dists, self.n_neighbor,
-                                       symmetric)
-        else:
-            train_dataset.simple_preprocess(self._knn_manager.knn_indices, self._knn_manager.knn_dists)
+        train_dataset.umap_process(self._knn_manager.knn_indices, self._knn_manager.knn_dists, self.n_neighbor,
+                                   symmetric)
 
         self._update_knn_stat(train_dataset)
 
@@ -246,6 +243,15 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.cur_neighbor_changed_indices = None
         self.__replaced_raw_weights = []
         self.add_new_data(data=initial_data, labels=initial_label)
+        self.__sigmas = None
+        self.__rhos = None
+
+    def distance2prob(self, train_dataset, symmetric):
+        # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
+        sigmas, rhos = train_dataset.umap_process(self._knn_manager.knn_indices, self._knn_manager.knn_dists,
+                                                  self.n_neighbor, symmetric, return_meta=True)[-2:]
+        self._update_knn_stat(train_dataset)
+        return sigmas, rhos
 
     def get_data_loaders(self, epoch_num, dataset_name, root_dir, n_neighbors, knn_cache_path=None,
                          pairwise_cache_path=None, is_image=True, data_file_path=None,
@@ -260,7 +266,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
                                                            None, accelerate=False)
             self._knn_manager.add_new_kNN(knn_indices, knn_distances)
 
-        self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
+        self.__sigmas, self.__rhos = self.distance2prob(train_dataset, symmetric)
 
         train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
         train_indices = self._generate_train_indices(train_num, train_dataset)
@@ -287,9 +293,11 @@ class StreamingDatasetWrapper(DataSetWrapper):
                                                   train_data=[self.get_total_data(), self.get_total_label()])
         else:
             if normalize_method == ComponentInfo.UMAP_NORMALIZE:
-                train_dataset = UMAP_CLR_Text_Dataset(None, None, True, train_data=[self.get_total_data(), self.get_total_label()])
+                train_dataset = UMAP_CLR_Text_Dataset(None, None, True,
+                                                      train_data=[self.get_total_data(), self.get_total_label()])
             else:
-                train_dataset = CLR_Text_Dataset(None, None, True, train_data=[self.get_total_data(), self.get_total_label()])
+                train_dataset = CLR_Text_Dataset(None, None, True,
+                                                 train_data=[self.get_total_data(), self.get_total_label()])
             data_augment = None
         return data_augment, train_dataset
 
@@ -314,13 +322,13 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         new_sample_indices = np.arange(new_n_samples) + pre_n_samples
         neighbor_changed_indices = list(new_sample_indices)
-        self.cur_neighbor_changed_indices = neighbor_changed_indices
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
         self.__replaced_raw_weights = []
         neighbor_changed_indices = self._knn_manager.update_previous_kNN(new_n_samples, pre_n_samples, dists,
                                                                          data_num_list, neighbor_changed_indices)
+        self.cur_neighbor_changed_indices = neighbor_changed_indices
 
         knn_changed_neighbor_meta = self._knn_manager.get_pre_neighbor_changed_positions()
         if len(knn_changed_neighbor_meta) > 0:
@@ -331,16 +339,20 @@ class StreamingDatasetWrapper(DataSetWrapper):
                                               axis=0)
         self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(shape=new_n_samples)])
         self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(shape=new_n_samples)])
+        self.__sigmas = np.concatenate([self.__sigmas, np.ones(new_n_samples)])
+        self.__rhos = np.concatenate([self.__rhos, np.ones(new_n_samples)])
 
         if not update_similarity:
             cur_update_indices = new_sample_indices
         else:
             cur_update_indices = neighbor_changed_indices
 
-        umap_graph, _, _, self.raw_knn_weights = fuzzy_simplicial_set_partial(knn_indices, knn_distances,
-                                                                              self.raw_knn_weights, cur_update_indices,
-                                                                              apply_set_operations=symmetric,
-                                                                              return_coo_results=symmetric)
+        umap_graph, cur_sigmas, cur_rhos, self.raw_knn_weights = \
+            fuzzy_simplicial_set_partial(knn_indices, knn_distances, self.raw_knn_weights, cur_update_indices,
+                                         apply_set_operations=symmetric, return_coo_results=symmetric)
+
+        self.__sigmas[cur_update_indices] = cur_sigmas
+        self.__rhos[cur_update_indices] = cur_rhos
 
         if symmetric:
             updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, cur_update_indices)
@@ -377,6 +389,25 @@ class StreamingDatasetWrapper(DataSetWrapper):
         super().add_new_data(data, embeddings, labels, knn_indices, knn_dists)
         if self.train_dataset is not None:
             self.train_dataset.add_new_data(data, labels)
+
+    def cal_old2new_relationship(self, old_n_samples, reduction="max"):
+        old_data = self.get_total_data()[:old_n_samples]
+        new_data = self.get_total_data()[old_n_samples:]
+        old_rhos = self.__rhos[:old_n_samples]
+        old_sigmas = self.__sigmas[:old_n_samples]
+        dists = cdist(old_data, new_data)
+        normed_dists = dists-old_rhos[:, np.newaxis]
+        normed_dists[normed_dists < 0] = 0
+        total_relationships = np.exp(-normed_dists/old_sigmas[:, np.newaxis])
+
+        if reduction == "mean":
+            relationships = np.mean(total_relationships, axis=1)
+        elif reduction == "max":
+            relationships = np.max(total_relationships, axis=1)
+        else:
+            raise RuntimeError("'reduction' should be one of 'mean/max'")
+
+        return 1 - relationships
 
 
 # 负责存储以及更新kNN
@@ -441,7 +472,8 @@ class KNNManager:
                     if symm and self.knn_indices[j][-1] not in neighbor_changed_indices:
                         neighbor_changed_indices.append(self.knn_indices[j][-1])
 
-                    self._pre_neighbor_changed_meta.append([i+pre_n_samples, j, insert_index + 1, self.knn_indices[j][-1]])
+                    self._pre_neighbor_changed_meta.append(
+                        [i + pre_n_samples, j, insert_index + 1, self.knn_indices[j][-1]])
                     # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
                     arr_move_one(self.knn_dists[j], insert_index + 1, dists2pre_data[i][j])
                     arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)

@@ -168,7 +168,8 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
     n_neighbors = all_knn_indices.shape[1]
     # 最耗时的！ 90+%
     # sigmas, rhos = smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
-    sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
+    sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, np.mean(updated_knn_dists, axis=1), float(n_neighbors),
+                                              local_connectivity=float(local_connectivity))
 
     # 第二耗时，5%
     rows, cols, vals, dists = compute_membership_strengths(
@@ -252,6 +253,7 @@ def fuzzy_simplicial_set(
     # )
     sigmas, rhos = simplified_smooth_knn_dist(
         knn_dists,
+        np.mean(knn_dists, axis=1),
         float(n_neighbors),
         local_connectivity=float(local_connectivity),
     )
@@ -492,8 +494,8 @@ def compute_local_membership(knn_dist, knn_indices, local_connectivity=1):
     return vals
 
 
-@jit(forceobj=True)
-def simplified_smooth_knn_dist(distances, k, n_iter=64, local_connectivity=1.0, bandwidth=1.0):
+@jit(nopython=True)
+def simplified_smooth_knn_dist(distances, mean_distances, k, n_iter=64, local_connectivity=1.0, bandwidth=1.0):
     """
     Compute a continuous version of the distance to the kth nearest
     neighbor. That is, this is similar to knn-distance but allows continuous
@@ -505,10 +507,9 @@ def simplified_smooth_knn_dist(distances, k, n_iter=64, local_connectivity=1.0, 
     rho = np.zeros(distances.shape[0], dtype=np.float32)
     result = np.zeros(distances.shape[0], dtype=np.float32)
 
-    mean_distances = np.mean(distances, axis=1)
-
     # 获取所有点到其最近邻居的距离
-    for i in range(distances.shape[0]):
+    for i in numba.prange(distances.shape[0]):
+        # print("i=", i)
         lo = 0.0
         hi = NPY_INFINITY
         mid = 1.0

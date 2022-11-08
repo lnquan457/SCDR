@@ -183,12 +183,15 @@ class UMAP_Text_Dataset(MyTextDataset):
         return umap_graph, sigmas, rhos
 
     def umap_process(self, knn_cache_path, pairwise_cache_path, n_neighbors, embedding_epoch, metric="euclidean",
-                     max_candidates=60):
+                     max_candidates=60, return_meta=False):
         # 这里的umap_graph是一共csr格式的矩阵，表示了所有可能存在边的数据点对关系以及它们的权重
         umap_graph, sigmas, rhos = self.build_fuzzy_simplicial_set(knn_cache_path, pairwise_cache_path, n_neighbors,
                                                                    metric, max_candidates)
         self.edge_data, self.edge_num, self.edge_weight = construct_edge_dataset(
             self.data, umap_graph, embedding_epoch)
+
+        if return_meta:
+            return self.edge_data, self.edge_num, sigmas, rhos
 
         return self.edge_data, self.edge_num
 
@@ -333,10 +336,11 @@ class UMAP_CLR_Text_Dataset(CLR_Text_Dataset):
         #       right_snn_neighbor_num / total_num)
 
         self.symmetry_knn_dists = knn_dist.tocoo()
+        return self.umap_graph, sigmas, rhos
 
-    def umap_process(self, knn_indices, knn_distances, n_neighbors, symmetric):
+    def umap_process(self, knn_indices, knn_distances, n_neighbors, symmetric, return_meta=False):
         # 这里的umap_graph是一共csr格式的矩阵，表示了所有可能存在边的数据点对关系以及它们的权重
-        self.build_fuzzy_simplicial_set(knn_indices, knn_distances, n_neighbors, symmetric)
+        self.umap_graph, sigmas, rhos = self.build_fuzzy_simplicial_set(knn_indices, knn_distances, n_neighbors, symmetric)
 
         self.data_num = knn_indices.shape[0]
         n_samples = self.data_num
@@ -348,6 +352,11 @@ class UMAP_CLR_Text_Dataset(CLR_Text_Dataset):
         self.symmetry_knn_weights = np.array(nn_weights, dtype=object)
         self.symmetry_knn_dists = np.array(nn_dists, dtype=object)
         self.sym_no_norm_weights = np.array(raw_weights, dtype=object)
+
+        if return_meta:
+            return None, None, sigmas, rhos
+
+        return None, None
 
 
 class UMAP_CLR_Image_Dataset(CLR_Image_Dataset, UMAP_CLR_Text_Dataset):
