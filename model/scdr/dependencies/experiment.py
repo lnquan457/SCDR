@@ -502,6 +502,7 @@ class Experiment:
             使用 model.eval() 将模型切换到测试模式，此时BN和Dropout中的参数不会改变
             """
             self.model.eval()
+            data = data.to(device)
             # self.model.encoder.eval()
             if self.multi:
                 z = self.model.module.acquire_latent_code(data)

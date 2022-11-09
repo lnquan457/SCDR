@@ -3,6 +3,7 @@
 import shutil
 from multiprocessing import Process
 
+import numpy as np
 import torch
 import os
 import time
@@ -20,24 +21,24 @@ class SCDRTrainer(CDRsExperiments):
                  log_path="log_streaming.txt"):
         CDRsExperiments.__init__(self, model, dataset_name, configs, result_save_dir, config_path, True, device,
                                  log_path)
-        self.streaming_dataset = None
+        self.stream_dataset = None
         self.finetune_epochs = 50
         self.minimum_finetune_data_num = 400
         self.finetune_data_num = 0
         self.cur_time = 0
         self.first_train_data_num = 0
-        self.max_batch_size = 1024
+        self.max_batch_size = 256
 
     def update_batch_size(self, data_num):
         # TODO: 如何设置batch size也是需要研究的
         self.batch_size = min(data_num, self.max_batch_size)
-        self.streaming_dataset.batch_size = self.batch_size
+        self.stream_dataset.batch_size = self.batch_size
         self.model.update_batch_size(int(self.batch_size))
         self.model.reset_partial_corr_mask()
 
     def initialize_streaming_dataset(self, dataset):
         self.first_train_data_num = dataset.get_total_data().shape[0]
-        self.streaming_dataset = dataset
+        self.stream_dataset = dataset
 
     def first_train(self, dataset: StreamingDatasetWrapper, epochs, ckpt_path=None):
         self.preprocess(load_data=False)
@@ -69,13 +70,13 @@ class SCDRTrainer(CDRsExperiments):
 
     def update_dataloader(self, epochs, sampled_indices=None):
         if self.train_loader is None:
-            self.train_loader, self.n_samples = self.streaming_dataset.get_data_loaders(
+            self.train_loader, self.n_samples = self.stream_dataset.get_data_loaders(
                 epochs, self.dataset_name, ConfigInfo.DATASET_CACHE_DIR, self.n_neighbors, is_image=self.is_image,
                 multi=self.multi)
         else:
             if sampled_indices is None:
-                sampled_indices = np.arange(0, self.streaming_dataset.get_total_data().shape[0], 1)
-            self.train_loader, self.n_samples = self.streaming_dataset.update_data_loaders(epochs, sampled_indices)
+                sampled_indices = np.arange(0, self.stream_dataset.get_total_data().shape[0], 1)
+            self.train_loader, self.n_samples = self.stream_dataset.update_data_loaders(epochs, sampled_indices)
 
     def quantitative_test_all(self, epoch, embedding_data=None, mid_embeddings=None, device='cuda', val=False):
         self.metric_tool = None
@@ -197,17 +198,13 @@ class IncrementalCDREx(SCDRTrainer):
     def __init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, device='cuda',
                  log_path="logs.txt"):
         SCDRTrainer.__init__(self, clr_model, dataset_name, config_path, configs, result_save_dir, device, log_path)
-        self._rep_old_data = None
-        self._pre_rep_old_embeddings = None
-        self._rep_embeddings_pw_dists = []
+        self._rep_old_data_indices = None
         self._is_incremental_learning = False
-        self.stream_dataset = None
         self.incremental_steps = 0
 
         # 用于计算VC损失
         self.rep_batch_nums = None
-        self.rep_cluster_indices = None
-        self.rep_exclude_indices = None
+        self.cluster_centers = None
 
     def active_incremental_learning(self):
         self._is_incremental_learning = True
@@ -237,19 +234,45 @@ class IncrementalCDREx(SCDRTrainer):
 
     def _train_step(self, *args):
         x, x_sim, epoch, indices, sim_indices = args
-        idx = self.incremental_steps % self.rep_batch_nums if self.rep_batch_nums is not None else -1
+
         self.optimizer.zero_grad()
 
         with torch.cuda.device(self.device_id):
             _, x_embeddings, _, x_sim_embeddings = self.forward(x, x_sim)
-            rep_old_embeddings = self.model.acquire_latent_code(self._rep_old_data[idx] if idx >= 0 else None)
 
-        # 使用嵌入编码计算contrastive loss
         if self._is_incremental_learning:
+            idx = self.incremental_steps % self.rep_batch_nums
+            neighbor_idx = self.incremental_steps % self.n_neighbors
+            cur_rep_data_indices = self._rep_old_data_indices[idx]
+
+            cur_rep_data = self.stream_dataset.get_total_data()[cur_rep_data_indices]
+            cur_rep_data = torch.tensor(cur_rep_data, dtype=torch.float).to(self.device)
+
+            pre_rep_embeddings = self.pre_embeddings[cur_rep_data_indices]
+            pre_rep_embeddings = torch.tensor(pre_rep_embeddings, dtype=torch.float).to(self.device)
+
+            # TODO：对于kNN发生变化的数据，没有对应的之前的邻居嵌入，这要如何处理？
+            # 这种情况就不需要再保持它们之间的点对距离关系了。或者说这里的变化应该由每个点的系数决定？这里还是使用旧的kNN。
+
+            # 传统的增量学习方法中，模型对旧数据的标准是不会随着新数据到达而改变的。而在我们的场景下，对旧数据的嵌入标准是可能发生变化的，这是一个新的挑战。
+            # 而我们在保持模型对旧数据的性能的同时，去适应这种标准的变化，是我们的贡献。
+            # 在考虑增量式更新时，不要把时序稳定性引入进来。所以正确的做法应该是放弃kNN发生变化的邻居点对关系的保持。
+
+            neighbors_indices = self.stream_dataset.get_knn_indices()[cur_rep_data_indices, neighbor_idx]
+            no_change_indices = np.where(neighbors_indices < self.pre_embeddings.shape[0])[0]
+            if len(no_change_indices) > 0:
+                pre_rep_neighbors_embeddings = self.pre_embeddings[neighbors_indices[no_change_indices]]
+                pre_rep_neighbors_embeddings = torch.tensor(pre_rep_neighbors_embeddings, dtype=torch.float).to(self.device)
+            else:
+                pre_rep_neighbors_embeddings = None
+
+            with torch.cuda.device(self.device_id):
+                rep_embeddings = self.model.acquire_latent_code(cur_rep_data)
+                cluster_center_embeddings = self.model.acquire_latent_code(self.cluster_centers)
+
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning,
-                                                 rep_old_embeddings, self._pre_rep_old_embeddings[idx],
-                                                 self.rep_cluster_indices[idx], self.rep_exclude_indices[idx],
-                                                 self._rep_embeddings_pw_dists[idx])
+                                                 rep_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings,
+                                                 no_change_indices, cluster_center_embeddings, idx)
             self.incremental_steps += 1
         else:
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning)
@@ -264,14 +287,18 @@ class IncrementalCDREx(SCDRTrainer):
         new_data, new_labels = args[0], args[1]
         self.stream_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size, self.n_neighbors)
 
-    def _update_rep_data_info(self, rep_batch_nums, data, embeddings, cluster_indices, exclude_indices):
+    def _update_rep_data_info(self, rep_batch_nums, rep_data_indices, cluster_indices, exclude_indices, cluster_centers,
+                              pre_cluster_center_embeddings, steady_weights):
         self.incremental_steps = 0
-        self._rep_embeddings_pw_dists = []
         self.rep_batch_nums = rep_batch_nums
-        self._rep_old_data = torch.tensor(data, dtype=torch.float).to(self.device)
-        if not isinstance(embeddings, torch.Tensor):
-            self._pre_rep_old_embeddings = torch.tensor(embeddings, dtype=torch.float).to(self.device)
-        for item in self._pre_rep_old_embeddings:
-            self._rep_embeddings_pw_dists.append(torch.cdist(item, item))
-        self.rep_cluster_indices = cluster_indices
-        self.rep_exclude_indices = exclude_indices
+        self._rep_old_data_indices = rep_data_indices
+
+        if not isinstance(pre_cluster_center_embeddings, torch.Tensor):
+            pre_cluster_center_embeddings = torch.tensor(pre_cluster_center_embeddings, dtype=torch.float).to(self.device)
+
+        if not isinstance(cluster_centers, torch.Tensor):
+            cluster_centers = torch.tensor(cluster_centers, dtype=torch.float).to(self.device)
+        self.cluster_centers = cluster_centers
+
+        self.model.update_rep_data_info(cluster_indices, exclude_indices, pre_cluster_center_embeddings, steady_weights)
+

@@ -23,7 +23,7 @@ class KeyPointsGenerator:
     def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, cover_all=False, **kwargs):
         # cover_all = True：表示将在一次epoch中采样之前的所有数据，每个batch中均包含来自不同聚类的数据
         if key_rate >= 1 or (cover_all and method == KeyPointsGenerator.RANDOM):
-            return data, np.arange(0, data.shape[0], 1)
+            return data, np.arange(0, data.shape[0], 1), None, None
         if method == KeyPointsGenerator.RANDOM:
             return KeyPointsGenerator._generate_randomly(data, key_rate, prob, min_num)
         elif method == KeyPointsGenerator.KMEANS:
@@ -43,7 +43,7 @@ class KeyPointsGenerator:
         key_data_num = max(int(n_samples * key_rate), min_num)
         # TODO: choice这个接口有问题，返回的不是唯一值
         key_indices = np.random.choice(indices, key_data_num, p=prob / np.sum(prob), replace=False)
-        return data[key_indices], key_indices
+        return data[key_indices], key_indices, None, None
 
     @staticmethod
     def _generate_kmeans_based(data, key_rate, is_random=True, prob=None, min_num=0, cover_all=False):
@@ -274,30 +274,20 @@ class ClusterRepDataSampler:
         self.__min_num = min_num
         self.__cover_all = cover_all
 
-    def sample(self, fitted_data, fitted_embeddings, embedding_func, eps, min_samples, device, labels=None):
-        rep_old_data, rep_old_indices, cluster_indices, exclude_indices, total_cluster_indices = \
+    def sample(self, fitted_embeddings, eps, min_samples, labels=None):
+        _, rep_old_indices, cluster_indices, exclude_indices, total_cluster_indices = \
             KeyPointsGenerator.generate(fitted_embeddings, self.__sample_rate, method=KeyPointsGenerator.DBSCAN,
                                         min_num=self.__min_num, cover_all=self.__cover_all, eps=eps,
                                         min_samples=min_samples, labels=labels)
 
         if not self.__cover_all:
-            rep_batch_nums = 1
-            rep_old_data = [fitted_data[rep_old_indices]]
+            rep_old_indices = [rep_old_indices]
             cluster_indices = [cluster_indices]
             exclude_indices = [exclude_indices]
-            # 2.将代表点数据作为候选负例兼容到模型的增量训练中，每次都需要计算代表性数据的嵌入
-            rep_old_embeddings = [embedding_func(torch.tensor(rep_old_data, dtype=torch.float).to(device), device)]
 
-        else:
-            rep_batch_nums = len(rep_old_indices)
-            rep_old_data = []
-            rep_old_embeddings = []
-            for item in rep_old_indices:
-                # print("num:", len(item))
-                rep_old_data.append(fitted_data[item])
-                rep_old_embeddings.append(fitted_embeddings[item])
+        rep_batch_nums = len(rep_old_indices)
 
-        return rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices, total_cluster_indices
+        return rep_batch_nums, rep_old_indices, cluster_indices, exclude_indices, total_cluster_indices
 
     def dist_to_nearest_cluster_centroids(self, fitted_data, cluster_indices):
         centroids = []
@@ -308,7 +298,7 @@ class ClusterRepDataSampler:
 
         dist_matrix = cdist(fitted_data[all_indices], np.array(centroids))
         min_dist = np.min(dist_matrix, axis=1)
-        return centroids, np.mean(min_dist), np.std(min_dist)
+        return np.array(centroids), np.mean(min_dist), np.std(min_dist)
 
 
 class DistributionChangeDetector:

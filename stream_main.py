@@ -39,7 +39,7 @@ def stream_rate_ex():
             result_save_dir = "results/初步实验/stream_rate/single cluster/r{}/{}".format(item, m)
             # result_save_dir = "results/初步实验/stream_rate/multi cluster/r{}/{}".format(item, m)
 
-            custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.streaming_dataset)
+            custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.stream_dataset)
             # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster\{}_3_3_3_2.npy".format(
             #     cfg.exp_params.dataset)
             custom_indices_training(custom_indices_path)
@@ -59,7 +59,7 @@ def cluster_composite_ex():
         # result_save_dir = "results/初步实验/cluster composite/multi cluster/recurring/{}".format(m)
         # result_save_dir = "results/初步实验/cluster composite/identical distribution/{}".format(m)
         custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster_recur\{}_recur2.npy".format(
-            cfg.exp_params.streaming_dataset)
+            cfg.exp_params.stream_dataset)
         # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_3_3_3_2_recur2.npy".format(
         #     cfg.exp_params.dataset)
         # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_11_recur5.npy".format(

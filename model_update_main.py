@@ -186,11 +186,16 @@ def incremental_cdr_pipeline():
         ravel_2 = experimenter.pre_embeddings[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors // 2])]
         embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
 
-        rep_batch_nums, rep_old_data, rep_old_embeddings, cluster_indices, exclude_indices, _ = \
-            rep_data_sampler.sample(total_data[fitted_indices], experimenter.pre_embeddings,
-                                    experimenter.acquire_latent_code_allin, eps=embedding_nn_dist,
-                                    min_samples=experimenter.n_neighbors, device=device,
-                                    labels=total_labels[fitted_indices])
+        rep_batch_nums, rep_data_indices, cluster_indices, exclude_indices, total_cluster_indices = \
+            rep_data_sampler.sample(experimenter.pre_embeddings, eps=embedding_nn_dist,
+                                    min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
+
+        cluster_centers, mean_d, std_d = rep_data_sampler.dist_to_nearest_cluster_centroids(total_data[fitted_indices],
+                                                                                            total_cluster_indices)
+        if len(cluster_centers.shape) < 2:
+            cluster_centers = cluster_centers[np.newaxis, :]
+        cluster_center_embeddings = experimenter.acquire_latent_code_allin(torch.tensor(cluster_centers,
+                                                                                        dtype=torch.float), device)
 
         # representations = experimenter.cal_lower_representations(total_data[fitted_indices])
         # ravel_1 = np.reshape(np.repeat(representations[:, np.newaxis, :], n_neighbors // 2, 1),
@@ -221,8 +226,9 @@ def incremental_cdr_pipeline():
 
         # 3.需要改变模型的损失计算。使用不同的方式进行incremental learning。需要创建一个新的train方法。
         experimenter.prepare_resume(fitted_num, cur_batch_num, RESUME_EPOCH)
-        embeddings = experimenter.resume_train(RESUME_EPOCH, (rep_batch_nums, rep_old_data, rep_old_embeddings,
-                                                              cluster_indices, exclude_indices))
+        embeddings = experimenter.resume_train(RESUME_EPOCH, (rep_batch_nums, rep_data_indices, cluster_indices,
+                                                              exclude_indices, cluster_centers,
+                                                              cluster_center_embeddings, steady_constraints))
         cost_time = time.time() - sta
         position_vis(stream_dataset.get_total_label(), os.path.join(RESULT_SAVE_DIR, "{}.jpg".format(i)), embeddings,
                      title="Step {} Embeddings".format(i))

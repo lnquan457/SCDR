@@ -259,10 +259,8 @@ def incremental_cdr_pipeline():
     quality_supervisor_acc = 0
 
     cluster_rep_data_sampler = ClusterRepDataSampler(sample_rate=0, min_num=150, cover_all=True)
-    cluster_indices = cluster_rep_data_sampler.sample(initial_data, initial_embeddings,
-                                                      experimenter.acquire_latent_code_allin,
-                                                      pre_neighbor_embedding_m_dist, experimenter.n_neighbors, device,
-                                                      initial_labels)[-1]
+    cluster_indices = cluster_rep_data_sampler.sample(initial_embeddings, pre_neighbor_embedding_m_dist,
+                                                      experimenter.n_neighbors, initial_labels)[-1]
     cluster_centers, mean_d, std_d = cluster_rep_data_sampler.dist_to_nearest_cluster_centroids(initial_data, cluster_indices)
     d_thresh = mean_d + 1 * std_d
     e_thresh = pre_neighbor_embedding_m_dist + 0 * pre_neighbor_embedding_s_dist
