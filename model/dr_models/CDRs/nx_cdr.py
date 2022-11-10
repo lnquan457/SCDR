@@ -41,7 +41,7 @@ class NxCDRModel(Module):
         self.input_dims = cfg.exp_params.input_dims
         self.latent_dim = cfg.exp_params.latent_dim
         self.similarity_method = "umap"
-        self.temperature = cfg.method_params.temperature
+        self.temperature = torch.tensor(cfg.method_params.temperature)
         self.epoch_num = cfg.method_params.initial_train_epoch
         self.batch_size = cfg.method_params.batch_size
 

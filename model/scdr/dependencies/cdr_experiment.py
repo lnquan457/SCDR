@@ -48,8 +48,8 @@ class CDRsExperiments(Experiment):
             init_epoch, self.dataset_name, ConfigInfo.DATASET_CACHE_DIR, self.n_neighbors, knn_cache_path,
             pairwise_cache_path, self.is_image, multi=self.multi)
 
-        self.knn_indices = clr_dataset.knn_indices
-        self.knn_dists = clr_dataset.knn_distances
+        self.knn_indices = clr_dataset.get_knn_indices()
+        self.knn_dists = clr_dataset.get_knn_dists()
 
         self.batch_num = clr_dataset.batch_num
         self.model.batch_num = self.batch_num

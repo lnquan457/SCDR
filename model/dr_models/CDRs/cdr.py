@@ -14,8 +14,6 @@ class CDRModel(NxCDRModel):
         self.ratio = math.exp(1 / self.temperature) / torch.max(torch_app_skewnorm_func(torch.linspace(0, 1, 1000), 1))
 
         self.a = torch.tensor(-40)
-        # loc这个值是不是也可以动态改变，从大到小
-        # 整个增强范围随着训练过程是有宽到窄的，而增强的强度则是由小到大的
         self.loc = torch.tensor(cfg.method_params.split_upper)
         self.lower_thresh = torch.tensor(cfg.method_params.split_lower)
         self.scale = torch.tensor(0.13)
@@ -39,10 +37,10 @@ class CDRModel(NxCDRModel):
         if self.separate_epoch <= epoch <= self.steady_epoch:
             epoch_ratio = torch.tensor((epoch - self.separate_epoch) / (self.steady_epoch - self.separate_epoch))
             cur_lower_thresh = 0.001 + (self.lower_thresh - 0.001) * epoch_ratio
-            loss = Mixture_NT_Xent.apply(logits, torch.tensor(self.temperature), self.alpha, self.a, self.loc,
+            loss = Mixture_NT_Xent.apply(logits, self.temperature, self.alpha, self.a, self.loc,
                                          cur_lower_thresh, self.scale)
         else:
-            loss = self.criterion(logits, torch.tensor(self.temperature))
+            loss = self.criterion(logits, self.temperature)
 
         return loss
 
@@ -62,19 +60,15 @@ class LwFCDR(CDRModel):
         # 用于计算VC损失
         self._rep_cluster_indices = None
         self._rep_exclude_indices = None
-        self._pre_cluster_center_embeddings = None
-        self._steady_weights = None
 
     def update_neg_num(self, new_neg_num):
         if self.neg_num is not None:
             self.neg_num = min(new_neg_num, self.batch_size)
             self.correlated_mask = (1 - torch.eye(self.neg_num)).type(torch.bool)
 
-    def update_rep_data_info(self, cluster_indices, exclude_indices, pre_cluster_center_embeddings, steady_weights):
+    def update_rep_data_info(self, cluster_indices, exclude_indices):
         self._rep_cluster_indices = cluster_indices
         self._rep_exclude_indices = exclude_indices
-        self._pre_cluster_center_embeddings = pre_cluster_center_embeddings
-        self._steady_weights = steady_weights
 
     def compute_loss(self, x_embeddings, x_sim_embeddings, *args):
         epoch = args[0]
@@ -85,34 +79,44 @@ class LwFCDR(CDRModel):
         if not is_incremental_learning:
             return novel_nce_loss
 
+        # novel_pos_logits = torch.clone(novel_logits)
+        # novel_neg_logits = torch.clone(novel_logits)
+        # novel_pos_logits[:, 1:] = novel_pos_logits[:, 1:].detach()
+        # novel_neg_logits[:, 0] = novel_pos_logits[:, 0].detach()
+        #
+        # novel_pos_loss = self._post_loss(novel_pos_logits, None, epoch, None, *args)
+        # novel_neg_loss = self._post_loss(novel_neg_logits, None, epoch, None, *args)
+
         rep_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings = args[2], args[3], args[4]
         no_change_indices = args[5]
-        cluster_center_embeddings, batch_idx = args[6], args[7]
+        steady_weights, neighbor_steady_weights = args[6], args[7]
+        batch_idx = args[8]
 
         old_logits = self.cal_old_logits(x_embeddings, x_sim_embeddings, rep_embeddings, novel_logits)
+        # old_logits[:, 0] = old_logits[:, 0].detach()
         old_nce_loss = self._post_loss(old_logits, None, epoch, None, *args)
 
         cluster_indices = self._rep_cluster_indices[batch_idx]
         exclude_indices = self._rep_exclude_indices[batch_idx]
-        pre_center_embeddings = self._pre_cluster_center_embeddings
 
         if pre_rep_neighbors_embeddings is None:
             lwf_loss = 0
         else:
             lwf_loss = cal_lwf_loss(rep_embeddings[no_change_indices], pre_rep_embeddings[no_change_indices],
-                                    pre_rep_neighbors_embeddings)
+                                    pre_rep_neighbors_embeddings, steady_weights, neighbor_steady_weights)
 
         sta = time.time()
         # TODO: ts_loss的梯度计算和传播较为耗时！
-        ts_loss = temporal_steady_loss(preserve_rank=False, preserve_positions=False, preserve_shape=False,
+        ts_loss = temporal_steady_loss(preserve_rank=True, preserve_positions=True, preserve_shape=True,
                                        rep_embeddings=rep_embeddings, pre_rep_embeddings=pre_rep_embeddings,
-                                       cluster_center_embeddings=cluster_center_embeddings,
-                                       pre_cluster_center_embeddings=pre_center_embeddings,
-                                       cluster_indices=cluster_indices, exclude_indices=exclude_indices)
+                                       pre_rep_neighbors_embeddings=pre_rep_neighbors_embeddings,
+                                       no_change_indices=no_change_indices,
+                                       cluster_indices=cluster_indices, exclude_indices=exclude_indices,
+                                       steady_weights=steady_weights, neighbor_steady_weights=neighbor_steady_weights)
         # print("temporal steady loss:", time.time() - sta)
 
-        loss = novel_nce_loss + self.__old_neg_nce_weight * old_nce_loss + self.__lwf_weight * lwf_loss + \
-               self.__temporal_steady_weight * ts_loss
+        loss = novel_nce_loss + self.__old_neg_nce_weight * old_nce_loss + self.__lwf_weight * lwf_loss \
+               + self.__temporal_steady_weight * ts_loss
         return loss
 
     def cal_old_logits(self, x_embeddings, x_sim_embeddings, rep_old_embeddings, novel_logits):

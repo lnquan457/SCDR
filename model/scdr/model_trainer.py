@@ -204,7 +204,7 @@ class IncrementalCDREx(SCDRTrainer):
 
         # 用于计算VC损失
         self.rep_batch_nums = None
-        self.cluster_centers = None
+        self.__steady_weights = None
 
     def active_incremental_learning(self):
         self._is_incremental_learning = True
@@ -263,16 +263,23 @@ class IncrementalCDREx(SCDRTrainer):
             if len(no_change_indices) > 0:
                 pre_rep_neighbors_embeddings = self.pre_embeddings[neighbors_indices[no_change_indices]]
                 pre_rep_neighbors_embeddings = torch.tensor(pre_rep_neighbors_embeddings, dtype=torch.float).to(self.device)
+                if self.__steady_weights is not None:
+                    steady_weights = self.__steady_weights[cur_rep_data_indices[no_change_indices]]
+                    neighbor_steady_weights = self.__steady_weights[neighbors_indices[no_change_indices]]
+                else:
+                    steady_weights = None
+                    neighbor_steady_weights = None
             else:
                 pre_rep_neighbors_embeddings = None
+                steady_weights = None
+                neighbor_steady_weights = None
 
             with torch.cuda.device(self.device_id):
                 rep_embeddings = self.model.acquire_latent_code(cur_rep_data)
-                cluster_center_embeddings = self.model.acquire_latent_code(self.cluster_centers)
 
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning,
                                                  rep_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings,
-                                                 no_change_indices, cluster_center_embeddings, idx)
+                                                 no_change_indices, steady_weights, neighbor_steady_weights, idx)
             self.incremental_steps += 1
         else:
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning)
@@ -287,18 +294,15 @@ class IncrementalCDREx(SCDRTrainer):
         new_data, new_labels = args[0], args[1]
         self.stream_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size, self.n_neighbors)
 
-    def _update_rep_data_info(self, rep_batch_nums, rep_data_indices, cluster_indices, exclude_indices, cluster_centers,
-                              pre_cluster_center_embeddings, steady_weights):
+    def _update_rep_data_info(self, rep_batch_nums, rep_data_indices, cluster_indices, exclude_indices,
+                              steady_weights=None):
         self.incremental_steps = 0
         self.rep_batch_nums = rep_batch_nums
-        self._rep_old_data_indices = rep_data_indices
+        self._rep_old_data_indices = np.array(rep_data_indices, dtype=int)
 
-        if not isinstance(pre_cluster_center_embeddings, torch.Tensor):
-            pre_cluster_center_embeddings = torch.tensor(pre_cluster_center_embeddings, dtype=torch.float).to(self.device)
+        if steady_weights is not None and not isinstance(steady_weights, torch.Tensor):
+            steady_weights = torch.tensor(steady_weights, dtype=torch.float).to(self.device)
+        self.__steady_weights = steady_weights
 
-        if not isinstance(cluster_centers, torch.Tensor):
-            cluster_centers = torch.tensor(cluster_centers, dtype=torch.float).to(self.device)
-        self.cluster_centers = cluster_centers
-
-        self.model.update_rep_data_info(cluster_indices, exclude_indices, pre_cluster_center_embeddings, steady_weights)
+        self.model.update_rep_data_info(np.array(cluster_indices), np.array(exclude_indices))
 
