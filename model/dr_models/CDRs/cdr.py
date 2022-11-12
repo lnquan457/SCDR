@@ -60,7 +60,7 @@ class LwFCDR(CDRModel):
         # 保持旧数据局部结构不变的权重
         self.__lwf_weight = 10.0
         self.__temporal_steady_weight = 1.0
-        self.__expand_weight = 5.0
+        self.__expand_weight = 0.0
 
         # 用于计算VC损失
         self._rep_cluster_indices = None
@@ -123,8 +123,9 @@ class LwFCDR(CDRModel):
                                  pairwise_dist=pairwise_dists, pre_pairwise_dist=pre_pairwise_dists)
         # print("temporal steady loss:", time.time() - sta)
 
-        expand_loss = cal_space_expand_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, exclude_indices,
-                                            pairwise_dists, pre_pairwise_dists)
+        # expand_loss = cal_space_expand_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, exclude_indices,
+        #                                     pairwise_dists, pre_pairwise_dists)
+        expand_loss = torch.tensor(0)
 
         # print("novel nce loss:", novel_nce_loss.item())
         # print("cluster repel loss:", cluster_repel_loss.item())

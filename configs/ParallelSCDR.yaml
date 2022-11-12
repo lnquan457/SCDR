@@ -18,7 +18,7 @@ method_params:
   LR: 0.001
   n_neighbors: 10
   optimizer: "adam" # adam or sgd
-  scheduler: "cosine" # cosine or multi_step or on_plateau
+  scheduler: "multi_step" # cosine or multi_step or on_plateau
   temperature: 0.15
   split_upper: 0.1
   split_lower: 0.005

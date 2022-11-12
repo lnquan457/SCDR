@@ -150,9 +150,13 @@ class KeyPointsGenerator:
             total_cluster_indices.append(cur_indices)
             batch_cluster_num.append(len(cur_indices))
 
+        print("valid num:", valid_num, "total num:", len(labels))
+
+        # 这里的标准是每个batch中只包含 key_data_num个点，然后计算采样所有数据需要的batch数
         batch_num = int(np.floor(valid_num / key_data_num))
+        # 每个batch中，各个聚类所包含的点数。聚类规模越大包含的点数越多，这可能就会导致对小规模聚类的各项性能都降低。
         batch_cluster_num = np.floor(np.array(batch_cluster_num) / batch_num).astype(int)
-        # print(batch_cluster_num)
+        print("batch_cluster_num", batch_cluster_num)
 
         for i in range(batch_num):
             cur_k_indices = []
@@ -429,6 +433,7 @@ def cal_cluster_acc(cluster_labels, gt_labels):
         if item < 0:
             labels_maps.append(-1)
             labels_counts.append(0)
+            # print("outlier num:", len(item))
             continue
 
         cur_indices = np.argwhere(cluster_labels == item).squeeze()

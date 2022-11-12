@@ -50,10 +50,6 @@ def temporal_steady_loss(preserve_rank=False, preserve_positions=False, preserve
                                         pre_rep_embeddings[no_change_indices], pre_rep_neighbors_embeddings,
                                         steady_weights, neighbor_steady_weights)
 
-    expand_loss = cal_space_expand_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, exclude_indices,
-                                        pairwise_dist, pre_pairwise_dist)
-    # print("expand loss", expand_loss.item())
-
     # print("=============")
     # print("rank_relation_loss", rank_relation_loss.item())
     # print("position_relation_loss", position_relation_loss.item())
@@ -64,7 +60,7 @@ def temporal_steady_loss(preserve_rank=False, preserve_positions=False, preserve
     w_position_relation_loss = position_weight * position_relation_loss
     w_shape_loss = shape_weight * shape_loss
 
-    loss = w_rank_relation_loss + w_position_relation_loss + w_shape_loss + expand_loss * 5
+    loss = w_rank_relation_loss + w_position_relation_loss + w_shape_loss
     return loss, w_rank_relation_loss, w_position_relation_loss, w_shape_loss
 
 
@@ -191,8 +187,7 @@ def cal_space_expand_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, e
         change_rate = (pairwise_dists[item][:, other_cluster_indices] -
                        pre_pairwise_dists[item][:, other_cluster_indices]) / pre_pairwise_dists[item][:,
                                                                              other_cluster_indices]
-        print(pairwise_dists[0, other_cluster_indices] -
-              pre_pairwise_dists[0, other_cluster_indices])
+        # print(pairwise_dists[0, other_cluster_indices] - pre_pairwise_dists[0, other_cluster_indices])
         rate_diff[i] = torch.mean(torch.square(expand_rate - change_rate))
 
     return torch.mean(rate_diff)

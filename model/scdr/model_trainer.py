@@ -28,11 +28,9 @@ class SCDRTrainer(CDRsExperiments):
         self.finetune_data_num = 0
         self.cur_time = 0
         self.first_train_data_num = 0
-        self.max_batch_size = 256
 
     def update_batch_size(self, data_num):
-        # TODO: 如何设置batch size也是需要研究的
-        self.batch_size = min(data_num, self.max_batch_size)
+        self.batch_size = data_num // 4
         self.stream_dataset.batch_size = self.batch_size
         self.model.update_batch_size(int(self.batch_size))
         self.model.reset_partial_corr_mask()
@@ -256,13 +254,6 @@ class IncrementalCDREx(SCDRTrainer):
 
             pre_rep_embeddings = self.pre_embeddings[cur_rep_data_indices]
             pre_rep_embeddings = torch.tensor(pre_rep_embeddings, dtype=torch.float).to(self.device)
-
-            # TODO：对于kNN发生变化的数据，没有对应的之前的邻居嵌入，这要如何处理？
-            # 这种情况就不需要再保持它们之间的点对距离关系了。或者说这里的变化应该由每个点的系数决定？这里还是使用旧的kNN。
-
-            # 传统的增量学习方法中，模型对旧数据的标准是不会随着新数据到达而改变的。而在我们的场景下，对旧数据的嵌入标准是可能发生变化的，这是一个新的挑战。
-            # 而我们在保持模型对旧数据的性能的同时，去适应这种标准的变化，是我们的贡献。
-            # 在考虑增量式更新时，不要把时序稳定性引入进来。所以正确的做法应该是放弃kNN发生变化的邻居点对关系的保持。
 
             neighbors_indices = self.stream_dataset.get_knn_indices()[cur_rep_data_indices, neighbor_idx]
             no_change_indices = np.where(neighbors_indices < self.pre_embeddings.shape[0])[0]

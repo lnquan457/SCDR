@@ -172,7 +172,7 @@ def incremental_cdr_pipeline():
     fitted_indices = batch_indices[0]
     experimenter.active_incremental_learning()
 
-    rep_data_sampler = ClusterRepDataSampler(sample_rate=0, min_num=REP_NUM, cover_all=COVER_ALL)
+    rep_data_sampler = ClusterRepDataSampler(sample_rate=SAMPLE_RATE, min_num=REP_NUM, cover_all=COVER_ALL)
 
     for i in range(1, n_step):
         sta = time.time()
@@ -301,6 +301,7 @@ if __name__ == '__main__':
 
         INITIAL_EPOCHS = 100
         RESUME_EPOCH = 50
+        SAMPLE_RATE = 0.1
         REP_NUM = 150
         COVER_ALL = True
         K = 10
