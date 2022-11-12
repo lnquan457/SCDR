@@ -283,6 +283,8 @@ def evaluate(cost_time, experimenter, metric_tool, embeddings, labels, eval_indi
                               cont, sc, cost_time)
         if experimenter.tmp_log_file is None:
             experimenter.tmp_log_file = open(experimenter.tmp_log_path, "w")
+
+        experimenter.tmp_log_file.write("Total Cost Time: %.4f" % experimenter.train_step_time)
         experimenter.tmp_log_file.write(output_template + "\n")
 
     return movements, neighbor_hit, knn_ca, trust, cont, sc

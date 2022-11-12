@@ -17,19 +17,20 @@ def _cal_pairwise_dist_change(cur_embeddings, pre_embeddings, corr=False):
     return torch.mean(torch.norm(cur_dists - pre_dists))
 
 
-def temporal_steady_loss(preserve_rank=False, preserve_positions=False, preserve_shape=False, rank_weights=1,
-                         position_weight=1, shape_weight=1, rep_embeddings=None,
-                         pre_rep_embeddings=None, cluster_indices=None, exclude_indices=None, pre_pairwise_dist=None,
-                         pre_rep_neighbors_embeddings=None, no_change_indices=None, steady_weights=None,
-                         neighbor_steady_weights=None):
+def temporal_steady_loss(preserve_rank=False, preserve_positions=False, preserve_shape=False,
+                         rank_weights=1.0, position_weight=1.0, shape_weight=1.0, rep_embeddings=None,
+                         rep_neighbors_embeddings=None,
+                         pre_rep_embeddings=None, cluster_indices=None, exclude_indices=None,
+                         pairwise_dist=None, pre_pairwise_dist=None, pre_rep_neighbors_embeddings=None,
+                         no_change_indices=None, steady_weights=None, neighbor_steady_weights=None):
     # return _cal_pairwise_dist_change(cur_rep_embeddings.cpu(), pre_rep_embeddings.cpu(), corr=False)
     # return _with_pearson_and_spearman_corr(cur_rep_embeddings.cpu(), pre_rep_embeddings.cpu(), cluster_indices,
     #                                        exclude_indices)
     # return _with_pairwise_dist_change(cur_rep_embeddings.cpu(), pre_rep_embeddings.cpu(),
     #                                   cluster_indices, exclude_indices, pre_pairwise_dist.cpu())
-    rank_relation_loss = 0
-    position_relation_loss = 0
-    shape_loss = 0
+    rank_relation_loss = torch.tensor(0)
+    position_relation_loss = torch.tensor(0)
+    shape_loss = torch.tensor(0)
     cluster_num = cluster_indices.shape[0]
 
     if preserve_rank and cluster_num > 1:
@@ -38,16 +39,33 @@ def temporal_steady_loss(preserve_rank=False, preserve_positions=False, preserve
 
     if preserve_positions and cluster_num > 1:
         c_indices = [item[random.randint(0, len(item) - 1)] for item in cluster_indices]
+        # c_indices = [item[random.randint(0, len(item) - 1)] for item in cluster_indices]
         position_relation_loss = cal_position_relation_loss(rep_embeddings[c_indices], pre_rep_embeddings[c_indices])
 
     if preserve_shape:
         if len(no_change_indices) == 0:
             shape_loss = 0
         else:
-            shape_loss = cal_shape_loss(rep_embeddings[no_change_indices], pre_rep_embeddings[no_change_indices],
-                                        pre_rep_neighbors_embeddings, steady_weights, neighbor_steady_weights)
+            shape_loss = cal_shape_loss(rep_embeddings[no_change_indices], rep_neighbors_embeddings,
+                                        pre_rep_embeddings[no_change_indices], pre_rep_neighbors_embeddings,
+                                        steady_weights, neighbor_steady_weights)
 
-    return rank_weights * rank_relation_loss + position_weight + position_relation_loss + shape_weight + shape_loss
+    expand_loss = cal_space_expand_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, exclude_indices,
+                                        pairwise_dist, pre_pairwise_dist)
+    # print("expand loss", expand_loss.item())
+
+    # print("=============")
+    # print("rank_relation_loss", rank_relation_loss.item())
+    # print("position_relation_loss", position_relation_loss.item())
+    # print("shape_loss", shape_loss.item())
+    # print("=============")
+
+    w_rank_relation_loss = rank_weights * rank_relation_loss
+    w_position_relation_loss = position_weight * position_relation_loss
+    w_shape_loss = shape_weight * shape_loss
+
+    loss = w_rank_relation_loss + w_position_relation_loss + w_shape_loss + expand_loss * 5
+    return loss, w_rank_relation_loss, w_position_relation_loss, w_shape_loss
 
 
 def _with_pearson_and_spearman_corr(cur_embeddings, pre_embeddings, cluster_indices, exclude_indices):
@@ -105,24 +123,12 @@ def _with_pairwise_dist_change(cur_embeddings, pre_embeddings, cluster_indices,
 
         # intra_dist_change[i] = torch.mean(torch.norm(cur_pairwise_dists[item][:, other_cluster_indices] -
         #                                              pre_pairwise_dists[item][:, other_cluster_indices], dim=-1))
-        idx = random.randint(0, len(item))
         intra_spearman_corr[i] = compute_rank_correlation(cur_pairwise_dists[item][:, other_cluster_indices],
                                                           pre_pairwise_dists[item][:, other_cluster_indices])
 
     # 约束inner_dist_change的变化可以看作是用于增量学习。但是仅依靠这一点无法保持视觉一致性，所以我们加上了intra_spearman_correlation。
     return torch.mean(inner_dist_change) - torch.mean(intra_spearman_corr)
     # return torch.mean(inner_dist_change)
-
-
-def cal_lwf_loss(rep_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings, steady_weights=None,
-                 neighbor_steady_weights=None):
-    dists = torch.norm(rep_embeddings - pre_rep_neighbors_embeddings, dim=-1)
-    # TODO: 这里的计算是有重复的，可以避免
-    pre_dists = torch.norm(pre_rep_embeddings - pre_rep_neighbors_embeddings, dim=-1)
-    dist_change = dists - pre_dists
-    if steady_weights is not None and neighbor_steady_weights is not None:
-        dist_change *= (steady_weights + neighbor_steady_weights) / 2
-    return torch.linalg.norm(dist_change)
 
 
 def cal_rank_relation_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, exclude_indices,
@@ -150,24 +156,43 @@ def cal_rank_relation_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, 
 def cal_position_relation_loss(cluster_center_embeddings: torch.Tensor,
                                pre_cluster_center_embeddings: torch.Tensor):
     cluster_nums = cluster_center_embeddings.shape[0]
-    sims = torch.cosine_similarity(cluster_center_embeddings.unsqueeze(0).repeat(cluster_nums, 1, 1),
-                                   cluster_center_embeddings.unsqueeze(1).repeat(1, cluster_nums, 1), dim=-1)
-    # cluster_nums * cluster_nums
-    pre_sims = torch.cosine_similarity(pre_cluster_center_embeddings.unsqueeze(0).repeat(cluster_nums, 1, 1),
-                                       pre_cluster_center_embeddings.unsqueeze(1).repeat(1, cluster_nums, 1), dim=-1)
+    sims = torch.cosine_similarity(cluster_center_embeddings.unsqueeze(0).repeat(cluster_nums, 1, 1) -
+                                   cluster_center_embeddings.unsqueeze(1).repeat(1, cluster_nums, 1),
+                                   pre_cluster_center_embeddings.unsqueeze(0).repeat(cluster_nums, 1, 1) -
+                                   pre_cluster_center_embeddings.unsqueeze(1).repeat(1, cluster_nums, 1), dim=-1)
 
-    loss = torch.mean(torch.linalg.norm(sims - pre_sims, dim=1))
+    loss = -torch.mean(torch.square(sims))
     return loss
 
 
-def cal_shape_loss(rep_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings, steady_weights=None,
-                   neighbor_steady_weights=None):
-    sims = torch.cosine_similarity(rep_embeddings, pre_rep_neighbors_embeddings, dim=-1)
-    # TODO: 这里的计算是有重复的，可以避免
-    pre_sims = torch.cosine_similarity(pre_rep_embeddings, pre_rep_neighbors_embeddings, dim=-1)
-    sims_change = sims - pre_sims
+def cal_shape_loss(rep_embeddings, rep_neighbors_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings,
+                   steady_weights=None, neighbor_steady_weights=None):
+    sims = torch.cosine_similarity(rep_embeddings - rep_neighbors_embeddings,
+                                   pre_rep_embeddings - pre_rep_neighbors_embeddings, dim=-1)
 
     if steady_weights is not None and neighbor_steady_weights is not None:
-        sims_change *= (steady_weights + neighbor_steady_weights) / 2
+        sims *= (steady_weights + neighbor_steady_weights) / 2
 
-    return torch.linalg.norm(sims_change)
+    # return torch.linalg.norm(sims_change)
+    return -torch.mean(torch.square(sims))
+
+
+def cal_space_expand_loss(rep_embeddings, pre_rep_embeddings, cluster_indices, exclude_indices,
+                          pairwise_dists=None, pre_pairwise_dists=None, expand_rate=0.3):
+    cluster_num = len(cluster_indices)
+    rate_diff = torch.zeros(cluster_num)
+
+    pairwise_dists = torch.cdist(rep_embeddings, rep_embeddings).cpu() if pairwise_dists is not None else pairwise_dists
+    pre_pairwise_dists = torch.cdist(pre_rep_embeddings,
+                                     pre_rep_embeddings).cpu() if pre_pairwise_dists is None else pre_pairwise_dists
+
+    for i, item in enumerate(cluster_indices):
+        other_cluster_indices = exclude_indices[i]
+        change_rate = (pairwise_dists[item][:, other_cluster_indices] -
+                       pre_pairwise_dists[item][:, other_cluster_indices]) / pre_pairwise_dists[item][:,
+                                                                             other_cluster_indices]
+        print(pairwise_dists[0, other_cluster_indices] -
+              pre_pairwise_dists[0, other_cluster_indices])
+        rate_diff[i] = torch.mean(torch.square(expand_rate - change_rate))
+
+    return torch.mean(rate_diff)

@@ -11,10 +11,10 @@ from torch.utils.data.sampler import T_co
 
 
 class CustomSampler(Sampler):
-    def __init__(self, train_indices):
+    def __init__(self, train_indices, shuffle):
         Sampler.__init__(self, None)
         self.indices = train_indices
-        self.random = True
+        self.random = shuffle
 
     def update_indices(self, new_indices, is_random):
         self.indices = new_indices

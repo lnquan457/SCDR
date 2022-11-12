@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import os
 import time
+import matplotlib.pyplot as plt
 
 from model.scdr.dependencies.cdr_experiment import CDRsExperiments
 from dataset.warppers import StreamingDatasetWrapper
@@ -206,6 +207,12 @@ class IncrementalCDREx(SCDRTrainer):
         self.rep_batch_nums = None
         self.__steady_weights = None
 
+        # DEBUG 用
+        self._loss_name_list = ['Contra', 'Repel', 'LwF', 'Expand', 'Rank', 'Position', 'Shape']
+        self._losses_history = [[] for i in range(len(self._loss_name_list))]
+
+        self.train_step_time = 0
+
     def active_incremental_learning(self):
         self._is_incremental_learning = True
 
@@ -220,7 +227,6 @@ class IncrementalCDREx(SCDRTrainer):
 
     def prepare_resume(self, fitted_num, train_num, resume_epoch):
         # 应该要增强新数据对负例的排斥力度
-        self.lr *= 1
         self.update_batch_size(train_num)
         self.update_neg_num(train_num / 5)
         self.update_dataloader(resume_epoch, np.arange(fitted_num, fitted_num + train_num, 1))
@@ -233,8 +239,8 @@ class IncrementalCDREx(SCDRTrainer):
         return self.pre_embeddings
 
     def _train_step(self, *args):
+        sta = time.time()
         x, x_sim, epoch, indices, sim_indices = args
-
         self.optimizer.zero_grad()
 
         with torch.cuda.device(self.device_id):
@@ -263,6 +269,8 @@ class IncrementalCDREx(SCDRTrainer):
             if len(no_change_indices) > 0:
                 pre_rep_neighbors_embeddings = self.pre_embeddings[neighbors_indices[no_change_indices]]
                 pre_rep_neighbors_embeddings = torch.tensor(pre_rep_neighbors_embeddings, dtype=torch.float).to(self.device)
+                rep_neighbors_data = self.stream_dataset.get_total_data()[neighbors_indices[no_change_indices]]
+                rep_neighbors_data = torch.tensor(rep_neighbors_data, dtype=torch.float).to(self.device)
                 if self.__steady_weights is not None:
                     steady_weights = self.__steady_weights[cur_rep_data_indices[no_change_indices]]
                     neighbor_steady_weights = self.__steady_weights[neighbors_indices[no_change_indices]]
@@ -273,20 +281,25 @@ class IncrementalCDREx(SCDRTrainer):
                 pre_rep_neighbors_embeddings = None
                 steady_weights = None
                 neighbor_steady_weights = None
+                rep_neighbors_data = None
 
             with torch.cuda.device(self.device_id):
                 rep_embeddings = self.model.acquire_latent_code(cur_rep_data)
+                rep_neighbors_embeddings = self.model.acquire_latent_code(rep_neighbors_data)
 
-            train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning,
+            total_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning,
                                                  rep_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings,
+                                                 rep_neighbors_embeddings,
                                                  no_change_indices, steady_weights, neighbor_steady_weights, idx)
+            train_loss = total_loss[0]
+            self._record_detail_loss(total_loss[1:])
             self.incremental_steps += 1
         else:
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning)
 
-        sta = time.time()
         train_loss.backward()
         self.optimizer.step()
+        self.train_step_time += time.time() - sta
         # print("optimization:", time.time() - sta)
         return train_loss
 
@@ -306,3 +319,24 @@ class IncrementalCDREx(SCDRTrainer):
 
         self.model.update_rep_data_info(np.array(cluster_indices), np.array(exclude_indices))
 
+    def _record_detail_loss(self, losses):
+        for i, item in enumerate(losses):
+            self._losses_history[i].append(item.item())
+
+    def _train_end(self, test_loss_history, training_loss_history, embeddings):
+        super()._train_end(test_loss_history, training_loss_history, embeddings)
+
+        save_path = os.path.join(self.result_save_dir, "losses_e{}.jpg".format(self.epoch_num))
+        plt.figure()
+
+        for i, name in enumerate(self._loss_name_list):
+            num = len(self._losses_history[i])
+            x_indices = np.arange(num)
+            plt.plot(x_indices, self._losses_history[i], label=name)
+
+        plt.legend()
+        plt.xlabel("batches")
+        plt.ylabel("loss")
+        if save_path is not None:
+            plt.savefig(save_path)
+        plt.show()

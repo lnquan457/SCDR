@@ -175,7 +175,7 @@ class DataSetWrapper(DataRepo):
     def get_train_validation_data_loaders(self, train_dataset, test_dataset, train_indices, val_indices,
                                           debiased_sample, multi):
         # obtain training indices that will be used for validation
-        np.random.shuffle(train_indices)
+        # np.random.shuffle(train_indices)
         # np.random.shuffle(val_indices)
         InfoLogger.info("Train num = {} Val num = {}".format(len(train_indices), len(val_indices)))
 
@@ -183,7 +183,7 @@ class DataSetWrapper(DataRepo):
                                                               train_indices, val_indices, multi)
 
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, sampler=train_sampler,
-                                  drop_last=True, shuffle=False)
+                                  drop_last=True, shuffle=True)
 
         # valid_loader = DataLoader(test_dataset, batch_size=self.batch_size, sampler=valid_sampler,
         #                           drop_last=True, shuffle=False)
@@ -271,7 +271,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
         train_indices = self._generate_train_indices(train_num, train_dataset)
 
-        train_loader = self._get_train_data_loader(train_dataset, train_indices, multi)
+        train_loader = self._get_train_data_loader(train_dataset, train_indices)
 
         return train_loader, train_num
 
@@ -280,7 +280,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.train_dataset.transform.update(self.train_dataset, epoch_nums, self.symmetric_nn_indices,
                                             self.symmetric_nn_weights)
 
-        train_loader = self._get_train_data_loader(self.train_dataset, sampled_indices, multi)
+        train_loader = self._get_train_data_loader(self.train_dataset, sampled_indices)
         return train_loader, len(sampled_indices)
 
     def get_dataset(self, data_augment, is_image, normalize_method):
@@ -301,13 +301,13 @@ class StreamingDatasetWrapper(DataSetWrapper):
             data_augment = None
         return data_augment, train_dataset
 
-    def _get_train_data_loader(self, train_dataset, train_indices, multi):
+    def _get_train_data_loader(self, train_dataset, train_indices, shuffle=True):
         InfoLogger.info("Train num = {}".format(len(train_indices)))
-        np.random.shuffle(train_indices)
-        train_sampler = CustomSampler(train_indices) if not multi else DistributedSampler(train_dataset)
+        # np.random.shuffle(train_indices)
+        train_sampler = CustomSampler(train_indices, shuffle)
 
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, sampler=train_sampler,
-                                  drop_last=False, shuffle=False)
+                                  drop_last=True, shuffle=False)
         return train_loader
 
     def update_knn_graph(self, pre_n_samples, new_data, data_num_list, cut_num=None, update_similarity=True,
