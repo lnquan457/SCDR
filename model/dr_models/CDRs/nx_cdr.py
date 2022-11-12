@@ -36,7 +36,7 @@ class NxCDRModel(Module):
         self.device = device
         self.config = cfg
         self.encoder_name = "FC" if isinstance(cfg.exp_params.input_dims, int) else "CBR"
-        self.pro_dim = 128
+        self.pro_dim = 64
 
         self.input_dims = cfg.exp_params.input_dims
         self.latent_dim = cfg.exp_params.latent_dim

@@ -59,9 +59,6 @@ class CDRsExperiments(Experiment):
         return self.model.forward(x, x_sim)
 
     def acquire_latent_code(self, inputs):
-        if self.multi:
-            return self.model.module.acquire_latent_code(inputs)
-
         return self.model.acquire_latent_code(inputs)
 
     def train(self, launch_time_stamp=None, target_metric_val=-1):

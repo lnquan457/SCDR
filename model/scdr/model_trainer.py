@@ -17,6 +17,9 @@ from utils.queue_set import ModelUpdateQueueSet
 from model.scdr.dependencies.scdr_utils import RepDataSampler
 
 
+scaler = torch.cuda.amp.GradScaler()
+
+
 class SCDRTrainer(CDRsExperiments):
     def __init__(self, model, dataset_name, config_path, configs, result_save_dir, device='cuda:0',
                  log_path="log_streaming.txt"):
@@ -197,6 +200,7 @@ class IncrementalCDREx(SCDRTrainer):
     def __init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, device='cuda',
                  log_path="logs.txt"):
         SCDRTrainer.__init__(self, clr_model, dataset_name, config_path, configs, result_save_dir, device, log_path)
+        self.pre_torch_embeddings = None
         self._rep_old_data_indices = None
         self._is_incremental_learning = False
         self.incremental_steps = 0
@@ -205,11 +209,20 @@ class IncrementalCDREx(SCDRTrainer):
         self.rep_batch_nums = None
         self.__steady_weights = None
 
+        self._rep_data_list = []
+        self._rep_neighbor_data_list = []
+        self._pre_rep_embedding_list = []
+        self._pre_rep_neighbors_embedding_list = []
+        self._steady_weights_list = []
+        self._neighbor_steady_weights_list = []
+        self._neighbor_nochange_list = []
+
         # DEBUG 用
-        self._loss_name_list = ['Contra', 'Repel', 'LwF', 'Expand', 'Rank', 'Position', 'Shape']
+        self._loss_name_list = ['Contra', 'Repel', 'LwF', 'Rank', 'Position', 'Shape']
         self._losses_history = [[] for i in range(len(self._loss_name_list))]
 
         self.train_step_time = 0
+        self.back_time = 0
 
     def active_incremental_learning(self):
         self._is_incremental_learning = True
@@ -226,8 +239,13 @@ class IncrementalCDREx(SCDRTrainer):
     def prepare_resume(self, fitted_num, train_num, resume_epoch):
         # 应该要增强新数据对负例的排斥力度
         self.update_batch_size(train_num)
-        self.update_neg_num(train_num / 5)
+        self.update_neg_num(train_num / 10)
         self.update_dataloader(resume_epoch, np.arange(fitted_num, fitted_num + train_num, 1))
+
+    def train(self, launch_time_stamp=None, target_metric_val=-1):
+        embeddings = super().train(launch_time_stamp, target_metric_val)
+        self.pre_torch_embeddings = torch.tensor(embeddings, dtype=torch.float).to(self.device)
+        return embeddings
 
     def resume_train(self, resume_epoch, *args):
         rep_args = args[0]
@@ -247,68 +265,104 @@ class IncrementalCDREx(SCDRTrainer):
         if self._is_incremental_learning:
             idx = self.incremental_steps % self.rep_batch_nums
             neighbor_idx = self.incremental_steps % self.n_neighbors
-            cur_rep_data_indices = self._rep_old_data_indices[idx]
 
-            cur_rep_data = self.stream_dataset.get_total_data()[cur_rep_data_indices]
-            cur_rep_data = torch.tensor(cur_rep_data, dtype=torch.float).to(self.device)
-
-            pre_rep_embeddings = self.pre_embeddings[cur_rep_data_indices]
-            pre_rep_embeddings = torch.tensor(pre_rep_embeddings, dtype=torch.float).to(self.device)
-
-            neighbors_indices = self.stream_dataset.get_knn_indices()[cur_rep_data_indices, neighbor_idx]
-            no_change_indices = np.where(neighbors_indices < self.pre_embeddings.shape[0])[0]
-            if len(no_change_indices) > 0:
-                pre_rep_neighbors_embeddings = self.pre_embeddings[neighbors_indices[no_change_indices]]
-                pre_rep_neighbors_embeddings = torch.tensor(pre_rep_neighbors_embeddings, dtype=torch.float).to(self.device)
-                rep_neighbors_data = self.stream_dataset.get_total_data()[neighbors_indices[no_change_indices]]
-                rep_neighbors_data = torch.tensor(rep_neighbors_data, dtype=torch.float).to(self.device)
-                if self.__steady_weights is not None:
-                    steady_weights = self.__steady_weights[cur_rep_data_indices[no_change_indices]]
-                    neighbor_steady_weights = self.__steady_weights[neighbors_indices[no_change_indices]]
-                else:
-                    steady_weights = None
-                    neighbor_steady_weights = None
-            else:
-                pre_rep_neighbors_embeddings = None
-                steady_weights = None
-                neighbor_steady_weights = None
-                rep_neighbors_data = None
+            cur_rep_data = self._rep_data_list[idx]
+            pre_rep_embeddings = self._pre_rep_embedding_list[idx]
+            pre_rep_neighbors_embeddings = self._pre_rep_neighbors_embedding_list[idx][neighbor_idx]
+            rep_neighbors_data = self._rep_neighbor_data_list[idx][neighbor_idx]
+            steady_weights = self._steady_weights_list[idx][neighbor_idx]
+            neighbor_steady_weights = self._neighbor_steady_weights_list[idx][neighbor_idx]
+            no_change_indices = self._neighbor_nochange_list[idx][neighbor_idx]
 
             with torch.cuda.device(self.device_id):
                 rep_embeddings = self.model.acquire_latent_code(cur_rep_data)
                 rep_neighbors_embeddings = self.model.acquire_latent_code(rep_neighbors_data)
 
-            total_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning,
-                                                 rep_embeddings, pre_rep_embeddings, pre_rep_neighbors_embeddings,
-                                                 rep_neighbors_embeddings,
+            total_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch,
+                                                 self._is_incremental_learning, rep_embeddings, pre_rep_embeddings,
+                                                 pre_rep_neighbors_embeddings, rep_neighbors_embeddings,
                                                  no_change_indices, steady_weights, neighbor_steady_weights, idx)
             train_loss = total_loss[0]
+            d_sta = time.time()
             self._record_detail_loss(total_loss[1:])
+            self.train_step_time -= time.time() - d_sta
             self.incremental_steps += 1
         else:
             train_loss = self.model.compute_loss(x_embeddings, x_sim_embeddings, epoch, self._is_incremental_learning)
 
+        b_sta = time.time()
         train_loss.backward()
         self.optimizer.step()
+
+        self.back_time += time.time() - b_sta
         self.train_step_time += time.time() - sta
-        # print("optimization:", time.time() - sta)
+
         return train_loss
 
     def build_dataset(self, *args):
         new_data, new_labels = args[0], args[1]
         self.stream_dataset = StreamingDatasetWrapper(new_data, new_labels, self.batch_size, self.n_neighbors)
 
+    def _reset_rep_data_info(self):
+        self.incremental_steps = 0
+        self._rep_data_list = []
+        self._rep_neighbor_data_list = []
+        self._pre_rep_embedding_list = []
+        self._pre_rep_neighbors_embedding_list = []
+        self._steady_weights_list = []
+        self._neighbor_steady_weights_list = []
+        self._neighbor_nochange_list = []
+
     def _update_rep_data_info(self, rep_batch_nums, rep_data_indices, cluster_indices, exclude_indices,
                               steady_weights=None):
-        self.incremental_steps = 0
+        self._reset_rep_data_info()
         self.rep_batch_nums = rep_batch_nums
-        self._rep_old_data_indices = np.array(rep_data_indices, dtype=int)
-
+        rep_data_indices = np.array(rep_data_indices, dtype=int)
         if steady_weights is not None and not isinstance(steady_weights, torch.Tensor):
             steady_weights = torch.tensor(steady_weights, dtype=torch.float).to(self.device)
-        self.__steady_weights = steady_weights
 
-        self.model.update_rep_data_info(np.array(cluster_indices), np.array(exclude_indices))
+        for i, item in enumerate(rep_data_indices):
+            cur_rep_data = self.stream_dataset.get_total_data()[item]
+            self._rep_data_list.append(torch.tensor(cur_rep_data, dtype=torch.float).to(self.device))
+            cur_pre_rep_embeddings = self.pre_torch_embeddings[item]
+            self._pre_rep_embedding_list.append(cur_pre_rep_embeddings)
+
+            tmp_pre_rep_neighbor_e_list = []
+            tmp_rep_neighbor_data_list = []
+            tmp_steady_weights = []
+            tmp_neighbor_steady_weights = []
+            tmp_neighbor_nochange_list = []
+
+            for j in range(self.n_neighbors):
+                cur_neighbor_indices = self.stream_dataset.get_knn_indices()[item, j]
+                no_change_indices = np.where(cur_neighbor_indices < self.pre_embeddings.shape[0])[0]
+                if len(no_change_indices) > 0:
+                    cur_neighbor_indices = cur_neighbor_indices[no_change_indices]
+
+                    pre_rep_neighbor_e = self.pre_torch_embeddings[cur_neighbor_indices]
+                    rep_neighbors_data = self.stream_dataset.get_total_data()[cur_neighbor_indices]
+                    rep_steady_weights = steady_weights[item[no_change_indices]] if steady_weights is not None else None
+                    neighbor_rep_steady_weights = steady_weights[cur_neighbor_indices] if steady_weights is not None else None
+
+                else:
+                    pre_rep_neighbor_e = None
+                    rep_neighbors_data = None
+                    rep_steady_weights = None
+                    neighbor_rep_steady_weights = None
+
+                tmp_pre_rep_neighbor_e_list.append(pre_rep_neighbor_e)
+                tmp_rep_neighbor_data_list.append(torch.tensor(rep_neighbors_data, dtype=torch.float).to(self.device))
+                tmp_steady_weights.append(rep_steady_weights)
+                tmp_neighbor_steady_weights.append(neighbor_rep_steady_weights)
+                tmp_neighbor_nochange_list.append(no_change_indices)
+
+            self._pre_rep_neighbors_embedding_list.append(tmp_pre_rep_neighbor_e_list)
+            self._rep_neighbor_data_list.append(tmp_rep_neighbor_data_list)
+            self._steady_weights_list.append(tmp_steady_weights)
+            self._neighbor_steady_weights_list.append(tmp_neighbor_steady_weights)
+            self._neighbor_nochange_list.append(tmp_neighbor_nochange_list)
+
+        self.model.update_rep_data_info(np.array(cluster_indices))
 
     def _record_detail_loss(self, losses):
         for i, item in enumerate(losses):
@@ -316,7 +370,8 @@ class IncrementalCDREx(SCDRTrainer):
 
     def _train_end(self, test_loss_history, training_loss_history, embeddings):
         super()._train_end(test_loss_history, training_loss_history, embeddings)
-
+        print("optimization:", self.back_time)
+        print("train step time:", self.train_step_time)
         save_path = os.path.join(self.result_save_dir, "losses_e{}.jpg".format(self.epoch_num))
         plt.figure()
 

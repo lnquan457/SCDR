@@ -62,6 +62,7 @@ class NT_Xent(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # sta = time.time()
         similarities, t = ctx.saved_tensors
 
         # [2*B, 1]
@@ -73,6 +74,7 @@ class NT_Xent(Function):
 
         # [2*B, 2*B-1]
         grad = torch.cat([pos_grad_coeff, neg_grad_coeff], dim=1) * grad_output / similarities.shape[0]
+        # print("nt xent:", time.time() - sta)
         return grad, None
 
 
@@ -80,11 +82,6 @@ class Mixture_NT_Xent(Function):
 
     @staticmethod
     def forward(ctx, probabilities, t, alpha, a, loc, lower_thresh, scale):
-        def nt_xent_grad(data, tau):
-            exp_prob = torch.exp(data / tau)
-            norm_exp_prob = exp_prob / torch.sum(exp_prob, dim=1).unsqueeze(1)
-            gradients = norm_exp_prob[:, 1:] / tau
-            return norm_exp_prob, gradients
 
         similarities, exp_neg_grad_coeff = nt_xent_grad(probabilities, t)
         # ============================================负偏态分布计算============================================
@@ -107,6 +104,7 @@ class Mixture_NT_Xent(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        # sta = time.time()
         prob, exp_sims, t, sn_sims, loc, lower_thresh, alpha, raw_alpha = ctx.saved_tensors
 
         # [2*B, 1]
@@ -123,5 +121,12 @@ class Mixture_NT_Xent(Function):
 
         # [2*B, 2*B-1]
         grad = torch.cat([pos_grad_coeff, neg_grad_coeff], dim=1) * grad_output / exp_sims.shape[0]
+        # print("mixture:", time.time() - sta)
         return grad, None, None, None, None, None, None
 
+
+def nt_xent_grad(data, tau):
+    exp_prob = torch.exp(data / tau)
+    norm_exp_prob = exp_prob / torch.sum(exp_prob, dim=1).unsqueeze(1)
+    gradients = norm_exp_prob[:, 1:] / tau
+    return norm_exp_prob, gradients

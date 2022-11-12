@@ -14,7 +14,7 @@ from model.si_pca import StreamingIPCA
 from model.xtreaming import XtreamingModel
 from utils.common_utils import evaluate_and_log, time_stamp_to_date_time_adjoin
 from utils.logger import InfoLogger
-from utils.metrics_tool import Metric, metric_visual_consistency_simplest
+from utils.metrics_tool import Metric, cal_global_position_change
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 from utils.queue_set import StreamDataQueueSet
 
@@ -240,7 +240,7 @@ class StreamingEx:
                 # =======================================================================================================================
 
                 # =========================================不考虑新数据的影响================================================
-                vc_inconsistency = metric_visual_consistency_simplest(cur_embeddings, pre_embeddings) if self.metric_vs else 0
+                vc_inconsistency = cal_global_position_change(cur_embeddings, pre_embeddings) if self.metric_vs else 0
                 # ========================================================================================================
 
                 title = "Visual Inconsistency: %.4f" % vc_inconsistency

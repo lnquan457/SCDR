@@ -53,7 +53,7 @@ class FCEncoder(nn.Module):
         nn.Module.__init__(self)
 
         if hidden_dims is None:
-            hidden_dims = [512, 256, 256, 128]
+            hidden_dims = [256, 128, 128]
 
         self.hidden_dims = hidden_dims
         modules = []

@@ -171,7 +171,7 @@ def incremental_cdr_pipeline():
 
     fitted_indices = batch_indices[0]
     experimenter.active_incremental_learning()
-
+    # clr_model.update_separation_rate(0.1, clr_model.steady_begin_ratio)
     rep_data_sampler = ClusterRepDataSampler(sample_rate=SAMPLE_RATE, min_num=REP_NUM, cover_all=COVER_ALL)
 
     for i in range(1, n_step):
@@ -189,26 +189,6 @@ def incremental_cdr_pipeline():
         rep_batch_nums, rep_data_indices, cluster_indices, exclude_indices, total_cluster_indices = \
             rep_data_sampler.sample(experimenter.pre_embeddings, eps=embedding_nn_dist,
                                     min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
-
-        # cluster_centers, mean_d, std_d = rep_data_sampler.dist_to_nearest_cluster_centroids(total_data[fitted_indices],
-        #                                                                                     total_cluster_indices)
-        # if len(cluster_centers.shape) < 2:
-        #     cluster_centers = cluster_centers[np.newaxis, :]
-        # cluster_center_embeddings = experimenter.acquire_latent_code_allin(torch.tensor(cluster_centers,
-        #                                                                                 dtype=torch.float), device)
-
-        # representations = experimenter.cal_lower_representations(total_data[fitted_indices])
-        # ravel_1 = np.reshape(np.repeat(representations[:, np.newaxis, :], n_neighbors // 2, 1),
-        #                      (-1, representations.shape[1]))
-        # ravel_2 = representations[np.ravel(stream_dataset.get_knn_indices()[:, :n_neighbors // 2])]
-        # rep_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
-        # KeyPointsGenerator.generate(representations, 0, method=KeyPointsGenerator.DBSCAN,
-        #                             min_num=REP_NUM, batch_whole=BATCH_WHOLE, eps=rep_nn_dist,
-        #                             min_samples=experimenter.n_neighbors, labels=total_labels[fitted_indices])
-
-        # print("cluster num:", len(cluster_indices[0]))
-        # print("Distribution_1:", [len(item) for item in cluster_indices[0]])
-        # print("Exclude:", [len(item) for item in exclude_indices[0]])
 
         # 更新数据集状态
         cur_batch_data = total_data[batch_indices[i]]
@@ -301,8 +281,8 @@ if __name__ == '__main__':
 
         INITIAL_EPOCHS = 100
         RESUME_EPOCH = 50
-        SAMPLE_RATE = 0.1
-        REP_NUM = 150
+        SAMPLE_RATE = 0.07
+        REP_NUM = 50
         COVER_ALL = True
         K = 10
 

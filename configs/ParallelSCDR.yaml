@@ -20,10 +20,10 @@ method_params:
   optimizer: "adam" # adam or sgd
   scheduler: "multi_step" # cosine or multi_step or on_plateau
   temperature: 0.15
-  split_upper: 0.1
+  split_upper: 0.11
   split_lower: 0.005
   alpha: 6
-  separation_begin_ratio: 0.25
+  separation_begin_ratio: 0.20
   steady_begin_ratio: 0.9
   ckpt_path: None
 

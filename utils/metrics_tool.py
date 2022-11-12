@@ -24,362 +24,58 @@ EPS = 1e-7
 np.set_printoptions(suppress=True)
 
 
-def draw_tmp_2(z, z_2, vis_save_path):
-    plt.figure(figsize=(6, 3))
-    plt.subplot(121)
-    sns.scatterplot(x=z[:, 0], y=z[:, 1], s=10, legend=False, alpha=1.0)
-    plt.axis("equal")
-    plt.subplot(122)
-    sns.scatterplot(x=z_2[:, 0], y=z_2[:, 1], s=10, legend=False, alpha=1.0)
-    plt.axis("equal")
-
-    if vis_save_path is not None:
-        plt.savefig(vis_save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
-    plt.show()
+def normalization(data):
+    _range = np.max(data) - np.min(data)
+    return (data - np.min(data)) / _range
 
 
-def draw_tmp(z_1, z_2, vis_save_path):
-    plt.figure(figsize=(4, 4))
-    label = np.arange(0, z_1.shape[0], 1)
-
-    plt.scatter(x=z_1[:, 0], y=z_1[:, 1], c=label, cmap='tab20', s=15, alpha=1.0, marker="x")
-    plt.scatter(x=z_2[:, 0], y=z_2[:, 1], c=label, cmap='tab20', s=15, alpha=1.0, marker="o")
-    plt.axis("equal")
-
-    if vis_save_path is not None:
-        plt.savefig(vis_save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
-    plt.show()
-
-
-def cal_weighted_shift(old_data_rate, pre_cur_dists, data_nums):
-    old_data_rate_matrix = np.repeat(np.expand_dims(old_data_rate, axis=0), data_nums, axis=0)
-    weights = (old_data_rate_matrix + old_data_rate_matrix.T) / 2
-    triu_indices = np.triu_indices(pre_cur_dists.shape[0], 1)
-    weighted_dists = weights[triu_indices] * pre_cur_dists[triu_indices]
-    return weighted_dists
-
-
-def cal_dist_correlation(x, y):
-    n_samples = x.shape[0]
-    assert x.shape == y.shape
-    assert n_samples > 1
-    dist_x = cdist(x, x)
-    dist_y = cdist(y, y)
-    corr_list = []
-    for i in range(n_samples):
-        corr_list.append(stats.pearsonr(dist_x[0], dist_y[0])[0])
-    return corr_list
-
-
-def metric_visual_consistency_simplest(cur_embeddings, pre_embeddings):
+def cal_global_position_change(cur_embeddings, pre_embeddings):
     pre_n_samples = pre_embeddings.shape[0]
-    dists = np.linalg.norm(cur_embeddings[:pre_n_samples] - pre_embeddings, axis=-1) ** 2
-    return np.sum(dists)
+    dists = np.linalg.norm(cur_embeddings[:pre_n_samples] - pre_embeddings, axis=-1)
+    return np.mean(dists)
 
 
-def metric_mental_map_preservation(cur_embeddings, pre_embeddings, nn_indices=None, k=30):
+def cal_global_pdist_change(cur_embeddings, pre_embeddings, norm=False):
     pre_n_samples = pre_embeddings.shape[0]
-    dists = np.linalg.norm(cur_embeddings[:pre_n_samples] - pre_embeddings, axis=-1) ** 2
-    if np.max(dists) == 0:
-        return 1, None
-    dists /= np.max(dists)
-    if nn_indices is None:
-        nn_indices = compute_knn_graph(cur_embeddings, None, k, None)[0]
+    cur_pre_embeddings = cur_embeddings[:pre_n_samples]
+    if np.max(np.linalg.norm(cur_pre_embeddings - pre_embeddings, axis=-1)) == 0:
+        return 0
 
-    weights = np.zeros(shape=pre_n_samples)
-    for i in range(pre_n_samples):
-        weights[i] = 1 - len(np.where(nn_indices[i] >= pre_n_samples)[0]) / len(nn_indices[i])
-    dists *= weights
-    return 1 - np.mean(dists), nn_indices
+    pre_dist = cdist(pre_embeddings, pre_embeddings)
+    cur_dist = cdist(cur_pre_embeddings, cur_pre_embeddings)
+    if norm:
+        pre_dist = normalization(pre_dist)
+        cur_dist = normalization(cur_dist)
+
+    dist_change = np.abs(cur_dist - pre_dist)
+    return np.mean(dist_change)
 
 
-def metric_mental_map_preservation_edge(cur_embeddings, pre_embeddings, nn_indices=None, k=30):
+def cal_pre_neighbor_dist_change(cur_embeddings, pre_embeddings, pre_knn_indices, new_knn_indices,
+                                 norm=False, weight=False):
     pre_n_samples = pre_embeddings.shape[0]
-    if np.max(np.linalg.norm(cur_embeddings[:pre_n_samples] - pre_embeddings, axis=-1)) == 0:
-        return 1, None
-    dists_cur = cdist(cur_embeddings[:pre_n_samples], cur_embeddings[:pre_n_samples]) ** 2
-    dists_pre = cdist(pre_embeddings, pre_embeddings) ** 2
-    pre_cur_dists = np.abs(dists_cur - dists_pre)
-    pre_cur_dists /= np.max(pre_cur_dists)
-    if nn_indices is None:
-        nn_indices = compute_knn_graph(cur_embeddings, None, k, None)[0]
+    cur_pre_embeddings = cur_embeddings[:pre_n_samples]
+    n_neighbors = pre_knn_indices.shape[1]
+    if np.max(np.linalg.norm(cur_pre_embeddings - pre_embeddings, axis=-1)) == 0:
+        return 0, None
 
-    old_data_rate = np.zeros(shape=pre_n_samples)
-    for i in range(pre_n_samples):
-        old_data_rate[i] = 1 - len(np.where(nn_indices[i] >= pre_n_samples)[0]) / len(nn_indices[i])
-
-    weighted_dists = cal_weighted_shift(old_data_rate, pre_cur_dists, pre_n_samples)
-    return 1 - np.mean(weighted_dists), nn_indices
-
-
-def metric_mental_map_preservation_cntp(cur_embeddings, pre_embeddings):
-    n_samples = pre_embeddings.shape[0]
-    cluster_num = int(np.sqrt(n_samples))
-    km = KMeans(n_clusters=cluster_num)
-    cur_labels = km.fit_predict(cur_embeddings)
-    cur_centroids = km.cluster_centers_
-    pre_labels = km.fit_predict(pre_embeddings)
-    pre_centroids = km.cluster_centers_
-
-    intersect_rate = np.zeros(shape=(cluster_num, cluster_num))
-    cur_cluster_indices = {}
-    pre_cluster_indices = {}
-    old_data_rate = np.zeros(shape=cluster_num)
-
-    for i in range(cluster_num):
-        cur_cluster_indices[i] = np.where(cur_labels == i)[0]
-        pre_cluster_indices[i] = np.where(pre_labels == i)[0]
-        old_data_rate[i] = 1 - len(np.where(cur_cluster_indices[i] >= n_samples)[0]) / len(cur_cluster_indices[i])
-
-    corr_cluster = np.zeros(shape=cluster_num, dtype=int)
-    for i in range(cluster_num):
-        for j in range(i, cluster_num):
-            inter_rate = len(np.intersect1d(cur_cluster_indices[i], pre_cluster_indices[j])) / \
-                         max(len(cur_cluster_indices[i]), len(pre_cluster_indices[j]))
-            intersect_rate[i][j] = inter_rate
-            intersect_rate[j][i] = inter_rate
-        if np.max(intersect_rate[i]) > 0:
-            corr_cluster[i] = np.argmax(intersect_rate[i])
-            # 否则说明当前聚类中的所有数据全部是新数据，所以不需要进行对应，即使对应上，后续的权重也是0
-
-    '''
-    1. 当前有多个聚类C1，C2，...，Cn对应之前的一个聚类Ck，说明Ck在模型更新后被分成了多个小的聚类，破坏了visual consistency，
-       此时这几个聚类离原聚类中心越近说明破坏程度越低，离的越远说明破坏程度越高。
-    2. 之前的聚类Ck，在当前没有对应的聚类。说明Ck在模型更新后被完全破坏掉了，破坏了visual consistency。
-    '''
-
-    pre_centroids_dists = cdist(pre_centroids, pre_centroids) ** 2
-    cur_centroids_dists = cdist(cur_centroids[corr_cluster], cur_centroids[corr_cluster]) ** 2
-    pre_cur_dists = np.abs(pre_centroids_dists - cur_centroids_dists)
-    pre_cur_dists /= np.max(pre_cur_dists)
-
-    weighted_dists = cal_weighted_shift(old_data_rate, pre_cur_dists, cluster_num)
-    return (1 - np.mean(weighted_dists)) * len(np.unique(corr_cluster)) / cluster_num
-
-
-def metric_visual_consistency_dbscan(cur_embeddings, pre_embeddings, pre_avg_nn_dist, cur_avg_nn_dist, min_samples=10,
-                                     sample_ratio=1.0, weighted=True, vc_metric="dist", norm=False,
-                                     high_dist2new_data=None, knn_change_indices=None):
-    """
-        当前的聚类数等于之前的聚类数：计算每对聚类内部的距离变化以及聚类之间的距离变化
-        当前的聚类数小于之前的聚类数：说明模型更新将原本的两个或多个聚类合并了，visual consistency被较大程度的破坏
-        当前的聚类数大于之前的聚类数：说明模型更新将原本的一个聚类分离成了多个聚类，visual consistency被较大程度的破坏
-    """
-
-    # 聚类算法不稳定会造成较大的误差，因为即使投影只发生较小的变化，前后两次的聚类中心可能由于算法误差发生较大的变化
-    cur_embeddings, pre_embeddings, cur_cluster_centroids, cur_cluster_indices, pre_cluster_centroids, \
-    pre_cluster_indices, noise_factor = cluster_dbscan(cur_avg_nn_dist, cur_embeddings, pre_avg_nn_dist, pre_embeddings,
-                                                       min_samples, norm)
-
-    corr_cluster, pre_matched_indices, old_data_rate, intersect_rate = \
-        cluster_match(cur_cluster_centroids, cur_cluster_indices, pre_cluster_centroids, pre_cluster_indices,
-                      pre_embeddings, weighted, high_dist2new_data, knn_change_indices)
-
-    if vc_metric == "pearson":
-        vc = cal_vc_corr(corr_cluster, cur_cluster_centroids, cur_cluster_indices, cur_embeddings,
-                         old_data_rate, pre_cluster_centroids, pre_cluster_indices, pre_embeddings, pre_matched_indices,
-                         sample_ratio, weighted, noise_factor)
-    else:
-        vc = cal_vc_dist(corr_cluster, cur_cluster_centroids, cur_cluster_indices, cur_embeddings,
-                         old_data_rate, pre_cluster_centroids, pre_cluster_indices, pre_embeddings, pre_matched_indices,
-                         sample_ratio, weighted, noise_factor)
-    return vc
-
-
-def cal_vc_dist(corr_cluster, cur_cluster_centroids, cur_cluster_indices, cur_embeddings,
-                old_data_rate, pre_cluster_centroids, pre_cluster_indices, pre_embeddings, pre_matched_indices,
-                sample_ratio, weighted, noise_factor=0):
-    cur_matched_num = len(np.unique(corr_cluster))
-    pre_matched_num = len(pre_matched_indices)
-    # print("Previous Cluster Matched Num:", pre_matched_num)
-    # print("Current Cluster Matched Num:", cur_matched_num)
-
-    dist_change = np.zeros(shape=pre_matched_num)
-    cur_matched_data_indices = set()
-    pre_matched_data_num = 0
-    for i, item in enumerate(pre_matched_indices):
-        cur_matched_data_indices = cur_matched_data_indices.union(cur_cluster_indices[corr_cluster[item]])
-        pre_matched_data_num += len(pre_cluster_indices[item])
-
-        intersect_indices = np.intersect1d(cur_cluster_indices[corr_cluster[item]], pre_cluster_indices[item])
-        sampled_intersect_indices = random.sample(list(intersect_indices),
-                                                  max(2, int(math.ceil(len(intersect_indices)) * sample_ratio)))
-
-        inner_dist = np.abs(cur_embeddings[sampled_intersect_indices] - pre_embeddings[sampled_intersect_indices])
-        inner_dist = np.mean(inner_dist)
-        # print("inner_dist:", inner_dist)
-
-        if pre_matched_num > 1 and cur_matched_num > 1:
-            # 可以通过选择多个点来代表一个聚类，以减小聚类算法引入的误差
-            pre_dists = np.linalg.norm(pre_cluster_centroids[pre_matched_indices] - pre_cluster_centroids[item],
-                                       axis=-1)
-            cur_dists = np.linalg.norm(cur_cluster_centroids[corr_cluster[pre_matched_indices]] -
-                                       cur_cluster_centroids[corr_cluster[item]], axis=-1)
-            outer_dist = np.mean(np.abs(pre_dists - cur_dists))
-            # 这里一些相对微小的变化其实是可以忽略的
-            # print("outer_dist:", np.abs(pre_dists - cur_dists), outer_dist)
-            dists = (inner_dist + outer_dist) / 2
-        else:
-            dists = inner_dist
-            # print("outer_dist:", 0)
-
-        # corr_list[i] = dists * len(pre_cluster_indices[item])
-        dist_change[i] = dists
-    # corr_list /= pre_matched_data_num
-    matched_data_ratio = len(cur_matched_data_indices) / (cur_embeddings.shape[0] - noise_factor)
-    # print("Raw Distance Change: %.4f" % np.mean(dist_change), dist_change)
-    if weighted:
-        old_data_rate **= 2
-        dist_change = dist_change * old_data_rate[corr_cluster[pre_matched_indices]]
-        # print("Old Data Rate:", old_data_rate[corr_cluster[pre_matched_indices]])
-    # print("Weighted Distance Change: %.4f === Matched Data Ratio: %.4f" % (np.mean(dist_change), matched_data_ratio))
-    vc = np.mean(dist_change) / matched_data_ratio
-    # vc = (1 - np.mean(dist_change)) * matched_data_ratio
-    return vc
-
-
-def cal_vc_corr(corr_cluster, cur_cluster_centroids, cur_cluster_indices, cur_embeddings,
-                old_data_rate, pre_cluster_centroids, pre_cluster_indices, pre_embeddings, pre_matched_indices,
-                sample_ratio, weighted, noise_factor=0):
-    cur_matched_num = len(np.unique(corr_cluster))
-    pre_matched_num = len(pre_matched_indices)
-    # print("Previous Cluster Matched Num:", pre_matched_num)
-    # print("Current Cluster Matched Num:", cur_matched_num)
-
-    corr_list = np.zeros(shape=pre_matched_num)
-    cur_matched_data_indices = set()
-    pre_matched_data_num = 0
-    for i, item in enumerate(pre_matched_indices):
-        cur_matched_data_indices = cur_matched_data_indices.union(cur_cluster_indices[corr_cluster[item]])
-        pre_matched_data_num += len(pre_cluster_indices[item])
-
-        intersect_indices = np.intersect1d(cur_cluster_indices[corr_cluster[item]], pre_cluster_indices[item])
-        sampled_intersect_indices = random.sample(list(intersect_indices),
-                                                  max(2, int(math.ceil(len(intersect_indices)) * sample_ratio)))
-
-        inner_corr = cal_dist_correlation(cur_embeddings[sampled_intersect_indices],
-                                          pre_embeddings[sampled_intersect_indices])
-        inner_corr = np.mean(inner_corr)
-        # print("inner_corr:", inner_corr)
-
-        if pre_matched_num > 1 and cur_matched_num > 1:
-            pre_dists = np.linalg.norm(pre_cluster_centroids[pre_matched_indices] - pre_cluster_centroids[item],
-                                       axis=-1)
-            cur_dists = np.linalg.norm(cur_cluster_centroids[corr_cluster[pre_matched_indices]] -
-                                       cur_cluster_centroids[corr_cluster[item]], axis=-1)
-            outer_corr = stats.pearsonr(pre_dists, cur_dists)[0]
-            # print("outer_corr:", outer_corr)
-            dists = (inner_corr + outer_corr) / 2
-        else:
-            dists = inner_corr
-            # print("outer_corr:", 0)
-
-        # corr_list[i] = dists * len(pre_cluster_indices[item])
-        corr_list[i] = dists
-    # corr_list /= pre_matched_data_num
-    matched_data_ratio = len(cur_matched_data_indices) / cur_embeddings.shape[0]
-    # print("Raw Correlation: %.2f" % np.mean(corr_list), corr_list)
-    if weighted:
-        old_data_rate **= 2
-        selected_old_data_date = old_data_rate[corr_cluster[pre_matched_indices]]
-        corr_list = corr_list * selected_old_data_date
-        # print("Old Data Rate:", selected_old_data_date)
-    # print("Weighted Correlation: %.2f === Matched Data Ratio: %.2f" % (np.mean(corr_list), matched_data_ratio))
-    vc = 0.5 * (np.mean(corr_list) + 1) * matched_data_ratio
-    return vc
-
-
-def cluster_match(cur_cluster_centroids, cur_cluster_indices, pre_cluster_centroids, pre_cluster_indices,
-                  pre_embeddings, weighted, high_dist2new_data=None, knn_change_indices=None, eta=5):
-    pre_n_samples = pre_embeddings.shape[0]
-    cur_cluster_num = cur_cluster_centroids.shape[0]
-    pre_cluster_num = pre_cluster_centroids.shape[0]
-    intersect_rate = np.zeros(shape=(pre_cluster_num, cur_cluster_num))
-    # 先前的第i个聚类对应当前的第几个聚类
-    corr_cluster = np.ones(shape=pre_cluster_num, dtype=int) * -1
-    matched_indices = []
-    old_data_rate = np.zeros(shape=cur_cluster_num)
-    avg_dist2new_data = np.zeros(shape=cur_cluster_num)
-    knn_change_rate = np.zeros(shape=cur_cluster_num)
-
-    for i in range(pre_cluster_num):
-        cur_cluster_data_num = len(pre_cluster_indices[i])
-        for j in range(cur_cluster_num):
-            if i == 0 and weighted:
-                # 目前只是计算直接包含新数据的比例，还应该加上与新数据具有邻域关系的节点比例，这些点也会被影响到
-                # 1. 可以计算kNN发生改变的节点的比例。但是对PCA等全局降维算法的意义不明确
-                # 2. 计算各个聚类中所有（部分）高维数据点到所有最新点的距离均值，然后进行归一化。但是对t-SNE等邻域保持算法的意义不明确
-                old_data_rate[j] = len(np.where(cur_cluster_indices[j] < pre_n_samples)[0]) / len(
-                    cur_cluster_indices[j])
-                if high_dist2new_data is not None:
-                    avg_dist2new_data[j] = np.mean(high_dist2new_data[:, cur_cluster_indices[j]])
-                if knn_change_indices is not None:
-                    knn_change_rate[j] = len(np.intersect1d(cur_cluster_indices[j], knn_change_indices)) / \
-                                         len(cur_cluster_indices[i])
-
-            intersect_rate[i][j] = len(np.intersect1d(pre_cluster_indices[i], cur_cluster_indices[j]))
-
-        intersect_rate[i] /= cur_cluster_data_num
-        min_rate = eta / cur_cluster_data_num
-        if np.max(intersect_rate[i] >= min_rate):
-            corr_cluster[i] = np.argmax(intersect_rate[i])
-            matched_indices.append(i)
-
-    # print("origin old data rate:", old_data_rate)
-    if high_dist2new_data is not None:
-        # 这边还有一个问题就是，转换是线性的，
-        avg_dist2new_data = (avg_dist2new_data + 1e-8) / (np.max(avg_dist2new_data) + 1e-8)
-        old_data_rate *= avg_dist2new_data
-        # print("avg_dist2new_data:", avg_dist2new_data)
-    if knn_change_indices is not None:
-        # old_data_rate *= 1 - knn_change_rate
-        # print("knn un-change rate:", 1 - knn_change_rate)
-        pass
-
-    return corr_cluster, matched_indices, old_data_rate, intersect_rate
-
-
-def cluster_dbscan(cur_avg_nn_dist, cur_embeddings, pre_avg_nn_dist, pre_embeddings, min_samples, norm=False):
-    db = DBSCAN(eps=pre_avg_nn_dist, min_samples=min_samples)
-    pre_labels = db.fit_predict(pre_embeddings)
-    db = DBSCAN(eps=cur_avg_nn_dist, min_samples=min_samples)
-    cur_labels = db.fit_predict(cur_embeddings)
-    cur_cluster_num = len(np.unique(cur_labels)) - (1 if -1 in cur_labels else 0)
-    pre_cluster_num = len(np.unique(pre_labels)) - (1 if -1 in pre_labels else 0)
-    # print("Previous nn dist:", pre_avg_nn_dist, " Current nn dist:", cur_avg_nn_dist)
-    # print("Current Cluster Num: {} Previous Cluster Num: {}".format(cur_cluster_num, pre_cluster_num))
-    # print("Current Noise Num:", len(np.where(cur_labels == -1)[0]))
-    pre_noise_num = len(np.where(pre_labels == -1)[0])
-    # print("Previous Noise Num:", pre_noise_num)
-    noise_factor = max(0, pre_noise_num - np.abs(cur_cluster_num - pre_cluster_num))
-    cur_cluster_indices = {}
-    pre_cluster_indices = {}
+    rows = np.repeat(np.arange(pre_n_samples)[:, np.newaxis], n_neighbors, 1)
+    cols = np.ravel(pre_knn_indices)
+    pre_pairwise_dists = np.linalg.norm(pre_embeddings[rows] - pre_embeddings[cols], axis=-1)
+    cur_pairwise_dists = np.linalg.norm(cur_embeddings[rows] - cur_embeddings[cols], axis=-1)
 
     if norm:
-        cur_embeddings = my_norm(cur_embeddings)
-        pre_embeddings = my_norm(pre_embeddings)
+        pre_pairwise_dists = normalization(pre_pairwise_dists)
+        cur_pairwise_dists = normalization(cur_pairwise_dists)
 
-    cur_cluster_centroids = np.empty(shape=(cur_cluster_num, cur_embeddings.shape[1]))
-    pre_cluster_centroids = np.empty(shape=(pre_cluster_num, pre_embeddings.shape[1]))
-    for i in range(cur_cluster_num):
-        cur_cluster_indices[i] = np.where(cur_labels == i)[0]
-        cur_cluster_centroids[i] = np.mean(cur_embeddings[cur_cluster_indices[i]], axis=0)
-    for i in range(pre_cluster_num):
-        pre_cluster_indices[i] = np.where(pre_labels == i)[0]
-        pre_cluster_centroids[i] = np.mean(pre_embeddings[pre_cluster_indices[i]], axis=0)
-    return cur_embeddings, pre_embeddings, cur_cluster_centroids, cur_cluster_indices, pre_cluster_centroids, \
-           pre_cluster_indices, noise_factor
+    dist_change = np.abs(cur_pairwise_dists - pre_pairwise_dists)
 
+    if weight:
+        neighbor_nochange = (np.ravel(new_knn_indices[:pre_n_samples]) < pre_n_samples).astype(int)
+        w_dist_change = dist_change * neighbor_nochange
+        return np.mean(dist_change), np.mean(w_dist_change)
 
-def metric_neighbor_preserve_introduce(low_knn_indices, high_knn_indices):
-    n_samples = low_knn_indices.shape[0]
-    n_neighbor = low_knn_indices.shape[1]
-    preserve_list = np.zeros(shape=n_samples)
-    fake_list = np.zeros(shape=n_samples)
-    for i in range(n_samples):
-        preserve_list[i] = len(np.intersect1d(low_knn_indices[i], high_knn_indices[i])) / n_neighbor
-        # fake_list[i] = len(np.setdiff1d())
-    return np.mean(preserve_list), preserve_list
+    return np.mean(dist_change)
 
 
 class Metric:
