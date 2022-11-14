@@ -9,7 +9,6 @@ from sklearn.cluster import KMeans, DBSCAN
 from sklearn.neighbors import LocalOutlierFactor
 
 from dataset.warppers import extract_csr, KNNManager
-from utils.metrics_tool import metric_neighbor_preserve_introduce
 from utils.nn_utils import compute_knn_graph
 from utils.umap_utils import fuzzy_simplicial_set_partial
 
@@ -192,86 +191,6 @@ class KeyPointsGenerator:
         return None, key_indices, cluster_indices, exclude_indices, total_cluster_indices
 
 
-class RepDataSampler:
-    def __init__(self, n_neighbors, sample_rate, minimum_sample_data_num, time_based_sample=False,
-                 metric_based_sample=False):
-        self.time_based_sample = time_based_sample
-        self.metric_based_sample = metric_based_sample
-        self.n_neighbors = n_neighbors
-        self.sample_rate = sample_rate
-        self.minimum_sample_data_num = minimum_sample_data_num
-
-        self.time_weights = None
-        self.min_weight = 0.1
-        self.decay_rate = 0.9
-        self.decay_iter_time = 10
-        self.pre_update_time = None
-
-    def update_sample_weight(self, n_samples):
-        if not self.time_based_sample:
-            return
-
-        # 如果速率产生的很快，那么采样的概率也会衰减的很快，所以这里的更新应该要以时间为标准
-        if self.time_weights is None:
-            self.time_weights = np.ones(shape=n_samples)
-            self.pre_update_time = time.time()
-        else:
-            cur_time = time.time()
-            if cur_time - self.pre_update_time > self.decay_iter_time:
-                self.time_weights *= self.decay_rate
-                self.time_weights[self.time_weights < self.min_weight] = self.min_weight
-                self.pre_update_time = cur_time
-            self.time_weights = np.concatenate([self.time_weights, np.ones(shape=n_samples)])
-
-    def sample_training_data(self, pre_data, pre_embeddings, high_knn_indices, must_indices, total_data_num):
-        # 采样训练子集
-        pre_n_samples = pre_embeddings.shape[0]
-        if self.sample_rate >= 1:
-            return np.arange(0, total_data_num, 1)
-
-        sampled_indices = None
-        prob = None
-        if self.time_based_sample and self.metric_based_sample:
-            prob = np.copy(self.time_weights)[:pre_n_samples]
-            if self.metric_based_sample:
-                neighbor_lost_weights = self._cal_neighbor_lost_weights(high_knn_indices, pre_embeddings)
-                # 如何在两者之间进行权衡
-                prob = (neighbor_lost_weights + prob) / 2
-        elif self.time_based_sample:
-            prob = self.time_weights[:pre_n_samples]
-        elif self.metric_based_sample:
-            neighbor_lost_weights = self._cal_neighbor_lost_weights(high_knn_indices, pre_embeddings)
-            prob = neighbor_lost_weights
-        else:
-            sampled_indices = self._random_sample(pre_n_samples)
-
-        if sampled_indices is None:
-            sampled_indices = KeyPointsGenerator.generate(pre_data, self.sample_rate, KeyPointsGenerator.RANDOM, False,
-                                                          prob=prob, min_num=self.minimum_sample_data_num)[1]
-        if must_indices is not None:
-            sampled_indices = np.union1d(sampled_indices, must_indices).astype(int)
-
-        return sampled_indices
-
-    def _cal_neighbor_lost_weights(self, high_knn_indices, embeddings, alpha=2):
-        pre_n_samples = embeddings.shape[0]
-        high_knn_indices = high_knn_indices[:pre_n_samples]
-        # TODO：这里需要进一步提高效率
-        low_knn_indices = compute_knn_graph(embeddings, None, self.n_neighbors, None)[0]
-        # 这里还应该有一个阈值，只需要大于这个阈值一定程度便可以视为较好了
-        preserve_rate = metric_neighbor_preserve_introduce(low_knn_indices, high_knn_indices)[1]
-        # mean, std = np.mean(preserve_rate), np.std(preserve_rate)
-        # preserve_rate[preserve_rate > mean + alpha * std] = 1
-        return (1 - preserve_rate) ** 2
-
-    def _random_sample(self, pre_n_samples):
-        sampled_num = max(int(pre_n_samples * self.sample_rate), self.minimum_sample_data_num)
-        all_indices = np.arange(0, pre_n_samples, 1)
-        np.random.shuffle(all_indices)
-        sampled_indices = all_indices[:sampled_num]
-        return sampled_indices
-
-
 class ClusterRepDataSampler:
     def __init__(self, sample_rate=0, min_num=100, cover_all=False):
         self.__sample_rate = sample_rate
@@ -381,6 +300,10 @@ class EmbeddingQualitySupervisor:
         self.__new_manifold_data_num = 0
         self.__bad_embedding_data_num = 0
 
+    def update_d_e_thresh(self, new_d_thresh, new_e_thresh):
+        self.__d_thresh = new_d_thresh
+        self.__e_thresh = new_e_thresh
+
     def update_model_update_time(self, update_time):
         self.__last_update_time = update_time
 
@@ -407,20 +330,21 @@ class EmbeddingQualitySupervisor:
         if cluster_centers is not None:
             assert data is not None
             min_dist = np.min(cdist(data, cluster_centers))
-            print("min dist:", min_dist)
+            # print("min dist:", min_dist)
             if min_dist >= self.__d_thresh:
-                self.__manifold_change_num_thresh += 1
+                self.__new_manifold_data_num += 1
                 manifold_change = True
                 need_optimize = True
 
         if not manifold_change and neighbor_embeddings is not None:
             assert embedding is not None
             avg_dist = np.mean(cdist(embedding, neighbor_embeddings))
-            print("neighbor embedding dist:", avg_dist)
+            # print("neighbor embedding dist:", avg_dist)
             if avg_dist >= self.__e_thresh:
                 self.__bad_embedding_data_num += 1
                 need_optimize = True
 
+        # print("manifold change num: {} bad embedding num: {}".format(self.__new_manifold_data_num, self.__bad_embedding_data_num))
         return need_optimize, self._judge_model_update()
 
 

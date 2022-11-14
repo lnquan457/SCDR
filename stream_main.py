@@ -3,7 +3,6 @@ import argparse
 import numpy as np
 import os
 
-from model.scdr.data_processor import SCDRProcessor
 from model.scdr.model_trainer import SCDRTrainer, SCDRTrainerProcess
 from experiments.streaming_experiment import StreamingEx, StreamingExProcess
 from model.dr_models.ModelSets import MODELS
@@ -77,29 +76,14 @@ def start(ex):
     elif args.method == XTREAMING:
         # ==============3. Xtreaming model=====================
         ex.start_xtreaming()
-    elif args.method == SCDR or args.method == RTSCDR:
-        # ==============4. SCDR/RTSCDR/PAR_SCDR model=====================
-        cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
-
-        model_trainer = SCDRTrainer(cdr_model, cfg.exp_params.dataset, cfg_path, cfg, result_save_dir,
-                                    device=device, log_path=log_path)
-        if args.method == SCDR:
-            ex.start_scdr(model_trainer)
-        else:
-            ex.start_rtscdr(model_trainer)
-    elif args.method == PAR_SCDR:
+    elif args.method == SCDR:
         assert isinstance(ex, StreamingExProcess)
         cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
         model_update_queue_set = ModelUpdateQueueSet()
-        data_process_queue_set = DataProcessorQueueSet()
-        cal_time_queue_set = CalTimeQueueSet()
 
-        model_trainer = SCDRTrainerProcess(cal_time_queue_set, model_update_queue_set, cdr_model, cfg.exp_params.dataset,
+        model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, cfg.exp_params.dataset,
                                            cfg_path, cfg, result_save_dir, device=device, log_path=log_path)
-        data_processor = SCDRProcessor(cfg.method_params.n_neighbors, cfg.method_params.shift_buffer_size,
-                                       data_process_queue_set, model_update_queue_set, cal_time_queue_set, device)
-        ex.start_parallel_scdr(model_update_queue_set, data_process_queue_set, cal_time_queue_set, model_trainer,
-                               data_processor)
+        ex.start_parallel_scdr(model_update_queue_set, model_trainer)
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 
@@ -124,7 +108,7 @@ def custom_indices_training(custom_indices_path):
 
     # ex = StreamingEx(cfg, custom_indices, result_save_dir)
 
-    ex = StreamingExProcess(cfg, custom_indices, result_save_dir, )
+    ex = StreamingExProcess(cfg, custom_indices, result_save_dir)
 
     start(ex)
 
@@ -132,8 +116,8 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=PAR_SCDR,
-                        choices=[ATSNE, SIPCA, XTREAMING, SCDR, RTSCDR, PAR_SCDR])
+    parser.add_argument("--method", type=str, default=SCDR,
+                        choices=[ATSNE, SIPCA, XTREAMING, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/single_cluster")
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()

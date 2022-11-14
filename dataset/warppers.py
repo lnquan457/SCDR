@@ -71,6 +71,9 @@ class DataRepo:
     def get_knn_dists(self):
         return self._knn_manager.knn_dists
 
+    def update_embeddings(self, new_embeddings):
+        self._total_embeddings = new_embeddings
+
     def get_data_neighbor_mean_std_dist(self):
         mean_per_data = np.mean(self._knn_manager.knn_dists, axis=1)
         return np.mean(mean_per_data), np.std(mean_per_data)
@@ -236,13 +239,12 @@ def eval_knn_acc(acc_knn_indices, pre_knn_indices):
 
 
 class StreamingDatasetWrapper(DataSetWrapper):
-    def __init__(self, initial_data, initial_label, batch_size, n_neighbor):
+    def __init__(self, batch_size, n_neighbor):
         DataSetWrapper.__init__(self, 1, batch_size, n_neighbor)
         # 没有重新计算邻居点相似点的数据下标
-        self.__cached_neighbor_change_indices = []
+        self.__cached_neighbor_change_indices = set()
         self.cur_neighbor_changed_indices = None
         self.__replaced_raw_weights = []
-        self.add_new_data(data=initial_data, labels=initial_label)
         self.__sigmas = None
         self.__rhos = None
 
@@ -276,7 +278,6 @@ class StreamingDatasetWrapper(DataSetWrapper):
         return train_loader, train_num
 
     def update_data_loaders(self, epoch_nums, sampled_indices, multi=False):
-
         self.train_dataset.transform.update(self.train_dataset, epoch_nums, self.symmetric_nn_indices,
                                             self.symmetric_nn_weights)
 
@@ -361,20 +362,24 @@ class StreamingDatasetWrapper(DataSetWrapper):
             self.symmetric_nn_indices[cur_update_indices] = updated_sym_nn_indices
 
         if not update_similarity:
-            self.__cached_neighbor_change_indices.extend(np.delete(neighbor_changed_indices, np.arange(new_n_samples)))
+            self.__cached_neighbor_change_indices = \
+                self.__cached_neighbor_change_indices.union(set(neighbor_changed_indices))
 
         return None
 
     def update_cached_neighbor_similarities(self):
+        self.__cached_neighbor_change_indices = list(self.__cached_neighbor_change_indices)
         umap_graph, sigmas, rhos, self.raw_knn_weights = \
             fuzzy_simplicial_set_partial(self._knn_manager.knn_indices, self._knn_manager.knn_dists,
                                          self.raw_knn_weights,
                                          self.__cached_neighbor_change_indices)
         updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, self.__cached_neighbor_change_indices)
 
+        self.__sigmas[self.__cached_neighbor_change_indices] = sigmas
+        self.__rhos[self.__cached_neighbor_change_indices] = rhos
         self.symmetric_nn_weights[self.__cached_neighbor_change_indices] = updated_symm_nn_weights
         self.symmetric_nn_indices[self.__cached_neighbor_change_indices] = updated_sym_nn_indices
-        self.__cached_neighbor_change_indices = []
+        self.__cached_neighbor_change_indices = set()
 
     def get_pre_neighbor_changed_info(self):
         pre_changed_neighbor_meta = self._knn_manager.get_pre_neighbor_changed_positions()

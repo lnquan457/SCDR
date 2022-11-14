@@ -165,7 +165,7 @@ class Metric:
         # if compute_shepard:
         #     shepard_corr = self.metric_shepard_diagram_correlation(embedding_data)
 
-        knn_ac = knn_score(embedding_data, self.origin_label, knn_k, pair_distance=self.low_dis_matrix)
+        knn_ac = knn_score(embedding_data, self.origin_label, knn_k)
         # knn_ac_5 = knn_score(embedding_data, self.origin_label, 5, pair_distance=self.low_dis_matrix)
         # knn_ac_1 = knn_score(embedding_data, self.origin_label, 1, pair_distance=self.low_dis_matrix)
         # knn_ac_5 = self.metric_avg_fn_rank(embedding_data)

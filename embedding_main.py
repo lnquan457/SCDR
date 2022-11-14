@@ -13,8 +13,9 @@ from model.dr_models.ModelSets import MODELS
 from model.scdr.dependencies.embedding_optimizer import EmbeddingOptimizer
 from model.scdr.dependencies.experiment import position_vis
 from model.scdr.dependencies.scdr_utils import EmbeddingQualitySupervisor, ClusterRepDataSampler
-from model.scdr.model_trainer import IncrementalCDREx
-from model_update_main import IndicesGenerator, query_knn
+from model.scdr.model_trainer import SCDRTrainer
+from model.scdr.scdr_parallel import query_knn
+from model_update_main import IndicesGenerator
 from utils.common_utils import time_stamp_to_date_time_adjoin, get_config
 from utils.constant_pool import ConfigInfo
 from utils.loss_grads import umap_loss_single, mae_loss_gard, nce_loss_single
@@ -80,97 +81,11 @@ def neighbor_hit_single(labels, gt_label, low_knn_indices):
     return np.sum(pred_labels == gt_label) / low_knn_indices.shape[1]
 
 
-def optimize_single_umap(center_embedding, neighbors_embeddings, target_sims, a, b, sigma=None):
-    # sta = time.time()
-    res = scipy.optimize.minimize(umap_loss_single, center_embedding, method="BFGS", jac=mae_loss_gard,
-                                  args=(neighbors_embeddings, target_sims, a, b, sigma),
-                                  options={'gtol': 1e-5, 'disp': False, 'return_all': False})
-    # print("optimize cost:", time.time() - sta)
-    return res.x
-
-
-def optimize_single_nce(center_embedding, neighbors_embeddings, neg_embeddings, a, b, t=0.15):
-    # sta = time.time()
-    # eps参数控制的就是差分近似时候的步长，默认值非常小，是1e-8。这个值越小越快. 可能是因为越小就越容易满足最小误差。
-    res = scipy.optimize.minimize(nce_loss_single, center_embedding, method="BFGS", jac=None,
-                                  args=(neighbors_embeddings, neg_embeddings, a, b, t),
-                                  options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
-    # print("optimize cost:", time.time() - sta)
-    return res.x
-
-
 count = 0
 
 changed_indices = []
 changed_indices_knn_dist_list = np.zeros(shape=2500, dtype=object)
 avg_dist = []
-
-
-def optimize_multiple(optimize_indices, knn_indices, total_embeddings, target_sims, anchor_position,
-                      replaced_neighbor_indices, replaced_sims, a, b, local_move_mask, neg_nums=50,
-                      nce_opt_update_thresh=10):
-    # 使用BFGS算法进行优化
-    neg_indices = random.sample(list(np.arange(total_embeddings.shape[0])), neg_nums)
-
-    for i, item in enumerate(optimize_indices):
-        if local_move_mask[i]:
-            anchor_sims = target_sims[item, anchor_position[i]] / np.sum(target_sims[item])
-            back = replaced_sims[i] * (total_embeddings[replaced_neighbor_indices[i]] - total_embeddings[item])
-            total_embeddings[item] -= back
-
-            move = anchor_sims * (total_embeddings[-1] - total_embeddings[item])
-            total_embeddings[item] = total_embeddings[item] + move
-        else:
-            neg_embeddings = total_embeddings[neg_indices]
-            optimized_e = optimize_single_nce(total_embeddings[item][np.newaxis, :],
-                                              total_embeddings[knn_indices[item]],
-                                              neg_embeddings, a, b)
-            update_step = optimized_e - total_embeddings[item]
-            # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
-            update_step[update_step > nce_opt_update_thresh] = 0
-            update_step[update_step < -nce_opt_update_thresh] = -0
-            total_embeddings[item] += update_step
-
-    return total_embeddings[optimize_indices]
-
-    # 在局部结构发生变化的方向上进行修正，跟原嵌入比较接近
-    # 被替换的都是低相似度的，新数据都是高相似度的，就导致嵌入严重偏向新数据的嵌入方向。
-    # num = len(optimize_indices)
-    # anchor_sims = target_sims[optimize_indices, anchor_position] / np.sum(target_sims[optimize_indices], axis=1)
-    # move = anchor_sims[:, np.newaxis] * np.repeat(total_embeddings[-1][np.newaxis, :], num, 0)
-    # back = replaced_sims[:, np.newaxis] * total_embeddings[replaced_neighbor_indices]
-    # step = move - back
-    # thresh = 0.1
-    # step[step > thresh] = thresh
-    # step[step < -thresh] = -thresh
-    # updated_embedding = total_embeddings[optimize_indices] + 0.001 * step
-
-    # 使用所有邻居的插值
-    # n_neighbors = knn_indices.shape[1]
-    # changed_knn_indices = knn_indices[optimize_indices]
-    # neighbor_embeddings = np.reshape(total_embeddings[np.ravel(changed_knn_indices)],
-    #                                  (len(optimize_indices), n_neighbors, -1))
-    # optimize_sims = target_sims[optimize_indices] / np.sum(target_sims[optimize_indices], axis=1)[:, np.newaxis]
-    # updated_embedding = np.sum(neighbor_embeddings * np.repeat(optimize_sims[:, :, np.newaxis],
-    #                                                            total_embeddings.shape[1], -1), axis=1)
-
-    # return updated_embedding
-
-
-def optimize_all_waits(indices, knn_indices, total_embeddings, a, b, neg_num=50, nce_opt_update_thresh=10):
-    neg_indices = random.sample(list(np.arange(total_embeddings.shape[0])), neg_num)
-    for i, item in enumerate(indices):
-        neg_embeddings = total_embeddings[neg_indices]
-        optimized_e = optimize_single_nce(total_embeddings[item][np.newaxis, :],
-                                          total_embeddings[knn_indices[item]],
-                                          neg_embeddings, a, b)
-        update_step = optimized_e - total_embeddings[item]
-        # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
-        update_step[update_step > nce_opt_update_thresh] = 0
-        update_step[update_step < -nce_opt_update_thresh] = -0
-        total_embeddings[item] += update_step
-
-    return total_embeddings[indices]
 
 
 def incremental_cdr_pipeline():
@@ -184,8 +99,8 @@ def incremental_cdr_pipeline():
     cfg.merge_from_file(CONFIG_PATH)
     clr_model = MODELS[METHOD_NAME](cfg, device=device)
     t_log_path = os.path.join(RESULT_SAVE_DIR, "logs.txt")
-    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH,
-                                    device=device, log_path=t_log_path)
+    experimenter = SCDRTrainer(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH,
+                               device=device, log_path=t_log_path)
     n_neighbors = experimenter.n_neighbors
     a, b = find_ab_params(1.0, MIN_DIST)
 
@@ -211,8 +126,8 @@ def incremental_cdr_pipeline():
     initial_data = total_data[batch_indices[0]]
     initial_labels = total_labels[batch_indices[0]]
     fitted_manifolds = set(np.unique(initial_labels))
-    stream_dataset = StreamingDatasetWrapper(initial_data, initial_labels, experimenter.batch_size,
-                                             experimenter.n_neighbors)
+    stream_dataset = StreamingDatasetWrapper(initial_data, experimenter.batch_size,
+                                             experimenter.n_neighbors, initial_labels)
     ckpt_path = r"results\embedding_ex\comparison_ex\only_model\initial\CDR_100.pth.tar"
     # ckpt_path = None
     initial_embeddings = experimenter.first_train(stream_dataset, INITIAL_EPOCHS, ckpt_path)

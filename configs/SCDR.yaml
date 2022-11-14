@@ -3,27 +3,27 @@ exp_params:
   dataset: 'food'
   input_dims: 512   # x for vectors or (h, w, c) for images
   latent_dim: 2
-  stream_rate: 100
+  stream_rate: 1
   indices_file_path: -1
   initial_data_num: 300
-  vis_iter: 1
+  vis_iter: 50
 
 
 method_params:
-  method: "CDR"
-  initial_train_epoch: 200
+  method: "LwF_CDR"
+  initial_train_epoch: 100
   finetune_epoch: 50
-  buffer_size: 100
+  shift_buffer_size: 30
   batch_size: 256
   LR: 0.001
   n_neighbors: 10
   optimizer: "adam" # adam or sgd
-  scheduler: "cosine" # cosine or multi_step or on_plateau
+  scheduler: "multi_step" # cosine or multi_step or on_plateau
   temperature: 0.15
-  split_upper: 0.1
+  split_upper: 0.11
   split_lower: 0.005
-  alpha: 5
-  separation_begin_ratio: 0.25
+  alpha: 6
+  separation_begin_ratio: 0.20
   steady_begin_ratio: 0.9
   ckpt_path: None
 

@@ -3,109 +3,181 @@ import time
 
 import numpy as np
 import torch
-from model.scdr.data_processor import SCDRProcessor
+from scipy.spatial.distance import cdist
+
+from dataset.warppers import StreamingDatasetWrapper, DataRepo
+from model.scdr.dependencies.embedding_optimizer import EmbeddingOptimizer
+from utils.nn_utils import StreamingKNNSearchApprox2, compute_knn_graph
 from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet
-from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, DistributionChangeDetector
+from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, DistributionChangeDetector, ClusterRepDataSampler, \
+    EmbeddingQualitySupervisor
+
+OPTIMIZE_NEW_DATA_EMBEDDING = True
+OPTIMIZE_NEIGHBORS = True
 
 
 class SCDRParallel:
-    def __init__(self, model_update_queue_set, data_process_queue_set, cal_time_queue_set, initial_train_num,
-                 initial_train_epoch, ckpt_path=None, device="cuda:0"):
+    def __init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, ckpt_path=None,
+                 device="cuda:0"):
+        self.n_neighbors = n_neighbors
+        self.batch_size = batch_size
         self.model_update_queue_set = model_update_queue_set
-        self.data_process_queue_set = data_process_queue_set
-        self.cal_time_queue_set = cal_time_queue_set
         self.device = device
         self.infer_model = None
         self.ckpt_path = ckpt_path if os.path.exists(ckpt_path) else None
         self.initial_train_num = initial_train_num
-        self.initial_train_epoch = initial_train_epoch
+        self.data_num_when_update = 0
+
+        # 用于确定何时要更新模型，1）新的流形出现；2）模型对旧流形数据的嵌入质量太低；3）长时间没有更新；
+        self.model_update_intervals = 600
+        self.manifold_change_num_thresh = 200
+        self.bad_embedding_num_thresh = 250
+
+        # 是否进行跳步优化
+        self.skip_opt = False
+        # bfgs优化时,使用的负例数目
+        self.opt_neg_num = 50
+
+        # 模型优化时，每个batch中的旧数据采样率
+        self.rep_data_sample_rate = 0.07
+        self.rep_data_minimum_num = 50
+        # 是否要采样所有旧数据
+        self.cover_all = True
+
+        self.knn_searcher_approx = StreamingKNNSearchApprox2()
+
+        self.cluster_rep_data_sampler = ClusterRepDataSampler(self.rep_data_sample_rate, self.rep_data_minimum_num,
+                                                              self.cover_all)
+        self.pre_cluster_centers = None
+        # 进行初次训练后，初始化以下对象
+        self.stream_dataset = StreamingDatasetWrapper(batch_size, n_neighbors)
+        self.embedding_quality_supervisor = None
+        self.embedding_optimizer = None
 
         self.initial_data_buffer = None
         self.initial_label_buffer = None
-        self.pre_embeddings = None
 
-        self.time_step = 0
         self.model_trained = False
-        # 用户告知shift detector是否需要重新fit已经见过的数据
-        self.model_just_updated = False
         self.fitted_data_num = 0
 
-        self.key_data = None
-        self.key_indices = None
-        # self.key_data_rate = 0.5
-        self.key_data_rate = 1.0
+        self.knn_cal_time = 0
+        self.knn_update_time = 0
+        self.model_init_time = 0
+        self.model_infer_time = 0
+        self.embedding_opt_time = 0
+        self.embedding_update_time = 0
+        self.quality_record_time = 0
 
-        # 没有经过模型拟合的数据
-        self.unfitted_data = None
-        self.total_data = None
-        self.total_labels = None
-
-        self.dis_change_detector = DistributionChangeDetector(lof_based=True)
-
-        self.shift_detect_time = 0
-        self.model_repro_time = 0
         self.debug = True
         self.update_when_end = True
 
-    # scdr本身属于嵌入进程，只负责数据的嵌入
+    # scdr本身属于嵌入进程，负责数据的处理和嵌入
     def fit_new_data(self, data, labels=None):
         new_data_num = data.shape[0]
-        # 这一步竟然也还挺耗时的，不应该每次有数据来的时候就进行采样。因为key_data只有在shift detect的时候用于进行refit，
-        # 所以只需要在每次模型更新之后再进行重新采样就可以了。
-        if self.model_just_updated:
-            sta = time.time()
-            self._generate_key_points(self.total_data[:self.fitted_data_num])
-            print("generate time", time.time() - sta)
-        self.total_data = data if self.total_data is None else np.concatenate([self.total_data, data], axis=0)
-        self.total_labels = labels if self.total_labels is None else np.concatenate([self.total_labels, labels])
+        pre_n_samples = self.stream_dataset.get_n_samples()
 
-        # 模型第一次训练过程中，model_trained状态没有切换，此时接收到的数据还是在cache当中的？ 没有，数据进程被阻塞住了
         if not self.model_trained:
             if not self._caching_initial_data(data, labels):
                 return None
 
-            self.data_process_queue_set.data_queue.put([self.fitted_data_num, None, self.initial_data_buffer,
-                                                        self.initial_label_buffer, None,
-                                                        SCDRProcessor.SIGNAL_GATHER_DATA])
-
-            self._initial_project(self.initial_data_buffer, self.initial_label_buffer)
-
+            self.stream_dataset.add_new_data(data=self.initial_data_buffer, labels=self.initial_label_buffer)
+            cluster_indices = self._initial_project_model()
+            self._initial_embedding_optimizer_and_quality_supervisor(cluster_indices)
         else:
-            sta = time.time()
-            shifted_indices = self.detect_distribution_change(data, labels)
-            self.shift_detect_time += time.time() - sta
-
+            pre_embeddings = self.stream_dataset.get_total_embeddings()
             # 使用之前的投影函数对最新的数据进行投影
             sta = time.time()
+            data_embeddings = self.infer_embeddings(data)
+            self.model_infer_time += time.time() - sta
 
-            # 后续这里要根据数据的分布情况实施不同的嵌入策略
-            data_embeddings = self.infer_embeddings(data).numpy().astype(float)
-            self.model_repro_time += time.time() - sta
-            data_embeddings = np.reshape(data_embeddings, (new_data_num, self.pre_embeddings.shape[1]))
+            # TODO: 这里还有一个冲突问题。使用了所有的嵌入进行查询，但是这些嵌入包含模型直接输出的和优化得到的。但是查询的嵌入是模型输出的。
+            sta = time.time()
+            knn_indices, knn_dists = self.knn_searcher_approx.search(self.n_neighbors, pre_embeddings,
+                                                                     self.stream_dataset.get_total_data(),
+                                                                     data_embeddings, data)
+            self.knn_cal_time += time.time() - sta
+            # 准确查询
+            # acc_knn_indices, acc_knn_dists = query_knn(data, np.concatenate([self.stream_dataset.get_total_data(), data],
+            #                                                                 axis=0), k=self.n_neighbors)
 
-            self.pre_embeddings = np.concatenate([self.pre_embeddings, data_embeddings], axis=0, dtype=float)
+            self.stream_dataset.add_new_data(data, None, labels, knn_indices, knn_dists)
 
-            self.data_process_queue_set.data_queue.put(
-                [self.fitted_data_num, data_embeddings, data, labels, shifted_indices, SCDRProcessor.SIGNAL_GATHER_UPDATE])
+            sta = time.time()
+            self.stream_dataset.update_knn_graph(pre_n_samples, data, [0], update_similarity=False,
+                                                 symmetric=False)
+            self.knn_update_time += time.time() - sta
 
-        return self.pre_embeddings
+            # 两种邻居点策略：第一种是使用模型最新计算的，会增加时耗
+            sta = time.time()
+            neighbor_data = self.stream_dataset.get_total_data()[knn_indices.squeeze()]
+            neighbor_embeddings = self.infer_embeddings(neighbor_data)
+            self.model_infer_time += time.time() - sta
+            # TODO：第二种是使用之前的，可能包含bfgs优化过的嵌入，可能存在不一致，导致冲突。如果要使用这一种，需要解释冲突问题。
+            # neighbor_embeddings = self.stream_dataset.get_total_embeddings()[knn_indices.squeeze()]
 
-    def detect_distribution_change(self, data, labels=None):
-        # 这可能会导致分布变化检测的精度降低，从而增加模型更新的频率
-        # 这样处理了之后，模型更新的速度完全跟不上投影的速度，新分布的数据到达时模型还没有拟合之前的数据，就导致不断的触发模型更新。
-        if self.model_just_updated:
-            refit = True
-            fit_data = self.key_data
-            self.model_just_updated = False
-        else:
-            fit_data = None
-            refit = False
-        shifted_indices = self.dis_change_detector.detect_distribution_shift(data, refit, fit_data,
-                                                                             self.total_labels[self.key_indices], labels)
-        shifted_indices = shifted_indices + (self.total_data.shape[0] - data.shape[0])
-        return shifted_indices
+            sta = time.time()
+            p_need_optimize, need_update_model = \
+                self.embedding_quality_supervisor.quality_record(data, data_embeddings, self.pre_cluster_centers,
+                                                                 neighbor_embeddings)
+            self.quality_record_time += time.time() - sta
+
+            if need_update_model:
+                self._send_update_signal()
+
+            if not need_update_model and p_need_optimize:
+                # ====================================1. 只对新数据本身的嵌入进行更新=======================================
+                if OPTIMIZE_NEW_DATA_EMBEDDING:
+                    sta = time.time()
+                    data_embeddings = self.embedding_optimizer.optimize_new_data_embedding(
+                        self.stream_dataset.raw_knn_weights[-1],
+                        neighbor_embeddings, pre_embeddings)[np.newaxis, :]
+                    self.embedding_opt_time += time.time() - sta
+                # =====================================================================================================
+
+            if OPTIMIZE_NEIGHBORS and not need_update_model:
+                sta = time.time()
+                neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
+                    self.stream_dataset.get_pre_neighbor_changed_info()
+
+                optimized_embeddings = self.embedding_optimizer.update_old_data_embedding(
+                    data_embeddings, pre_embeddings, neighbor_changed_indices,
+                    self.stream_dataset.get_knn_indices(), self.stream_dataset.get_knn_dists(),
+                    self.stream_dataset.raw_knn_weights[neighbor_changed_indices], anchor_positions, replaced_indices,
+                    replaced_raw_weights)
+                self.embedding_update_time += time.time() - sta
+                self.stream_dataset.update_embeddings(optimized_embeddings)
+
+            self.stream_dataset.add_new_data(embeddings=data_embeddings)
+
+        return self.stream_dataset.get_total_embeddings()
+
+    def _send_update_signal(self):
+
+        # acc_knn_indices, _ = compute_knn_graph(self.stream_dataset.get_total_data(), None, self.n_neighbors, None)
+        # acc = np.ravel(self.stream_dataset.get_knn_indices()) == np.ravel(acc_knn_indices)
+        # print("acc:", np.sum(acc) / len(acc))
+
+        sta = time.time()
+        self.stream_dataset.update_cached_neighbor_similarities()
+        self.knn_update_time += time.time() - sta
+        # 如果还有模型更新任务没有完成，此处应该阻塞等待
+        while self.model_update_queue_set.MODEL_UPDATING.value == 1:
+            pass
+        self.model_update_queue_set.MODEL_UPDATING.value = 1
+        self.data_num_list = [0]
+        self.data_num_when_update = self.stream_dataset.get_total_data().shape[0]
+        self.model_update_queue_set.training_data_queue.put(
+            [self.stream_dataset, self.cluster_rep_data_sampler, self.fitted_data_num,
+             self.stream_dataset.get_n_samples() - self.fitted_data_num])
+        self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.UPDATE)
+
+        # TODO: 使得模型更新和数据处理变成串行的
+        while self.model_update_queue_set.MODEL_UPDATING.value:
+            pass
+        self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
 
     def get_final_embeddings(self):
+        embeddings = self.stream_dataset.get_total_embeddings()
         if self.update_when_end:
             # print("final update")
             # 暂时先等待之前的模型训练完
@@ -114,14 +186,10 @@ class SCDRParallel:
 
             if not self.model_update_queue_set.embedding_queue.empty():
                 self.model_update_queue_set.embedding_queue.get()  # 取出之前训练的结果，但是在这里是没用的了
-
-            self.data_process_queue_set.data_queue.put(
-                [self.fitted_data_num, None, None, None, None, SCDRProcessor.SIGNAL_UPDATE_ONLY])
-
-            data_num_when_update, infer_model = self.model_update_queue_set.embedding_queue.get()
-            self.update_scdr(infer_model)
-        ret_embeddings = self.embed_current_data()
-        return ret_embeddings
+            self._send_update_signal()
+            embeddings, infer_model, stream_dataset, _ = self.model_update_queue_set.embedding_queue.get()
+            self.update_scdr(infer_model, embeddings, stream_dataset)
+        return embeddings
 
     def _caching_initial_data(self, data, labels):
         self.initial_data_buffer = data if self.initial_data_buffer is None \
@@ -132,19 +200,60 @@ class SCDRParallel:
 
         return self.initial_data_buffer.shape[0] >= self.initial_train_num
 
-    def _generate_key_points(self, data):
-        # if self.key_data is None:
-        self.key_data, self.key_indices = KeyPointsGenerator.generate(data, self.key_data_rate)
-        # else:
-        #     key_data, key_indices = KeyPointsGenerater.generate(data, self.key_data_rate)
-        #     self.key_data = np.concatenate([self.key_data, key_data], axis=0)
-        #     self.key_indices = np.concatenate([self.key_indices, key_indices])
-
-    def _initial_project(self, data, labels=None):
-        self.model_update_queue_set.training_data_queue.put([None, self.initial_train_epoch, self.ckpt_path])
-        self.model_update_queue_set.raw_data_queue.put([data, labels])
-        # self.model_initial_time = time.time() - sta
+    def _initial_project_model(self):
+        # 这里传过去的stream_dataset中，包含了最新的数据、标签以及kNN信息
+        self.data_num_when_update = self.stream_dataset.get_total_data().shape[0]
+        self.model_update_queue_set.training_data_queue.put(
+            [self.stream_dataset, self.cluster_rep_data_sampler, self.ckpt_path])
+        self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.UPDATE)
         self.model_update_queue_set.INITIALIZING.value = True
+        # 这里传回来的stream_dataset中，包含了最新的对称kNN信息
+        embeddings, model, stream_dataset, cluster_indices = self.model_update_queue_set.embedding_queue.get()
+        self.update_scdr(model, embeddings, stream_dataset, first=True)
+        self.stream_dataset.add_new_data(embeddings=embeddings)
+        self.fitted_data_num = embeddings.shape[0]
+        self.model_update_queue_set.INITIALIZING.value = False
+        return cluster_indices
+
+    def _initial_embedding_optimizer_and_quality_supervisor(self, cluster_indices):
+        pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist, pre_neighbor_mean_dist, \
+        pre_neighbor_std_dist, mean_dist2clusters, std_dist2clusters = self.get_pre_embedding_statistics(
+            cluster_indices)
+
+        # =====================================初始化embedding_quality_supervisor===================================
+
+        d_thresh = mean_dist2clusters + 1 * std_dist2clusters
+        e_thresh = pre_neighbor_embedding_m_dist + 0 * pre_neighbor_embedding_s_dist
+        # print("d thresh:", d_thresh, " e thresh:", e_thresh)
+        self.embedding_quality_supervisor = EmbeddingQualitySupervisor(self.model_update_intervals,
+                                                                       self.manifold_change_num_thresh,
+                                                                       self.bad_embedding_num_thresh, d_thresh,
+                                                                       e_thresh)
+        self.embedding_quality_supervisor.update_model_update_time(time.time())
+        # ==========================================================================================================
+
+        # =====================================初始化embedding_optimizer==============================================
+        local_move_thresh = pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist
+        bfgs_update_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
+        self.embedding_optimizer = EmbeddingOptimizer(local_move_thresh, bfgs_update_thresh,
+                                                      neg_num=self.opt_neg_num, skip_opt=self.skip_opt)
+        # ===========================================================================================================
+
+    def get_pre_embedding_statistics(self, cluster_indices=None):
+        pre_neighbor_mean_dist, pre_neighbor_std_dist = self.stream_dataset.get_data_neighbor_mean_std_dist()
+        pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist = \
+            self.stream_dataset.get_embedding_neighbor_mean_std_dist()
+        # print(pre_neighbor_mean_dist, pre_neighbor_std_dist)
+        # print(pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist)
+        if cluster_indices is None:
+            cluster_indices = self.cluster_rep_data_sampler.sample(self.stream_dataset.get_total_embeddings(),
+                                                                   pre_neighbor_embedding_m_dist, self.n_neighbors,
+                                                                   self.stream_dataset.get_total_label())[-1]
+        self.pre_cluster_centers, mean_d, std_d = \
+            self.cluster_rep_data_sampler.dist_to_nearest_cluster_centroids(self.stream_dataset.get_total_data(),
+                                                                            cluster_indices)
+        return pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist, pre_neighbor_mean_dist, \
+               pre_neighbor_std_dist, mean_d, std_d
 
     def save_model(self):
         self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.SAVE)
@@ -156,38 +265,55 @@ class SCDRParallel:
             self.infer_model.eval()
             data_embeddings = self.infer_model(data).cpu()
 
-        return data_embeddings
+        return data_embeddings.numpy()
 
     def embed_current_data(self):
-        self.pre_embeddings = self.infer_embeddings(self.total_data).numpy()
-        return self.pre_embeddings
+        embeddings = self.infer_embeddings(self.stream_dataset.get_total_data())
+        return embeddings
 
-    def update_scdr(self, newest_model, first=False, embeddings=None, embedding_num=None):
+    def embed_updating_collected_data(self):
+        data = self.stream_dataset.get_total_data()[self.data_num_when_update:]
+        return self.infer_embeddings(data)
+
+    def update_scdr(self, newest_model, embeddings, stream_dataset, first=False):
+        self.stream_dataset = stream_dataset
         self.infer_model = newest_model
         self.infer_model = self.infer_model.to(self.device)
-        self.fitted_data_num = embedding_num
-        self.model_just_updated = True
+        self.fitted_data_num = embeddings.shape[0]
         if first:
-            assert embeddings is not None
-            self.pre_embeddings = embeddings
             self.model_trained = True
 
-            self.data_process_queue_set.data_queue.put([self.fitted_data_num, embeddings, None, None, None,
-                                                        SCDRProcessor.SIGNAL_GATHER_DATA])
+    def update_thresholds(self, cluster_indices):
+        pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist, pre_neighbor_mean_dist, \
+        pre_neighbor_std_dist, mean_dist2clusters, std_dist2clusters = self.get_pre_embedding_statistics(
+            cluster_indices)
+
+        d_thresh = mean_dist2clusters + 1 * std_dist2clusters
+        e_thresh = pre_neighbor_embedding_m_dist + 0 * pre_neighbor_embedding_s_dist
+        self.embedding_quality_supervisor.update_d_e_thresh(d_thresh, e_thresh)
+        # print("d thresh:", d_thresh, " e thresh:", e_thresh)
+
+        local_move_thresh = pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist
+        bfgs_update_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
+        self.embedding_optimizer.update_local_move_thresh(local_move_thresh)
+        self.embedding_optimizer.update_bfgs_update_thresh(bfgs_update_thresh)
 
     def ending(self):
-        self.dis_change_detector.ending()
-        def accumulate(queue_obj):
-            total = 0
-            while not queue_obj.empty():
-                total += queue_obj.get()
-            return total
+        print("kNN Cal: %.4f kNN Update: %.4f Model Initial: %.4f Model Infer: %.4f Quality Record: %.4f"
+              " Embedding Opt: %.4f Embedding Update: %.4f" %
+              (self.knn_cal_time, self.knn_update_time, self.model_init_time, self.model_infer_time,
+               self.quality_record_time, self.embedding_opt_time, self.embedding_update_time))
 
-        knn_approx = accumulate(self.cal_time_queue_set.knn_approx_queue)
-        knn_update = accumulate(self.cal_time_queue_set.knn_update_queue)
-        model_update = accumulate(self.cal_time_queue_set.model_update_queue)
-        model_initial = accumulate(self.cal_time_queue_set.model_initial_queue)
-        training_data_sample = accumulate(self.cal_time_queue_set.training_data_sample_queue)
-        print("Shift Detect: %.4f kNN Approx: %.4f kNN Update: %.4f Model Update: %.4f Model Initial: %.4f "
-              "Model Refer: %.4f Data Sample: %.4f" % (self.shift_detect_time, knn_approx, knn_update, model_update,
-                                                       model_initial, self.model_repro_time, training_data_sample))
+
+def query_knn(query_data, data_set, k, return_indices=False):
+    dists = cdist(query_data, data_set)
+    sort_indices = np.argsort(dists, axis=1)
+    knn_indices = sort_indices[:, 1:k + 1]
+
+    knn_distances = []
+    for i in range(knn_indices.shape[0]):
+        knn_distances.append(dists[i, knn_indices[i]])
+    knn_distances = np.array(knn_distances)
+    if return_indices:
+        return knn_indices, knn_distances, sort_indices
+    return knn_indices, knn_distances

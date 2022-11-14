@@ -30,12 +30,14 @@ class ModelUpdateQueueSet:
     STOP = 0
     SAVE = 1
     DATA_STREAM_END = 2
+    UPDATE = 3
 
     def __init__(self):
         self.training_data_queue = Queue()
         self.raw_data_queue = Queue()
         self.embedding_queue = Queue()
         self.flag_queue = Queue()
+        self.WAITING_UPDATED_DATA = Value("b", False)
         self.INITIALIZING = Value("b", False)
         self.MODEL_UPDATING = Value("b", False)
 

@@ -61,14 +61,12 @@ class StreamingEx:
         self.log_path = log_path
         self.result_save_dir = result_save_dir
         self.model = None
-        self.n_components = 2
+        self.n_components = cfg.exp_params.latent_dim
         self.cur_time_step = 0
         self.do_eval = do_eval
         self.metric_tool = None
-        self.fixed_k = 10
-        self.vc_k = 30
-        self.pre_high_knn_indices = None
-        self.pre_high_knn_dists = None
+        self.eval_k = 10
+        self.vc_k = self.eval_k
 
         self.sta_time = 0
         self.other_time = 0
@@ -106,10 +104,10 @@ class StreamingEx:
     def build_metric_tool(self):
         data = self.history_data
         targets = self.history_label
-        knn_indices, knn_dists = compute_knn_graph(data, None, self.fixed_k, None, accelerate=False)
+        knn_indices, knn_dists = compute_knn_graph(data, None, self.eval_k, None, accelerate=False)
         pairwise_distance = get_pairwise_distance(data, pairwise_distance_cache_path=None, preload=False)
         self.metric_tool = Metric(self.dataset_name, data, targets, knn_indices, knn_dists, pairwise_distance,
-                                  k=self.fixed_k)
+                                  k=self.eval_k)
 
     def start_siPCA(self):
         self.model = StreamingIPCA(self.n_components, self.cfg.method_params.forgetting_factor)
@@ -127,7 +125,6 @@ class StreamingEx:
 
     def stream_fitting(self):
         self._train_begin()
-
         self.processing()
         self.train_end()
 
@@ -246,8 +243,8 @@ class StreamingEx:
                 title = "Visual Inconsistency: %.4f" % vc_inconsistency
                 # print(title)
             else:
-                self.pre_high_knn_indices, self.pre_high_knn_dists = compute_knn_graph(self.history_data,
-                                                                                       None, self.vc_k, None)
+                pre_high_knn_indices, pre_high_knn_dists = compute_knn_graph(self.history_data,
+                                                                             None, self.vc_k, None)
 
             img_save_path = os.path.join(self.img_dir, "t_{}.jpg".format(custom_id)) if self.save_img else None
             position_vis(self.streaming_mock.seq_label[:cur_embeddings.shape[0]], img_save_path, cur_embeddings, title)
@@ -269,14 +266,13 @@ class StreamingEx:
         self.log.write(output + "\n")
         if self.do_eval:
             self.build_metric_tool()
-        evaluate_and_log(self.metric_tool, self.cur_embedding, self.fixed_k, knn_k=self.fixed_k, log_file=self.log)
+        evaluate_and_log(self.metric_tool, self.cur_embedding, self.eval_k, knn_k=self.eval_k, log_file=self.log)
         self.model.ending()
 
 
 class StreamingExProcess(StreamingEx, Process):
     def __init__(self, cfg, seq_indices, result_save_dir, log_path="log_streaming_process.txt", do_eval=True):
         self.name = "数据处理进程"
-        self.stream_end_flag = False
         self.stream_data_queue_set = StreamDataQueueSet()
         self.cdr_update_queue_set = None
         self.update_num = 0
@@ -291,26 +287,20 @@ class StreamingExProcess(StreamingEx, Process):
         # self.streaming_mock = RealStreamingData(self.dataset_name, self.queue_set)
         self.streaming_mock.start()
 
-    def start_parallel_scdr(self, model_update_queue_set, data_process_queue_set, cal_time_queue_set, model_trainer,
-                            data_processor):
+    def start_parallel_scdr(self, model_update_queue_set, model_trainer):
         self.cdr_update_queue_set = model_update_queue_set
-        self.model = SCDRParallel(model_update_queue_set, data_process_queue_set, cal_time_queue_set,
-                                  self.cfg.exp_params.initial_data_num, self.cfg.method_params.initial_train_epoch,
+        self.model = SCDRParallel(self.cfg.method_params.n_neighbors, self.cfg.method_params.batch_size,
+                                  model_update_queue_set, self.cfg.exp_params.initial_data_num,
                                   ckpt_path=self.cfg.method_params.ckpt_path, device=model_trainer.device)
         model_trainer.daemon = True
         model_trainer.start()
-        data_processor.daemon = True
-        data_processor.start()
         self.stream_fitting()
 
     def processing(self):
         self.run()
 
     def _get_stream_data(self, accumulate=False):
-        if not self.stream_end_flag and not self.stream_data_queue_set.stop_flag_queue.empty():
-            self.stream_end_flag = self.stream_data_queue_set.stop_flag_queue.get()
-
-        if self.stream_end_flag and self.stream_data_queue_set.data_queue.empty():
+        if not self.stream_data_queue_set.stop_flag_queue.empty():
             return True, None, None
 
         data_and_labels = self._get_data_accumulate() if accumulate else self._get_data_single()
@@ -349,44 +339,44 @@ class StreamingExProcess(StreamingEx, Process):
         # 开始产生数据
         self.stream_data_queue_set.start_flag_queue.put(True)
         while True:
-            if isinstance(self.model, SCDRParallel):
-                if (self.update_num == 0 and self.cdr_update_queue_set.INITIALIZING.value) \
-                        or not self.cdr_update_queue_set.embedding_queue.empty():
-
-                    if self.update_num == 0:
-                        # 第一次训练模型的时候，接受数据的进程在这里被阻塞住了。合理的，实际上pre-existing data用来训练，这个过程不应该被记入流数据处理过程。
-                        ret_embeddings, infer_model = self.cdr_update_queue_set.embedding_queue.get()
-                        embeddings_when_update = None
-                        self.model.update_scdr(infer_model, True, ret_embeddings, ret_embeddings.shape[0])
-                        self.cdr_update_queue_set.INITIALIZING.value = False
-                    else:
-                        data_num_when_update, infer_model = self.cdr_update_queue_set.embedding_queue.get()
-                        self.model.update_scdr(infer_model, embedding_num=data_num_when_update)
-                        ret_embeddings = self.model.embed_current_data()
-                        embeddings_when_update = self.pre_embedding[:data_num_when_update]
-
-                    self.pre_embedding = self.cur_embedding
-                    self.save_embeddings_imgs(embeddings_when_update, ret_embeddings,
-                                              custom_id="u{}".format(self.update_num), force_vc=True)
-                    self.cur_embedding = ret_embeddings
-                    self.update_num += 1
+            if self.cdr_update_queue_set.WAITING_UPDATED_DATA.value == 1:
+                self._update_scdr_model()
 
             # 获取数据
             stream_end_flag, stream_data, stream_labels = self._get_stream_data(accumulate=False)
             if stream_end_flag:
-                self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.DATA_STREAM_END)
                 break
 
             self._project_pipeline(stream_data, stream_labels)
 
+    def _update_scdr_model(self):
+        embeddings, infer_model, stream_dataset, cluster_indices = self.cdr_update_queue_set.embedding_queue.get()
+        self.model.update_scdr(infer_model, embeddings, stream_dataset)
+        # TODO: 对于模型更新期间接收到的数据，如何对其进行处理以保证其余模型更新后的嵌入结果保持一致
+        new_data_embeddings = self.model.embed_updating_collected_data()
+        total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)
+        # print("====update:", total_embeddings.shape[0])
+        self.model.stream_dataset.update_embeddings(total_embeddings)
+        self.model.update_thresholds(cluster_indices)
+        self.pre_embedding = self.cur_embedding
+        self.save_embeddings_imgs(self.pre_embedding, total_embeddings,
+                                  custom_id="u{}".format(self.update_num), force_vc=True)
+        self.cur_embedding = total_embeddings
+        self.update_num += 1
+        self.cdr_update_queue_set.WAITING_UPDATED_DATA.value = 0
+
     def train_end(self):
+        # 结束流数据产生进程
         self.streaming_mock.stop_flag = True
         self.streaming_mock.kill()
         self.stream_data_queue_set.clear()
 
-        if isinstance(self.model, SCDRParallel):
-            self.cur_embedding = self.model.get_final_embeddings()
-            self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding, force_vc=True)
+        # 结束流数据处理
+        self.cur_embedding = self.model.get_final_embeddings()
+        self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding, force_vc=True)
+        self.model.ending()
+
+        # 结束模型更新进程
+        self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
 
         super().train_end()
-

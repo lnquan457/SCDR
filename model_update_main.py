@@ -10,6 +10,7 @@ from dataset.warppers import StreamingDatasetWrapper
 from model.dr_models.ModelSets import MODELS
 from model.scdr.dependencies.experiment import position_vis
 from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, ClusterRepDataSampler
+from model.scdr.scdr_parallel import query_knn
 from utils.common_utils import get_config, time_stamp_to_date_time_adjoin
 from utils.metrics_tool import Metric, knn_score, metric_silhouette_score
 
@@ -20,26 +21,12 @@ import argparse
 import time
 from sklearn.cluster import KMeans, DBSCAN
 from model.scdr.dependencies.cdr_experiment import CDRsExperiments
-from model.scdr.model_trainer import IncrementalCDREx
+from model.scdr.model_trainer import SCDRTrainer
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 device = "cuda:0"
 log_path = "logs/log.txt"
-
-
-def query_knn(query_data, data_set, k, return_indices=False):
-    dists = cdist(query_data, data_set)
-    sort_indices = np.argsort(dists, axis=1)
-    knn_indices = sort_indices[:, 1:k + 1]
-
-    knn_distances = []
-    for i in range(knn_indices.shape[0]):
-        knn_distances.append(dists[i, knn_indices[i]])
-    knn_distances = np.array(knn_distances)
-    if return_indices:
-        return knn_indices, knn_distances, sort_indices
-    return knn_indices, knn_distances
 
 
 class IndicesGenerator:
@@ -123,8 +110,8 @@ def incremental_cdr_pipeline():
     #                                                     cfg.exp_params.latent_dim)
     clr_model = MODELS[METHOD_NAME](cfg, device=device)
     t_log_path = os.path.join(RESULT_SAVE_DIR, "logs.txt")
-    experimenter = IncrementalCDREx(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH,
-                                    device=device, log_path=t_log_path)
+    experimenter = SCDRTrainer(clr_model, cfg.exp_params.dataset, cfg, RESULT_SAVE_DIR, CONFIG_PATH,
+                               device=device, log_path=t_log_path)
     n_neighbors = experimenter.n_neighbors
 
     with h5py.File(os.path.join(ConfigInfo.DATASET_CACHE_DIR, "{}.h5".format(experimenter.dataset_name)), "r") as hf:
@@ -152,8 +139,8 @@ def incremental_cdr_pipeline():
     # 1.需要创建一个数据整合器，用于从旧数据中采样代表点数据
     initial_data = total_data[batch_indices[0]]
     initial_labels = total_labels[batch_indices[0]]
-    stream_dataset = StreamingDatasetWrapper(initial_data, initial_labels, experimenter.batch_size,
-                                             experimenter.n_neighbors)
+    stream_dataset = StreamingDatasetWrapper(experimenter.batch_size, experimenter.n_neighbors)
+    stream_dataset.add_new_data(data=initial_data, labels=initial_labels)
     experimenter.update_neg_num(initial_data.shape[0] / 5)
     sta = time.time()
     initial_embeddings = experimenter.first_train(stream_dataset, INITIAL_EPOCHS)
@@ -207,7 +194,7 @@ def incremental_cdr_pipeline():
         # 3.需要改变模型的损失计算。使用不同的方式进行incremental learning。需要创建一个新的train方法。
         experimenter.prepare_resume(fitted_num, cur_batch_num, RESUME_EPOCH)
         embeddings = experimenter.resume_train(RESUME_EPOCH, (rep_batch_nums, rep_data_indices, cluster_indices,
-                                                              exclude_indices, steady_constraints))
+                                                              steady_constraints))
         cost_time = time.time() - sta
         position_vis(stream_dataset.get_total_label(), os.path.join(RESULT_SAVE_DIR, "{}.jpg".format(i)), embeddings,
                      title="Step {} Embeddings".format(i))
@@ -249,9 +236,9 @@ def evaluate(cost_time, experimenter, metric_tool, embeddings, labels, eval_indi
     else:
         movements = 0
 
-    trust = metric_tool.metric_trustworthiness(experimenter.fixed_k, embeddings)
-    cont = metric_tool.metric_continuity(experimenter.fixed_k, embeddings)
-    neighbor_hit = metric_tool.metric_neighborhood_hit(experimenter.fixed_k, embeddings, eval_indices)
+    trust = metric_tool.metric_trustworthiness(experimenter.eval_k, embeddings)
+    cont = metric_tool.metric_continuity(experimenter.eval_k, embeddings)
+    neighbor_hit = metric_tool.metric_neighborhood_hit(experimenter.eval_k, embeddings, eval_indices)
     k = 10
     knn_ca = knn_score(embeddings, labels, k=k, knn_indices=metric_tool.low_knn_indices, eval_indices=eval_indices)
     sc = metric_silhouette_score(embeddings, labels)

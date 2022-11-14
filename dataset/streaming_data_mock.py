@@ -88,25 +88,36 @@ class SimulatedStreamingData(Process):
         self.data_num_list = self.data_num_list.astype(int)
 
     def run(self) -> None:
+        idx = 0
+        self.queue_set.start_flag_queue.get(block=True)
+        print("start adding data!")
+        if self.data_index > 0:
+            self.data_index = 0
         while not self.stop_flag:
-            self.queue_set.start_flag_queue.get(block=True)
-            print("start adding data!")
-            if self.data_index > 0:
-                self.data_index = 0
 
-            for i, cur_data_num in enumerate(self.data_num_list):
-                # TODO：调试用
-                # if i > 500:
-                #     break
-                # ================
-                cur_data = []
-                for j in self.custom_seq[self.data_index:self.data_index + cur_data_num]:
-                    cur_data.append([self.data[j], None if self.targets is None else self.targets[j]])
-                self.queue_set.data_queue.put(cur_data)
+            while not self.queue_set.data_queue.empty():
+                pass
 
-                self.data_index += cur_data_num
+            # if self.data_index > 800:
+            #     time.sleep(0.05)
 
-            self.queue_set.stop_flag_queue.put(True)
+            if idx >= len(self.data_num_list):
+                self.queue_set.stop_flag_queue.put(True)
+                break
+
+            cur_data_num = self.data_num_list[idx]
+
+            # TODO：调试用
+            # if idx > 500:
+            #     break
+            # ================
+            cur_data = []
+            for j in self.custom_seq[self.data_index:self.data_index + cur_data_num]:
+                cur_data.append([self.data[j], None if self.targets is None else self.targets[j]])
+            self.queue_set.data_queue.put(cur_data)
+
+            self.data_index += cur_data_num
+            idx += 1
 
 
 class StreamingDataMock:

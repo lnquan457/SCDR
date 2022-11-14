@@ -10,7 +10,6 @@ from time import time
 from annoy import AnnoyIndex
 import h5py
 import scipy as sp
-from pyflann import FLANN
 import numpy as np
 from scipy.sparse import isspmatrix, csr_matrix
 from scipy.spatial.distance import cdist
