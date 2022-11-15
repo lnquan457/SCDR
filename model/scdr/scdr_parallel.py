@@ -7,7 +7,7 @@ from scipy.spatial.distance import cdist
 
 from dataset.warppers import StreamingDatasetWrapper, DataRepo
 from model.scdr.dependencies.embedding_optimizer import EmbeddingOptimizer
-from utils.nn_utils import StreamingKNNSearchApprox2, compute_knn_graph
+from utils.nn_utils import StreamingANNSearchKD, compute_knn_graph, StreamingANNSearchAnnoy
 from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet
 from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, DistributionChangeDetector, ClusterRepDataSampler, \
     EmbeddingQualitySupervisor
@@ -34,7 +34,7 @@ class SCDRParallel:
         self.bad_embedding_num_thresh = 250
 
         # 是否进行跳步优化
-        self.skip_opt = False
+        self.skip_opt = True
         # bfgs优化时,使用的负例数目
         self.opt_neg_num = 50
 
@@ -44,7 +44,8 @@ class SCDRParallel:
         # 是否要采样所有旧数据
         self.cover_all = True
 
-        self.knn_searcher_approx = StreamingKNNSearchApprox2()
+        # self.knn_searcher_approx = StreamingANNSearchKD()
+        self.knn_searcher_approx = StreamingANNSearchAnnoy()
 
         self.cluster_rep_data_sampler = ClusterRepDataSampler(self.rep_data_sample_rate, self.rep_data_minimum_num,
                                                               self.cover_all)
@@ -52,6 +53,7 @@ class SCDRParallel:
         # 进行初次训练后，初始化以下对象
         self.stream_dataset = StreamingDatasetWrapper(batch_size, n_neighbors)
         self.embedding_quality_supervisor = None
+        self.super_acc = 0
         self.embedding_optimizer = None
 
         self.initial_data_buffer = None
@@ -59,6 +61,9 @@ class SCDRParallel:
 
         self.model_trained = False
         self.fitted_data_num = 0
+        self.model_just_updated = False
+        self._neighbor_changed_indices = set()
+        self._neighbor_pos = np.arange(self.n_neighbors)
 
         self.knn_cal_time = 0
         self.knn_update_time = 0
@@ -90,11 +95,17 @@ class SCDRParallel:
             data_embeddings = self.infer_embeddings(data)
             self.model_infer_time += time.time() - sta
 
-            # TODO: 这里还有一个冲突问题。使用了所有的嵌入进行查询，但是这些嵌入包含模型直接输出的和优化得到的。但是查询的嵌入是模型输出的。
             sta = time.time()
-            knn_indices, knn_dists = self.knn_searcher_approx.search(self.n_neighbors, pre_embeddings,
-                                                                     self.stream_dataset.get_total_data(),
-                                                                     data_embeddings, data)
+            update = False
+            if self.model_just_updated:
+                update = True
+                self.model_just_updated = False
+            knn_indices, knn_dists = \
+                self.knn_searcher_approx.search(self.n_neighbors, pre_embeddings,
+                                                self.stream_dataset.get_total_data(), self.fitted_data_num,
+                                                data_embeddings, data, update)
+            knn_indices = knn_indices[np.newaxis, :]
+            knn_dists = knn_dists[np.newaxis, :]
             self.knn_cal_time += time.time() - sta
             # 准确查询
             # acc_knn_indices, acc_knn_dists = query_knn(data, np.concatenate([self.stream_dataset.get_total_data(), data],
@@ -108,18 +119,27 @@ class SCDRParallel:
             self.knn_update_time += time.time() - sta
 
             # 两种邻居点策略：第一种是使用模型最新计算的，会增加时耗
+            # 可以通过记录嵌入发生变化的数据，然后只对嵌入发生变化的进行重新嵌入，就可以减少嵌入的量。但对效率提升的作用不是很大。
             sta = time.time()
+
             neighbor_data = self.stream_dataset.get_total_data()[knn_indices.squeeze()]
             neighbor_embeddings = self.infer_embeddings(neighbor_data)
             self.model_infer_time += time.time() - sta
-            # TODO：第二种是使用之前的，可能包含bfgs优化过的嵌入，可能存在不一致，导致冲突。如果要使用这一种，需要解释冲突问题。
-            # neighbor_embeddings = self.stream_dataset.get_total_embeddings()[knn_indices.squeeze()]
 
             sta = time.time()
             p_need_optimize, need_update_model = \
                 self.embedding_quality_supervisor.quality_record(data, data_embeddings, self.pre_cluster_centers,
                                                                  neighbor_embeddings)
             self.quality_record_time += time.time() - sta
+
+            # unique_labels, counts = np.unique(self.stream_dataset.get_total_label()[:self.fitted_data_num],
+            #                                   return_counts=True)
+            # tt_indices = np.where(counts > 30)[0]
+            # need_optimize = labels not in (unique_labels[tt_indices])
+            # if need_optimize == p_need_optimize:
+            #     self.super_acc += 1
+            # print(labels, unique_labels[tt_indices])
+            # print(p_need_optimize, need_optimize, " supervise acc:", self.super_acc / (self.stream_dataset.get_n_samples() - self.initial_train_num))
 
             if need_update_model:
                 self._send_update_signal()
@@ -138,14 +158,15 @@ class SCDRParallel:
                 sta = time.time()
                 neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
                     self.stream_dataset.get_pre_neighbor_changed_info()
-
-                optimized_embeddings = self.embedding_optimizer.update_old_data_embedding(
-                    data_embeddings, pre_embeddings, neighbor_changed_indices,
-                    self.stream_dataset.get_knn_indices(), self.stream_dataset.get_knn_dists(),
-                    self.stream_dataset.raw_knn_weights[neighbor_changed_indices], anchor_positions, replaced_indices,
-                    replaced_raw_weights)
-                self.embedding_update_time += time.time() - sta
-                self.stream_dataset.update_embeddings(optimized_embeddings)
+                if len(neighbor_changed_indices) > 0:
+                    self._neighbor_changed_indices = self._neighbor_changed_indices.union(neighbor_changed_indices)
+                    optimized_embeddings = self.embedding_optimizer.update_old_data_embedding(
+                        data_embeddings, pre_embeddings, neighbor_changed_indices,
+                        self.stream_dataset.get_knn_indices(), self.stream_dataset.get_knn_dists(),
+                        self.stream_dataset.raw_knn_weights[neighbor_changed_indices], anchor_positions,
+                        replaced_indices, replaced_raw_weights)
+                    self.embedding_update_time += time.time() - sta
+                    self.stream_dataset.update_embeddings(optimized_embeddings)
 
             self.stream_dataset.add_new_data(embeddings=data_embeddings)
 
@@ -153,9 +174,9 @@ class SCDRParallel:
 
     def _send_update_signal(self):
 
-        # acc_knn_indices, _ = compute_knn_graph(self.stream_dataset.get_total_data(), None, self.n_neighbors, None)
-        # acc = np.ravel(self.stream_dataset.get_knn_indices()) == np.ravel(acc_knn_indices)
-        # print("acc:", np.sum(acc) / len(acc))
+        acc_knn_indices, _ = compute_knn_graph(self.stream_dataset.get_total_data(), None, self.n_neighbors, None)
+        acc = np.ravel(self.stream_dataset.get_knn_indices()) == np.ravel(acc_knn_indices)
+        print("kNN acc:", np.sum(acc) / len(acc))
 
         sta = time.time()
         self.stream_dataset.update_cached_neighbor_similarities()
@@ -213,6 +234,7 @@ class SCDRParallel:
         self.stream_dataset.add_new_data(embeddings=embeddings)
         self.fitted_data_num = embeddings.shape[0]
         self.model_update_queue_set.INITIALIZING.value = False
+        self.model_just_updated = True
         return cluster_indices
 
     def _initial_embedding_optimizer_and_quality_supervisor(self, cluster_indices):
@@ -233,7 +255,7 @@ class SCDRParallel:
         # ==========================================================================================================
 
         # =====================================初始化embedding_optimizer==============================================
-        local_move_thresh = pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist
+        local_move_thresh = pre_neighbor_embedding_m_dist + 3 * pre_neighbor_embedding_s_dist
         bfgs_update_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
         self.embedding_optimizer = EmbeddingOptimizer(local_move_thresh, bfgs_update_thresh,
                                                       neg_num=self.opt_neg_num, skip_opt=self.skip_opt)
@@ -280,6 +302,7 @@ class SCDRParallel:
         self.infer_model = newest_model
         self.infer_model = self.infer_model.to(self.device)
         self.fitted_data_num = embeddings.shape[0]
+        self._neighbor_changed_indices.clear()
         if first:
             self.model_trained = True
 
@@ -293,7 +316,7 @@ class SCDRParallel:
         self.embedding_quality_supervisor.update_d_e_thresh(d_thresh, e_thresh)
         # print("d thresh:", d_thresh, " e thresh:", e_thresh)
 
-        local_move_thresh = pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist
+        local_move_thresh = pre_neighbor_embedding_m_dist + 3 * pre_neighbor_embedding_s_dist
         bfgs_update_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
         self.embedding_optimizer.update_local_move_thresh(local_move_thresh)
         self.embedding_optimizer.update_bfgs_update_thresh(bfgs_update_thresh)

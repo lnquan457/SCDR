@@ -28,6 +28,7 @@ class SCDRTrainer(CDRsExperiments):
         self._rep_old_data_indices = None
         self._is_incremental_learning = False
         self.incremental_steps = 0
+        self._fixed_batch_num = 3
 
         # 用于计算VC损失
         self.rep_batch_nums = None
@@ -48,7 +49,7 @@ class SCDRTrainer(CDRsExperiments):
         self.back_time = 0
 
     def update_batch_size(self, data_num):
-        self.batch_size = data_num // 4
+        self.batch_size = data_num // self._fixed_batch_num
         self.stream_dataset.batch_size = self.batch_size
         self.model.update_batch_size(int(self.batch_size))
         self.model.reset_partial_corr_mask()

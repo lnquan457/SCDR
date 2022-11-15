@@ -136,10 +136,10 @@ class StreamingKNNSearcher:
         self.method = method
 
     def _init_searcher(self, initial_data):
-        dim = len(initial_data[0])
         if self.method == ANNOY:
             self._build_annoy_index(initial_data)
         elif self.method == KD_TREE:
+            dim = len(initial_data[0])
             self.searcher = KDTree(initial_data, dim)
         else:
             raise RuntimeError("Unsupported knn search method! Please ensure the 'method' is one of annoy/kd_tree")
@@ -193,100 +193,86 @@ class StreamingKNNSearcher:
         return nn_indices, nn_dists
 
 
-class StreamingKNNSearchApprox:
-    def __init__(self, beta=10):
-        self.beta = beta
-        self.searcher = None
-        self.pre_embeddings_container = None
-
-    def search(self, k, pre_embeddings, pre_data, query_embeddings, query_data, model_update=False):
-        # 这里的embeddings每次都需要保持是最新的
-        query_embeddings_container = self._prepare_searcher_data(pre_data, pre_embeddings, query_data,
-                                                                 query_embeddings, model_update)
-
-        """
-            又获得一个新奇的知识点啊！！！数据的类型不同竟然也会对性能造成这么大的影响（x10+）
-            当是nd.array的时候最慢，慢10多倍
-            当类型是list的时候，快一些，但是还是慢了2倍多
-            当类型是PointContainer，与建树的数据保持一致的时候，取得了最佳的性能
-            是跟原型查找链相关的嘛？
-        """
-        new_k = self.beta * k
-
-        cur_approx_indices = np.empty(new_k)
-        cur_other_data = np.empty(shape=(new_k, pre_data.shape[1]))
-
-        nn_indices, nn_dists = self._querying(cur_approx_indices, cur_other_data, k, new_k, query_data,
-                                              query_embeddings_container)
-
-        return nn_indices, nn_dists
-
-    def _querying(self, cur_approx_indices, cur_other_data, k, new_k, query_data, query_embeddings_container):
-        query_num = len(query_embeddings_container)
-        nn_indices = np.zeros((query_num, k), dtype=int)
-        nn_dists = np.zeros((query_num, k), dtype=float)
-        for i, (e, d) in enumerate(zip(query_embeddings_container, query_data)):
-            # TODO：这里也很耗时。有点奇怪??? 是目前主要的性能瓶颈
-            res = self.searcher.get_knn(e, new_k)
-
-            for j, item in enumerate(res):
-                cur_approx_indices[j] = item[1].label
-                cur_other_data[j] = item[1].other_data
-
-            # 这一步是很快的，计算这个数据到所有unfitted数据的距离（这是因为没有fit的数据的嵌入不准确，直接计算距离比较可靠一些）
-            dists = cdist(np.expand_dims(d, axis=0), cur_other_data)
-            sorted_indices = np.argsort(dists)[0][1:k+1]
-            nn_indices[i] = cur_approx_indices[sorted_indices]
-            nn_dists[i] = dists[0][sorted_indices]
-
-        return nn_indices, nn_dists
-
-    def _prepare_searcher_data(self, pre_data, pre_embeddings, query_data, query_embeddings, model_update, *args):
-        pre_num, dim = pre_embeddings.shape
-        query_embeddings_container = add_index_label(query_embeddings.tolist(), pre=pre_num, others=query_data)
-        if model_update:
-            # 这一步很耗时，但是其实只有在投影函数发生变化之后才需要进行更新，否则只需要追加即可
-            pre_embedding_container = add_index_label(pre_embeddings.tolist(), others=pre_data)
-            self.pre_embeddings_container = pre_embedding_container + query_embeddings_container
-            # ！！！这一步会改变embeddings的顺序
-            self.searcher = KDTree(self.pre_embeddings_container, dim)
-        else:
-            self.pre_embeddings_container = self.pre_embeddings_container + query_embeddings_container
-            self.searcher.add_points(query_embeddings_container)
-        return query_embeddings_container
-
-
 # 近似的准则是，从模型已经拟合过的数据的嵌入中选择 beta * k个作为候选，然后准确计算每个待查询数据到其他所有未拟合的数据的距离，然后从这所有数据
 # 当中选择最近的k个点。
 # TODO：第二个阶段还需要好好思考一下，如何达到效率和精度的最优。
-class StreamingKNNSearchApprox2(StreamingKNNSearchApprox):
+class StreamingANNSearchKD:
     def __init__(self, beta=10):
-        StreamingKNNSearchApprox.__init__(self, beta)
+        self.searcher = None
         self.beta = beta
         self.fitted_embeddings_container = None
 
-    def search(self, k, fitted_embeddings, fitted_data, query_embeddings, query_data, unfitted_data=None):
-        fitted_num = self._prepare_searcher_data(fitted_data, fitted_embeddings, unfitted_data)
+    def _querying(self, cur_approx_indices, cur_other_data, k, new_k, pre_data, query_data, query_embeddings_container):
+        # TODO：这里也很耗时。有点奇怪??? 是目前主要的性能瓶颈
+        res = self.searcher.get_knn(query_embeddings_container, new_k)
+        cur_approx_indices[:new_k] = np.array(res)[:, 2].astype(int)
+        cur_other_data[:new_k] = pre_data[cur_approx_indices[:new_k]]
+
+        # 这一步是很快的，计算这个数据到所有unfitted数据的距离（这是因为没有fit的数据的嵌入不准确，直接计算距离比较可靠一些）
+        dists = cdist(query_data, cur_other_data).squeeze()
+        sorted_indices = np.argsort(dists)[:k]
+        nn_indices = cur_approx_indices[sorted_indices]
+        nn_dists = dists[sorted_indices]
+        return nn_indices, nn_dists
+
+    def search(self, k, pre_embeddings, pre_data, fitted_num, query_embeddings, query_data, update=False):
+        self._prepare_searcher_data(pre_data[:fitted_num], pre_embeddings[:fitted_num], update)
 
         new_k = self.beta * k
-        unfitted_data = query_data if unfitted_data is None else np.concatenate([unfitted_data, query_data], axis=0)
+        unfitted_data_num = pre_data.shape[0] - fitted_num
 
-        unfitted_data_num, dim = unfitted_data.shape
         total_num = new_k + unfitted_data_num
-        cur_approx_indices = np.zeros(shape=total_num)
-        cur_other_data = np.zeros(shape=(total_num, dim))
+        cur_approx_indices = np.zeros(shape=total_num, dtype=int)
+        cur_other_data = np.zeros(shape=(total_num, pre_data.shape[1]))
         # 因为没有fit的数据的嵌入不准确，这里是为了方便后续直接计算新数据与其他unfit的数据的距离，比较可靠一些
-        cur_approx_indices[-unfitted_data_num:] = np.arange(fitted_num, fitted_num + unfitted_data_num, 1)
-        cur_other_data[-unfitted_data_num:] = unfitted_data
+        if unfitted_data_num > 0:
+            cur_approx_indices[-unfitted_data_num:] = np.arange(fitted_num, fitted_num + unfitted_data_num, 1)
+            unfitted_data = pre_data[fitted_num:]
+            cur_other_data[-unfitted_data_num:] = unfitted_data
 
-        return self._querying(cur_approx_indices, cur_other_data, k, new_k, query_data, query_embeddings.tolist())
+        return self._querying(cur_approx_indices, cur_other_data, k, new_k, pre_data, query_data,
+                              query_embeddings.squeeze().tolist())
 
-    def _prepare_searcher_data(self, fitted_data, fitted_embeddings, unfitted_data, *args):
+    def _prepare_searcher_data(self, fitted_data, fitted_embeddings, update, *args):
         fitted_num, dim = fitted_embeddings.shape
-        if unfitted_data is None:
-            # 模型更新了之后，之前数据的嵌入结果也需要更新，所以要重新构建
-            # 这一步很耗时，但是其实只有在投影函数发生变化之后才需要进行更新，否则只需要追加即可
+        if update or self.searcher is None:
+            # TODO: 每次都需要重新构建container，并且重新建树，导致非常耗时。
             self.fitted_embeddings_container = add_index_label(fitted_embeddings.tolist(), others=fitted_data)
             # ！！！这一步会改变embeddings的顺序
             self.searcher = KDTree(self.fitted_embeddings_container, dim)
         return fitted_num
+
+
+class StreamingANNSearchAnnoy:
+    def __init__(self, beta=10):
+        self._searcher = None
+        self._beta = beta
+
+    def search(self, k, pre_embeddings, pre_data, fitted_num, query_embeddings, query_data, update=False):
+        if update:
+            self._build_annoy_index(pre_embeddings)
+
+        new_k = self._beta * k
+        candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
+        candidate_indices = np.array(candidate_indices, dtype=int)
+        candidate_data = pre_data[candidate_indices]
+        if not update:
+            candidate_data = np.concatenate([candidate_data, pre_data[fitted_num:]], axis=0)
+            candidate_indices = np.concatenate([candidate_indices, np.arange(fitted_num, pre_data.shape[0])])
+        dists = cdist(query_data, candidate_data).squeeze()
+        sorted_indices = np.argsort(dists)[:k].astype(int)
+        final_indices = candidate_indices[sorted_indices]
+        final_dists = dists[sorted_indices]
+
+        return final_indices, final_dists
+
+    def _build_annoy_index(self, embeddings):
+        if self._searcher is None:
+            self._searcher = AnnoyIndex(embeddings.shape[1], 'euclidean')
+        else:
+            self._searcher.unbuild()
+
+        for i in range(embeddings.shape[0]):
+            self._searcher.add_item(i, embeddings[i])
+
+        self._searcher.build(10)

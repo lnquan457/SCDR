@@ -32,6 +32,8 @@ class EmbeddingOptimizer:
 
     def update_bfgs_update_thresh(self, new_thresh):
         self.__bfgs_update_thresh = new_thresh
+        if self.skip_opt:
+            self.skip_optimizer.update_bfgs_thresh(new_thresh)
 
     def optimize_new_data_embedding(self, neighbor_sims, neighbor_embeddings, other_embeddings):
         initial_embedding = initial_embedding_with_weighted_mean(neighbor_sims, neighbor_embeddings)
@@ -151,6 +153,9 @@ class SkipOptimizer:
         self.timeout_meta_indices = []
         self.updated_data_indices = []
         self.skipped_data_indices = []
+
+    def update_bfgs_thresh(self, new_thresh):
+        self.__bfgs_update_thresh = new_thresh
 
     def get_timeouts_indices(self):
         if self.delayed_meta is not None:

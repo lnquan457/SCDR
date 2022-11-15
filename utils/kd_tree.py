@@ -91,7 +91,7 @@ class KDTree(object):
                     get_knn(node[b], point, k, return_dist_sq,
                             heap, i, (tiebreaker << 1) | b)
             if tiebreaker == 1:
-                return [(-h[0], h[2]) if return_dist_sq else h[2]
+                return [(-h[0], h[2], h[2].label) if return_dist_sq else [h[2], h[2].label]
                         for h in sorted(heap)][::-1]
 
         def walk(node):
