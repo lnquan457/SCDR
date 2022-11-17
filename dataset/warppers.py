@@ -383,7 +383,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
     def get_pre_neighbor_changed_info(self):
         pre_changed_neighbor_meta = self._knn_manager.get_pre_neighbor_changed_positions()
-        new_indices = pre_changed_neighbor_meta[:, 0] if len(pre_changed_neighbor_meta) > 0 else []
+        # new_indices = pre_changed_neighbor_meta[:, 0] if len(pre_changed_neighbor_meta) > 0 else []
         neighbor_changed_indices = pre_changed_neighbor_meta[:, 1] if len(pre_changed_neighbor_meta) > 0 else []
         replaced_raw_weights = self.__replaced_raw_weights
         replaced_indices = pre_changed_neighbor_meta[:, 3] if len(pre_changed_neighbor_meta) > 0 else []

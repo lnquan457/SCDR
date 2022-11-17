@@ -196,7 +196,8 @@ class StreamingEx:
             self.pre_embedding = self.cur_embedding
             sta = time.time()
             ret_embeddings = self.model.fit_new_data(stream_data, stream_labels)
-            self._key_time += time.time() - sta
+            if self.cur_time_step > 1:
+                self._key_time += time.time() - sta
 
             if ret_embeddings is not None:
                 cur_x_min, cur_y_min = np.min(ret_embeddings, axis=0)

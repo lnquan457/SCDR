@@ -72,7 +72,6 @@ class EmbeddingOptimizer:
         assert self.skip_optimizer is not None
         timeouts_indices = self.skip_optimizer.get_timeouts_indices()
         neg_indices = random.sample(list(np.arange(embeddings.shape[0])), self.__neg_num)
-
         for i, item in enumerate(timeouts_indices):
             embeddings[item] = self._nce_optimize_step(embeddings[item], embeddings[knn_indices[item]],
                                                        embeddings[neg_indices])
@@ -160,9 +159,11 @@ class SkipOptimizer:
     def get_timeouts_indices(self):
         if self.delayed_meta is not None:
             self.timeout_meta_indices = np.where(time.time() - self.delayed_meta[:, 1] >= self.timeout_thresh)[0]
+            ret = self.delayed_meta[self.timeout_meta_indices][:, 0].astype(int)
         else:
             self.timeout_meta_indices = []
-        return self.timeout_meta_indices
+            ret = []
+        return ret
 
     def skip(self, update_indices, knn_dists, local_move_mask):
         optimize_mask = np.mean(knn_dists, axis=1) < self.__bfgs_update_thresh
