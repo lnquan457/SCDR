@@ -5,6 +5,7 @@ import time
 
 import numba.typed.typedlist
 import numpy as np
+import torch
 from numba import jit
 from scipy.spatial.distance import cdist
 from torch.utils.data.distributed import DistributedSampler
@@ -239,7 +240,7 @@ def eval_knn_acc(acc_knn_indices, pre_knn_indices):
 
 
 class StreamingDatasetWrapper(DataSetWrapper):
-    def __init__(self, batch_size, n_neighbor):
+    def __init__(self, batch_size, n_neighbor, device=None):
         DataSetWrapper.__init__(self, 1, batch_size, n_neighbor)
         # 没有重新计算邻居点相似点的数据下标
         self.__cached_neighbor_change_indices = set()
@@ -247,6 +248,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.__replaced_raw_weights = []
         self.__sigmas = None
         self.__rhos = None
+        self._tmp_neighbor_weights = np.ones((1, self.n_neighbor))
+        self._device = device
 
     def distance2prob(self, train_dataset, symmetric):
         # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
@@ -317,17 +320,15 @@ class StreamingDatasetWrapper(DataSetWrapper):
         knn_distances = self._knn_manager.knn_dists if cut_num is None else self._knn_manager.knn_dists[:cut_num]
         knn_indices = self._knn_manager.knn_indices if cut_num is None else self._knn_manager.knn_indices[:cut_num]
 
-        new_n_samples = new_data.shape[0]
         # O(m*n*D)
         dists = cdist(new_data, total_data)
 
-        new_sample_indices = np.arange(new_n_samples) + pre_n_samples
-        neighbor_changed_indices = list(new_sample_indices)
+        neighbor_changed_indices = [pre_n_samples]
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
         self.__replaced_raw_weights = []
-        neighbor_changed_indices = self._knn_manager.update_previous_kNN(new_n_samples, pre_n_samples, dists,
+        neighbor_changed_indices = self._knn_manager.update_previous_kNN(1, pre_n_samples, dists,
                                                                          data_num_list, neighbor_changed_indices)
         self.cur_neighbor_changed_indices = neighbor_changed_indices
 
@@ -336,15 +337,14 @@ class StreamingDatasetWrapper(DataSetWrapper):
             changed_neighbor_sims = self.raw_knn_weights[knn_changed_neighbor_meta[:, 1]]
             self.__replaced_raw_weights = changed_neighbor_sims[:, -1] / np.sum(changed_neighbor_sims, axis=1)
 
-        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((new_n_samples, self.n_neighbor))],
-                                              axis=0)
-        self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(shape=new_n_samples)])
-        self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(shape=new_n_samples)])
-        self.__sigmas = np.concatenate([self.__sigmas, np.ones(new_n_samples)])
-        self.__rhos = np.concatenate([self.__rhos, np.ones(new_n_samples)])
+        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, self._tmp_neighbor_weights], axis=0)
+        self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(shape=1)])
+        self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(shape=1)])
+        self.__sigmas = np.concatenate([self.__sigmas, np.ones(1)])
+        self.__rhos = np.concatenate([self.__rhos, np.ones(1)])
 
         if not update_similarity:
-            cur_update_indices = new_sample_indices
+            cur_update_indices = [pre_n_samples]
         else:
             cur_update_indices = neighbor_changed_indices
 
@@ -464,6 +464,8 @@ class KNNManager:
 
                 if len(indices) < 1:
                     flag = False
+            else:
+                indices = np.setdiff1d(indices, [pre_n_samples])
 
             if flag:
                 for j in indices:
@@ -486,6 +488,26 @@ class KNNManager:
         self._pre_neighbor_changed_meta = np.array(self._pre_neighbor_changed_meta, dtype=int)
 
         return neighbor_changed_indices
+
+    @numba.jit
+    def _do_update(self, knn_indices, knn_dists, pre_neighbor_changed_meta, dists2pre_data, idx, indices,
+                   neighbor_changed_indices, pre_n_samples, symm):
+        for j in indices:
+            if j not in neighbor_changed_indices:
+                neighbor_changed_indices.append(j)
+            # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
+            insert_index = knn_dists.shape[1] - 1
+            while insert_index >= 0 and dists2pre_data[idx][j] <= knn_dists[j][insert_index]:
+                insert_index -= 1
+
+            if symm and knn_indices[j][-1] not in neighbor_changed_indices:
+                neighbor_changed_indices.append(knn_indices[j][-1])
+
+            pre_neighbor_changed_meta.append(
+                [idx + pre_n_samples, j, insert_index + 1, self.knn_indices[j][-1]])
+            # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
+            arr_move_one(knn_dists[j], insert_index + 1, dists2pre_data[idx][j])
+            arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + idx)
 
 
 def extract_csr(csr_graph, indices, norm=True):

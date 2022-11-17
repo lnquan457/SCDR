@@ -7,8 +7,8 @@ exp_params:
   indices_file_path: -1
   initial_data_num: 300
   vis_iter: 100
-  save_iter: 50
-  eval_iter: 50
+  save_iter: 100000
+  eval_iter: 500
 
 method_params:
   n_neighbors: 10

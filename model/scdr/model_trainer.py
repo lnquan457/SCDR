@@ -90,11 +90,13 @@ class SCDRTrainer(CDRsExperiments):
         self.active_incremental_learning()
         return self.pre_embeddings
 
-    def prepare_resume(self, fitted_num, train_num, resume_epoch):
+    def prepare_resume(self, fitted_num, train_num, resume_epoch, sample_indices=None):
         # 应该要增强新数据对负例的排斥力度
         self.update_batch_size(train_num)
         self.update_neg_num(train_num / 10)
-        self.update_dataloader(resume_epoch, np.arange(fitted_num, fitted_num + train_num, 1))
+        if sample_indices is None:
+            sample_indices = np.arange(fitted_num, fitted_num + train_num, 1)
+        self.update_dataloader(resume_epoch, sample_indices)
 
     def train(self, launch_time_stamp=None, target_metric_val=-1):
         embeddings = super().train(launch_time_stamp, target_metric_val)
@@ -313,9 +315,9 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 stream_dataset, rep_data_sampler, ckpt_path = training_info
                 embeddings = self.first_train(stream_dataset, ckpt_path)
             else:
-                self.stream_dataset, rep_data_sampler, fitted_data_num, cur_data_num = training_info
+                self.stream_dataset, rep_data_sampler, fitted_data_num, cur_data_num, sample_indices = training_info
                 sta = time.time()
-                self.prepare_resume(fitted_data_num, cur_data_num, self.finetune_epoch)
+                self.prepare_resume(fitted_data_num, cur_data_num, self.finetune_epoch, sample_indices)
                 steady_constraints = self.stream_dataset.cal_old2new_relationship(old_n_samples=fitted_data_num)
                 self.pre_rep_data_info.append(steady_constraints)
                 embeddings = self.resume_train(self.finetune_epoch, self.pre_rep_data_info)

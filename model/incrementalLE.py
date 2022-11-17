@@ -70,14 +70,14 @@ class kNNBasedIncrementalMethods:
         return self.pre_embeddings
 
     def _fit_new_data_single(self, x, labels=None):
-        for i, item in enumerate(x):
-            self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
-
-            if not self.trained:
-                if self.stream_dataset.get_n_samples() >= self.initial_train_num:
-                    self.trained = True
-                    self._first_train(self.stream_dataset.get_total_data())
-            else:
+        if not self.trained:
+            self.stream_dataset.add_new_data(x, None, labels)
+            if self.stream_dataset.get_n_samples() >= self.initial_train_num:
+                self.trained = True
+                self._first_train(self.stream_dataset.get_total_data())
+        else:
+            for i, item in enumerate(x):
+                self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
                 self._incremental_embedding(item)
 
         return self.pre_embeddings

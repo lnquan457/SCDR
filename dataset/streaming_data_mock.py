@@ -137,12 +137,23 @@ class StreamingDataMock:
         self.seq_indices = seq_indices
         self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
         self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
-        self.seq_label = None if self.targets is None else resort_label(self.targets[seq_indices])
+        self._n_samples = self.data.shape[0]
+
+        if seq_indices is None:
+            self.custom_seq = np.arange(0, self._n_samples, 1)
+        else:
+            if not isinstance(seq_indices[0], int):
+                initial_indices, stream_indices = seq_indices
+                self.custom_seq = np.concatenate([initial_indices, stream_indices])
+            else:
+                self.custom_seq = seq_indices
+
+        self.seq_label = None if self.targets is None else resort_label(self.targets[self.custom_seq])
+
         self.num_per_step = num_per_step
         self.time_step = 0
         self.data_index = 0
         self.time_step_num = int(np.ceil(len(seq_indices) / self.num_per_step)) if seq_indices is not None else 0
-        self.seq_label = None
         self.cls2idx = {}
 
     def next_time_data(self):
@@ -152,7 +163,8 @@ class StreamingDataMock:
 
         self.time_step += 1
         self.data_index += to_idx - from_idx
-        return cur_data, cur_label
+        end = self.time_step >= self.data.shape[0]
+        return cur_data, cur_label, end
 
 
 class StreamingDataMock2Stage(StreamingDataMock):
@@ -204,15 +216,17 @@ class StreamingDataMock2Stage(StreamingDataMock):
     def _get_initial_data(self):
         self.history_data = self.data[self.initial_indices]
         self.history_label = self.targets[self.initial_indices]
-        return self.history_data, self.history_label
+        return self.history_data, self.history_label, False
 
     def next_time_data(self):
         if self.time_step == 0:
+            self.time_step += 1
             return self._get_initial_data()
 
-        cur_data, cur_label = self.data[self.time_data_seq[self.time_step].astype(int)], \
-                              self.targets[self.time_data_seq[self.time_step].astype(int)]
+        cur_data, cur_label = self.data[self.time_data_seq[self.time_step-1].astype(int)], \
+                              self.targets[self.time_data_seq[self.time_step-1].astype(int)]
         self.history_data = np.concatenate([self.history_data, cur_data], axis=0)
         self.history_label = np.concatenate([self.history_label, cur_label], axis=0)
         self.time_step += 1
-        return cur_data, cur_label
+        end = self.time_step >= self.data.shape[0]
+        return cur_data, cur_label, end

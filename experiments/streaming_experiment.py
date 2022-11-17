@@ -80,8 +80,7 @@ class StreamingEx:
         self.eval_k = 10
         self.vc_k = self.eval_k
 
-        self.sta_time = 0
-        self.other_time = 0
+        self._key_time = 0
         self.pre_embedding = None
         self.cur_embedding = None
         self.embedding_dir = None
@@ -115,7 +114,6 @@ class StreamingEx:
 
     def _train_begin(self):
         self._prepare_streaming_data()
-        self.sta_time = time.time()
         self.result_save_dir = os.path.join(self.result_save_dir, self.dataset_name,
                                             time_stamp_to_date_time_adjoin(int(time.time())))
         check_path_exist(self.result_save_dir)
@@ -187,7 +185,7 @@ class StreamingEx:
             self.cur_time_step += 1
             output = "Start processing timestamp {}".format(i + 1)
             InfoLogger.info(output)
-            stream_data, stream_labels = self.streaming_mock.next_time_data()
+            stream_data, stream_labels, _ = self.streaming_mock.next_time_data()
 
             self._project_pipeline(stream_data, stream_labels)
 
@@ -196,7 +194,9 @@ class StreamingEx:
         cache_flag, stream_data, stream_labels = self._cache_initial(stream_data, stream_labels)
         if cache_flag:
             self.pre_embedding = self.cur_embedding
+            sta = time.time()
             ret_embeddings = self.model.fit_new_data(stream_data, stream_labels)
+            self._key_time += time.time() - sta
 
             if ret_embeddings is not None:
                 cur_x_min, cur_y_min = np.min(ret_embeddings, axis=0)
@@ -227,7 +227,6 @@ class StreamingEx:
             return False
 
     def save_embeddings_info(self, cur_embeddings, custom_id=None, train_end=False):
-        sta = time.time()
         if self.save_embedding_npy and (self.cur_time_step % self.save_embedding_iter == 0 or train_end):
             custom_id = self.cur_time_step if custom_id is None else custom_id
             np.save(os.path.join(self.embedding_dir, "t_{}.npy".format(custom_id)), self.cur_embedding)
@@ -235,8 +234,6 @@ class StreamingEx:
         if self.cur_time_step % self.vis_iter == 0 or train_end:
             img_save_path = os.path.join(self.img_dir, "t_{}.jpg".format(custom_id)) if self.save_img else None
             position_vis(self.history_label[:cur_embeddings.shape[0]], img_save_path, cur_embeddings, None)
-
-        self.other_time += time.time() - sta
 
     def evaluate(self, pre_embeddings, cur_embeddings, pre_labels, train_end=False):
         if self.cur_time_step % self._eval_iter > 0 and not train_end:
@@ -277,7 +274,7 @@ class StreamingEx:
             self.model.save_model()
 
         end_time = time.time()
-        output = "Total Cost Time: %.4f" % (end_time - self.sta_time - self.other_time)
+        output = "Key Cost Time: %.4f" % self._key_time
         InfoLogger.info(output)
         self.log.write(output + "\n")
         if self.do_eval:
@@ -352,7 +349,7 @@ class StreamingEx:
             ax.set_aspect('equal')
             # ax.axis('equal')  # 将xy轴隐藏
             ax.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1], c=self.history_label[:cur_embeddings.shape[0]],
-                       s=3, cmap=color_list)
+                       s=2, cmap=color_list)
             ax.set_title("Timestep: {}".format(int(idx)))
 
         ani = FuncAnimation(fig, update, frames=self._embeddings_histories.shape[0], interval=33, blit=False)
@@ -371,10 +368,9 @@ class StreamingExProcess(StreamingEx, Process):
 
     def _prepare_streaming_data(self):
         self.streaming_mock = SimulatedStreamingData(self.dataset_name, self.cfg.exp_params.stream_rate,
-                                                     self.stream_data_queue_set,
-                                                     self.seq_indices)
-        # self.streaming_mock = RealStreamingData(self.dataset_name, self.queue_set)
+                                                     self.stream_data_queue_set, self.seq_indices)
         self.streaming_mock.start()
+        # super()._prepare_streaming_data()
 
     def start_parallel_scdr(self, model_update_queue_set, model_trainer):
         self.cdr_update_queue_set = model_update_queue_set
@@ -433,6 +429,8 @@ class StreamingExProcess(StreamingEx, Process):
 
             # 获取数据
             stream_end_flag, stream_data, stream_labels = self._get_stream_data(accumulate=False)
+            # stream_data, stream_labels, stream_end_flag = self.streaming_mock.next_time_data()
+            # self.cur_time_step += 1
             if stream_end_flag:
                 break
 

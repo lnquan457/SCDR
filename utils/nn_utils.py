@@ -244,21 +244,49 @@ class StreamingANNSearchKD:
 
 
 class StreamingANNSearchAnnoy:
-    def __init__(self, beta=10):
+    def __init__(self, beta=10, update_iter=500):
         self._searcher = None
         self._beta = beta
+        self._update_iter = update_iter
+        self._fitted_num = 0
+        self._opt_embedding_indices = np.array([], dtype=int)
+        self._optimized_data = None
+        self._infer_embedding_indices = np.array([], dtype=int)
+        self._inferred_data = None
 
-    def search(self, k, pre_embeddings, pre_data, fitted_num, query_embeddings, query_data, update=False):
+    def search(self, k, pre_embeddings, pre_data, query_embeddings, query_data, optimized, update=False):
+        update = update or (pre_embeddings.shape[0] - self._fitted_num) % self._update_iter == 0
         if update:
             self._build_annoy_index(pre_embeddings)
 
         new_k = self._beta * k
-        candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
+        candidate_indices, knn_dists = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k,
+                                                                        include_distances=True)
         candidate_indices = np.array(candidate_indices, dtype=int)
         candidate_data = pre_data[candidate_indices]
+
         if not update:
-            candidate_data = np.concatenate([candidate_data, pre_data[fitted_num:]], axis=0)
-            candidate_indices = np.concatenate([candidate_indices, np.arange(fitted_num, pre_data.shape[0])])
+            pre_last_data = pre_data[-1][np.newaxis, :]
+            if optimized:
+                self._opt_embedding_indices = np.append(self._opt_embedding_indices, pre_embeddings.shape[0] - 1)
+                self._optimized_data = pre_last_data if self._optimized_data is None else \
+                    np.concatenate([self._optimized_data, pre_last_data], axis=0)
+            else:
+                self._infer_embedding_indices = np.append(self._infer_embedding_indices, pre_embeddings.shape[0] - 1)
+                self._inferred_data = pre_last_data if self._inferred_data is None else \
+                    np.concatenate([self._inferred_data, pre_last_data], axis=0)
+
+            if len(self._opt_embedding_indices) > 0:
+                candidate_indices = np.concatenate([candidate_indices, self._opt_embedding_indices])
+                candidate_data = np.concatenate([candidate_data, self._optimized_data], axis=0)
+
+            if len(self._infer_embedding_indices) > 0:
+                dists = cdist(query_embeddings, pre_embeddings[self._infer_embedding_indices])
+                selected_indices = np.where(dists < np.max(knn_dists))[0]
+                if len(selected_indices) > 0:
+                    candidate_indices = np.concatenate([candidate_indices, self._infer_embedding_indices[selected_indices]])
+                    candidate_data = np.concatenate([candidate_data, self._inferred_data[selected_indices]], axis=0)
+
         dists = cdist(query_data, candidate_data).squeeze()
         sorted_indices = np.argsort(dists)[:k].astype(int)
         final_indices = candidate_indices[sorted_indices]
@@ -276,3 +304,8 @@ class StreamingANNSearchAnnoy:
             self._searcher.add_item(i, embeddings[i])
 
         self._searcher.build(10)
+        self._fitted_num = embeddings.shape[0]
+        self._opt_embedding_indices = np.array([], dtype=int)
+        self._optimized_data = None
+        self._infer_embedding_indices = np.array([], dtype=int)
+        self._inferred_data = None

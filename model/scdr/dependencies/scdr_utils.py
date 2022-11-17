@@ -345,7 +345,7 @@ class EmbeddingQualitySupervisor:
                 need_optimize = True
 
         # print("manifold change num: {} bad embedding num: {}".format(self.__new_manifold_data_num, self.__bad_embedding_data_num))
-        return need_optimize, self._judge_model_update()
+        return need_optimize, manifold_change, self._judge_model_update()
 
 
 def cal_cluster_acc(cluster_labels, gt_labels):
