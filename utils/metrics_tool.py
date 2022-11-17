@@ -51,8 +51,8 @@ def cal_global_pdist_change(cur_embeddings, pre_embeddings, norm=False):
     return np.mean(dist_change)
 
 
-def cal_pre_neighbor_dist_change(cur_embeddings, pre_embeddings, pre_knn_indices, new_knn_indices,
-                                 norm=False, weight=False):
+def cal_neighbor_pdist_change(cur_embeddings, pre_embeddings, cur_knn_indices, pre_knn_indices,
+                              norm=False, weight=False):
     pre_n_samples = pre_embeddings.shape[0]
     cur_pre_embeddings = cur_embeddings[:pre_n_samples]
     n_neighbors = pre_knn_indices.shape[1]
@@ -71,11 +71,30 @@ def cal_pre_neighbor_dist_change(cur_embeddings, pre_embeddings, pre_knn_indices
     dist_change = np.abs(cur_pairwise_dists - pre_pairwise_dists)
 
     if weight:
-        neighbor_nochange = (np.ravel(new_knn_indices[:pre_n_samples]) < pre_n_samples).astype(int)
+        neighbor_nochange = (np.ravel(cur_knn_indices[:pre_n_samples]) < pre_n_samples).astype(int)
         w_dist_change = dist_change * neighbor_nochange
         return np.mean(dist_change), np.mean(w_dist_change)
 
     return np.mean(dist_change)
+
+
+def cal_manifold_pdist_change(cur_embeddings, pre_embeddings, pre_labels):
+    pre_n_samples = pre_embeddings.shape[0]
+    unique_cls = np.unique(pre_labels)
+    total_dists = []
+    for i, item in enumerate(unique_cls):
+        indices = np.where(pre_labels == item)[0]
+        num = len(indices)
+        pre_cls_embeddings = pre_embeddings[indices]
+        cur_cls_embeddings = cur_embeddings[indices]
+        pre_cls_edges = np.repeat(pre_cls_embeddings[np.newaxis, :], num, 0) - \
+                        np.repeat(np.expand_dims(pre_cls_embeddings, 1), num, 1)
+        cur_cls_edges = np.repeat(cur_cls_embeddings[np.newaxis, :], num, 0) - \
+                        np.repeat(np.expand_dims(cur_cls_embeddings, 1), num, 1)
+        dists = np.square(np.triu(np.linalg.norm(pre_cls_edges - cur_cls_edges, axis=-1)))
+        total_dists.append(np.mean(dists))
+
+    return np.sum(total_dists)
 
 
 class Metric:

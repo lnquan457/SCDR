@@ -6,20 +6,19 @@ from sklearn.manifold import SpectralEmbedding
 from sklearn.manifold._locally_linear import barycenter_weights
 from sklearn.neighbors import kneighbors_graph
 
-from dataset.warppers import arr_move_one, KNNManager, extract_csr
+from dataset.warppers import arr_move_one, KNNManager, extract_csr, DataRepo
 from model.scdr.dependencies.experiment import position_vis
-from model.scdr.dependencies.scdr_utils import StreamingDataRepo
 from utils.nn_utils import compute_knn_graph
 
 
 class kNNBasedIncrementalMethods:
     def __init__(self, train_num, n_components, n_neighbors, single=False):
         self.single = single
-        self.train_num = train_num
+        self.initial_train_num = train_num
         self.n_components = n_components
         self.n_neighbors = n_neighbors
         self.knn_manager = KNNManager(n_neighbors)
-        self.stream_dataset = StreamingDataRepo(n_neighbors)
+        self.stream_dataset = DataRepo(n_neighbors)
         self.pre_embeddings = None
         self.trained = False
 
@@ -38,7 +37,7 @@ class kNNBasedIncrementalMethods:
 
     def _cal_new_data_kNN(self, new_data, include_self=True):
         new_data_num = new_data.shape[0]
-        dists = cdist(new_data, self.stream_dataset._total_data)
+        dists = cdist(new_data, self.stream_dataset.get_total_data())
         if include_self:
             knn_indices = np.argsort(dists, axis=1)[:, :self.n_neighbors]
         else:
@@ -61,10 +60,10 @@ class kNNBasedIncrementalMethods:
         self.stream_dataset.add_new_data(x, None, labels)
 
         if not self.trained:
-            if self.stream_dataset.get_n_samples() < self.train_num:
+            if self.stream_dataset.get_n_samples() < self.initial_train_num:
                 return None
             self.trained = True
-            self._first_train(self.stream_dataset._total_data)
+            self._first_train(self.stream_dataset.get_total_data())
         else:
             self._incremental_embedding(x)
 
@@ -75,9 +74,9 @@ class kNNBasedIncrementalMethods:
             self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
 
             if not self.trained:
-                if self.stream_dataset.get_n_samples() >= self.train_num:
+                if self.stream_dataset.get_n_samples() >= self.initial_train_num:
                     self.trained = True
-                    self._first_train(self.stream_dataset._total_data)
+                    self._first_train(self.stream_dataset.get_total_data())
             else:
                 self._incremental_embedding(item)
 

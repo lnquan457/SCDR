@@ -68,23 +68,35 @@ class SimulatedStreamingData(Process):
         self.queue_set = queue_set
         self.dataset_name = dataset_name
         self.stream_rate = stream_rate
-        # True表示数据以每秒stream_rate个匀速产生
-        self.uniform_mode = isinstance(stream_rate, int)
         self.stop_flag = False
         self.data_index = 0
 
         self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
         self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
         self.n_samples = self.data.shape[0]
-        self.custom_seq = np.arange(0, self.n_samples, 1) if custom_seq is None else custom_seq
-        self.seq_label = None if self.targets is None else resort_label(self.targets[self.custom_seq])
-        if self.uniform_mode:
-            self.data_num_list = np.ones(shape=(self.n_samples // stream_rate)) * stream_rate
-            left = self.n_samples - np.sum(self.data_num_list)
-            if left > 0:
-                self.data_num_list = np.append(self.data_num_list, left)
+        initial_num = 0
+        if custom_seq is None:
+            self.custom_seq = np.arange(0, self.n_samples, 1)
         else:
-            self.data_num_list = stream_rate
+            if not isinstance(custom_seq[0], int):
+                initial_indices, stream_indices = custom_seq
+                self.custom_seq = np.concatenate([initial_indices, stream_indices])
+                initial_num = len(initial_indices)
+            else:
+                self.custom_seq = custom_seq
+
+        self.seq_label = None if self.targets is None else resort_label(self.targets[self.custom_seq])
+
+        stream_num = self.n_samples - initial_num
+
+        self.data_num_list = np.ones(shape=(stream_num // stream_rate)) * stream_rate
+        left = stream_num - np.sum(self.data_num_list)
+        if left > 0:
+            self.data_num_list = np.append(self.data_num_list, left)
+
+        if initial_num > 0:
+            self.data_num_list = np.append(initial_num, self.data_num_list)
+
         self.data_num_list = self.data_num_list.astype(int)
 
     def run(self) -> None:

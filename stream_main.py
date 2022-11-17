@@ -6,7 +6,7 @@ import os
 from model.scdr.model_trainer import SCDRTrainer, SCDRTrainerProcess
 from experiments.streaming_experiment import StreamingEx, StreamingExProcess
 from model.dr_models.ModelSets import MODELS
-from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, RTSCDR, PAR_SCDR
+from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, INE, SISOMAPPP
 from utils.common_utils import get_config
 from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet, CalTimeQueueSet
 
@@ -76,6 +76,11 @@ def start(ex):
     elif args.method == XTREAMING:
         # ==============3. Xtreaming model=====================
         ex.start_xtreaming()
+    elif args.method == INE:
+        # ==============4. INE model=====================
+        ex.start_ine()
+    elif args.method == SISOMAPPP:
+        ex.start_sisomap()
     elif args.method == SCDR:
         assert isinstance(ex, StreamingExProcess)
         cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
@@ -106,9 +111,10 @@ def custom_indices_training(custom_indices_path):
     # custom_indices_path = os.path.join(ConfigInfo.CUSTOM_INDICES_DIR, "{}.npy".format(args.dataset))
     custom_indices = np.load(custom_indices_path, allow_pickle=True)
 
-    # ex = StreamingEx(cfg, custom_indices, result_save_dir)
-
-    ex = StreamingExProcess(cfg, custom_indices, result_save_dir)
+    if args.method == SCDR:
+        ex = StreamingExProcess(cfg, custom_indices, result_save_dir)
+    else:
+        ex = StreamingEx(cfg, custom_indices, result_save_dir)
 
     start(ex)
 
@@ -117,8 +123,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--method", type=str, default=SCDR,
-                        choices=[ATSNE, SIPCA, XTREAMING, SCDR])
-    parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/single_cluster")
+                        choices=[ATSNE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
+    parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 
@@ -131,7 +137,7 @@ if __name__ == '__main__':
     result_save_dir = "results/{}/".format(args.method)
 
     # random_training()
-    custom_indices_path = os.path.join(args.indices_dir, "{}.npy".format(cfg.exp_params.dataset))
+    custom_indices_path = os.path.join(args.indices_dir, "{}_TI.npy".format(cfg.exp_params.dataset))
     custom_indices_training(custom_indices_path)
     # stream_rate_ex()
     # cluster_composite_ex()

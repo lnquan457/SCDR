@@ -7,13 +7,14 @@ exp_params:
   indices_file_path: -1
   initial_data_num: 300
   vis_iter: 50
+  save_iter: 100000
+  eval_iter: 500
 
 
 method_params:
   method: "LwF_CDR"
   initial_train_epoch: 100
   finetune_epoch: 50
-  shift_buffer_size: 30
   batch_size: 256
   LR: 0.001
   n_neighbors: 10

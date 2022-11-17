@@ -62,7 +62,7 @@ class SCDRTrainer(CDRsExperiments):
         self.initialize_streaming_dataset(dataset)
         self.batch_size = self.configs.method_params.batch_size
         sta = time.time()
-        # self.update_batch_size(dataset.get_n_samples())
+        self.update_batch_size(dataset.get_n_samples())
         self.update_dataloader(self.initial_train_epoch)
         print("first prepare dataset cost:", time.time() - sta)
         self.result_save_dir_modified = True

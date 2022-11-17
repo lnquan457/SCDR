@@ -30,8 +30,8 @@ class SCDRParallel:
 
         # 用于确定何时要更新模型，1）新的流形出现；2）模型对旧流形数据的嵌入质量太低；3）长时间没有更新；
         self.model_update_intervals = 600
-        self.manifold_change_num_thresh = 200
-        self.bad_embedding_num_thresh = 250
+        self.manifold_change_num_thresh = 300
+        self.bad_embedding_num_thresh = 400
 
         # 是否进行跳步优化
         self.skip_opt = True
@@ -74,7 +74,7 @@ class SCDRParallel:
         self.quality_record_time = 0
 
         self.debug = True
-        self.update_when_end = True
+        self.update_when_end = False
 
     # scdr本身属于嵌入进程，负责数据的处理和嵌入
     def fit_new_data(self, data, labels=None):
@@ -104,6 +104,8 @@ class SCDRParallel:
                 self.knn_searcher_approx.search(self.n_neighbors, pre_embeddings,
                                                 self.stream_dataset.get_total_data(), self.fitted_data_num,
                                                 data_embeddings, data, update)
+            # if np.max(knn_indices) >= pre_n_samples:
+            #     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!", knn_indices)
             knn_indices = knn_indices[np.newaxis, :]
             knn_dists = knn_dists[np.newaxis, :]
             self.knn_cal_time += time.time() - sta
@@ -116,6 +118,8 @@ class SCDRParallel:
             sta = time.time()
             self.stream_dataset.update_knn_graph(pre_n_samples, data, [0], update_similarity=False,
                                                  symmetric=False)
+            # if np.max(self.stream_dataset.get_knn_indices()) > pre_n_samples:
+            #     print("==================================", knn_indices)
             self.knn_update_time += time.time() - sta
 
             # 两种邻居点策略：第一种是使用模型最新计算的，会增加时耗
@@ -245,8 +249,8 @@ class SCDRParallel:
         # =====================================初始化embedding_quality_supervisor===================================
 
         d_thresh = mean_dist2clusters + 1 * std_dist2clusters
-        e_thresh = pre_neighbor_embedding_m_dist + 0 * pre_neighbor_embedding_s_dist
-        # print("d thresh:", d_thresh, " e thresh:", e_thresh)
+        e_thresh = pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist
+        print("d thresh:", d_thresh, " e thresh:", e_thresh)
         self.embedding_quality_supervisor = EmbeddingQualitySupervisor(self.model_update_intervals,
                                                                        self.manifold_change_num_thresh,
                                                                        self.bad_embedding_num_thresh, d_thresh,
@@ -322,10 +326,12 @@ class SCDRParallel:
         self.embedding_optimizer.update_bfgs_update_thresh(bfgs_update_thresh)
 
     def ending(self):
+        total_time = self.knn_cal_time + self.knn_update_time + self.model_infer_time + self.quality_record_time + \
+                     self.embedding_opt_time + self.embedding_update_time
         print("kNN Cal: %.4f kNN Update: %.4f Model Initial: %.4f Model Infer: %.4f Quality Record: %.4f"
-              " Embedding Opt: %.4f Embedding Update: %.4f" %
+              " Embedding Opt: %.4f Embedding Update: %.4f Total: %.4f" %
               (self.knn_cal_time, self.knn_update_time, self.model_init_time, self.model_infer_time,
-               self.quality_record_time, self.embedding_opt_time, self.embedding_update_time))
+               self.quality_record_time, self.embedding_opt_time, self.embedding_update_time, total_time))
 
 
 def query_knn(query_data, data_set, k, return_indices=False):

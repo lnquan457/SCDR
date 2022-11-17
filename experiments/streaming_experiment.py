@@ -2,21 +2,29 @@ import os
 import time
 from multiprocessing import Process
 
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.animation import FuncAnimation
 from scipy.spatial.distance import cdist
 
+from model.ine import INEModel
 from model.scdr.scdr_parallel import SCDRParallel
+from model.stream_isomap import SIsomapPlus
+from utils.constant_pool import METRIC_NAMES, STEADY_METRIC_NAMES
 from utils.queue_set import ModelUpdateQueueSet
-from dataset.streaming_data_mock import StreamingDataMock, SimulatedStreamingData
+from dataset.streaming_data_mock import StreamingDataMock, SimulatedStreamingData, StreamingDataMock2Stage
 from model.scdr.dependencies.experiment import position_vis
 from model.atSNE import atSNEModel
 from model.si_pca import StreamingIPCA
 from model.xtreaming import XtreamingModel
 from utils.common_utils import evaluate_and_log, time_stamp_to_date_time_adjoin
 from utils.logger import InfoLogger
-from utils.metrics_tool import Metric, cal_global_position_change
+from utils.metrics_tool import Metric, cal_global_position_change, cal_neighbor_pdist_change, cal_manifold_pdist_change
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 from utils.queue_set import StreamDataQueueSet
+
+
+plt.rcParams['animation.ffmpeg_path'] = r'H:\Softwares\ffmpeg\bin\ffmpeg.exe'
 
 
 def check_path_exist(t_path):
@@ -58,6 +66,10 @@ class StreamingEx:
         self.dataset_name = cfg.exp_params.dataset
         self.streaming_mock = None
         self.vis_iter = cfg.exp_params.vis_iter
+        self.save_embedding_iter = cfg.exp_params.save_iter
+        self._eval_nums = None
+        # self._eval_nums = 100
+        self._eval_iter = cfg.exp_params.eval_iter
         self.log_path = log_path
         self.result_save_dir = result_save_dir
         self.model = None
@@ -79,8 +91,6 @@ class StreamingEx:
         self.initial_data_num = cfg.exp_params.initial_data_num
         self.initial_data = None
         self.initial_labels = None
-        self.first_fit = False
-        self.cur_data = None
         self.history_data = None
         self.history_label = None
 
@@ -88,10 +98,20 @@ class StreamingEx:
         self.debug = True
         self.save_img = False
         self.save_embedding_npy = False
-        self.metric_vs = False
+
+        # 实验用
+        self._x_min = 1e7
+        self._x_max = 1e-7
+        self._y_min = 1e7
+        self._y_max = 1e-7
+        self._embeddings_histories = []
+        self._faith_metric_records = [[] for item in METRIC_NAMES]
+        self._steady_metric_records = [[] for item in STEADY_METRIC_NAMES]
 
     def _prepare_streaming_data(self):
-        self.streaming_mock = StreamingDataMock(self.dataset_name, self.cfg.exp_params.stream_rate, self.seq_indices)
+        # self.streaming_mock = StreamingDataMock(self.dataset_name, self.cfg.exp_params.stream_rate, self.seq_indices)
+        self.streaming_mock = StreamingDataMock2Stage(self.dataset_name, None, 0,
+                                                      self.cfg.exp_params.stream_rate, self.seq_indices)
 
     def _train_begin(self):
         self._prepare_streaming_data()
@@ -100,6 +120,10 @@ class StreamingEx:
                                             time_stamp_to_date_time_adjoin(int(time.time())))
         check_path_exist(self.result_save_dir)
         self.log = open(os.path.join(self.result_save_dir, self.log_path), 'a')
+
+        if self._eval_nums is not None:
+            time_steps = len(self.streaming_mock.data_num_list) - 1
+            self._eval_iter = time_steps // self._eval_nums
 
     def build_metric_tool(self):
         data = self.history_data
@@ -121,6 +145,16 @@ class StreamingEx:
 
     def start_xtreaming(self):
         self.model = XtreamingModel(self.cfg.method_params.buffer_size, self.cfg.method_params.eta)
+        self.stream_fitting()
+
+    def start_ine(self):
+        self.model = INEModel(self.cfg.exp_params.initial_data_num, self.n_components,
+                              self.cfg.method_params.n_neighbors)
+        self.stream_fitting()
+
+    def start_sisomap(self):
+        self.model = SIsomapPlus(self.cfg.exp_params.initial_data_num, self.n_components,
+                                 self.cfg.method_params.n_neighbors)
         self.stream_fitting()
 
     def stream_fitting(self):
@@ -158,15 +192,23 @@ class StreamingEx:
             self._project_pipeline(stream_data, stream_labels)
 
     def _project_pipeline(self, stream_data, stream_labels):
+        pre_labels = self.history_label
         cache_flag, stream_data, stream_labels = self._cache_initial(stream_data, stream_labels)
         if cache_flag:
-            self.cur_data = stream_data
+            self.pre_embedding = self.cur_embedding
             ret_embeddings = self.model.fit_new_data(stream_data, stream_labels)
 
             if ret_embeddings is not None:
-                self.pre_embedding = self.cur_embedding
+                cur_x_min, cur_y_min = np.min(ret_embeddings, axis=0)
+                cur_x_max, cur_y_max = np.max(ret_embeddings, axis=0)
+                self._x_min = min(self._x_min, cur_x_min)
+                self._x_max = max(self._x_max, cur_x_max)
+                self._y_min = min(self._y_min, cur_y_min)
+                self._y_max = max(self._y_max, cur_y_max)
+                self._embeddings_histories.append(ret_embeddings)
+                self.evaluate(self.pre_embedding, ret_embeddings, pre_labels)
                 self.cur_embedding = ret_embeddings
-                self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding)
+                self.save_embeddings_info(self.cur_embedding)
 
     def _cache_initial_data(self, data, label=None):
         if self.initial_data is None:
@@ -184,78 +226,52 @@ class StreamingEx:
         else:
             return False
 
-    def save_embeddings_imgs(self, pre_embeddings, cur_embeddings, force_vc=False, custom_id=None):
+    def save_embeddings_info(self, cur_embeddings, custom_id=None, train_end=False):
         sta = time.time()
-        if self.save_embedding_npy:
+        if self.save_embedding_npy and (self.cur_time_step % self.save_embedding_iter == 0 or train_end):
             custom_id = self.cur_time_step if custom_id is None else custom_id
             np.save(os.path.join(self.embedding_dir, "t_{}.npy".format(custom_id)), self.cur_embedding)
 
-        # cur_low_nn_indices = compute_knn_graph(self.cur_embedding, None, self.vc_k, None)[0]
-        # cur_high_nn_indices = compute_knn_graph(self.streaming_mock.history_data, None, self.vc_k, None)[0]
-        # preserve, fake_intro = metric_neighbor_preserve_introduce(cur_low_nn_indices, cur_high_nn_indices)
-        # print("Preserve Rate: %.4f Fake Intro Rate: %.4f" % (preserve, fake_intro))
-
-        if self.cur_time_step % self.vis_iter == 0 or force_vc:
-            title = None
-            if self.pre_embedding is not None:
-                # ===============================================考虑新数据对VC的影响============================================
-                # pre_embeddings = self.pre_embedding - np.expand_dims(np.mean(self.pre_embedding, axis=0), axis=0)
-                # cur_embeddings = self.cur_embedding - np.expand_dims(np.mean(self.cur_embedding, axis=0), axis=0)
-                # 投影函数没变，但是增加了新的点之后，mean会有多大变化
-                # print("Previous mean:", np.mean(self.pre_embedding, axis=0))
-                # print("Current mean:", np.mean(self.cur_embedding, axis=0))
-
-                cur_nn_indices, cur_nn_dists = compute_knn_graph(cur_embeddings, None, self.vc_k, None)
-                pre_nn_indices, pre_nn_dists = compute_knn_graph(pre_embeddings, None, self.vc_k, None)
-
-                # vc_point = metric_mental_map_preservation(cur_embeddings, pre_embeddings, cur_nn_indices, self.vc_k)[0]
-                # vc_edge = metric_mental_map_preservation_edge(cur_embeddings, pre_embeddings, cur_nn_indices)[0]
-
-                # vc_cntp = metric_mental_map_preservation_cntp(self.cur_embedding, self.pre_embedding)
-                vc_cntp = 0
-                high_dist2new_data = cdist(self.cur_data, self.history_data) ** 2
-
-                # cur_high_nn_indices, cur_high_nn_dists = compute_knn_graph(self.streaming_mock.history_data, None,
-                # self.vc_k, None)
-                # new_n_samples = cur_embeddings.shape[0] - pre_embeddings.shape[0]
-                # new_nn_indices = cur_high_nn_indices[-new_n_samples:]
-                # new_nn_dists = cur_high_nn_dists[-new_n_samples:]
-                # new_data = self.streaming_mock.history_data[-new_n_samples:]
-                # pre_data = self.streaming_mock.history_data[:-new_n_samples]
-                # kNN_change_indices, self.pre_high_knn_indices, self.pre_high_knn_dists = \
-                #     cal_kNN_change(new_data, new_nn_indices, new_nn_dists, pre_data, self.pre_high_knn_indices,
-                #                    self.pre_high_knn_dists)
-                # acc_list, a_acc_list = eval_knn_acc(cur_high_nn_indices, self.pre_high_knn_indices, new_n_samples, pre_embeddings.shape[0])
-
-                # vc_inconsistency = metric_visual_consistency_dbscan(cur_embeddings, pre_embeddings,
-                #                                                     np.mean(pre_nn_dists), np.mean(cur_nn_dists),
-                #                                                     high_dist2new_data=high_dist2new_data)
-
-                # title = "P: %.2f E: %.2f C: %.2f D: %.4f" % (vc_point, vc_edge, vc_cntp, vc_db)
-                # print("VC Point = %.2f VC Edge = %.2f VC Cluster = %.2f VC DB = %.4f" % (
-                # vc_point, vc_edge, vc_cntp, vc_db))
-                # =======================================================================================================================
-
-                # =========================================不考虑新数据的影响================================================
-                vc_inconsistency = cal_global_position_change(cur_embeddings, pre_embeddings) if self.metric_vs else 0
-                # ========================================================================================================
-
-                title = "Visual Inconsistency: %.4f" % vc_inconsistency
-                # print(title)
-            else:
-                pre_high_knn_indices, pre_high_knn_dists = compute_knn_graph(self.history_data,
-                                                                             None, self.vc_k, None)
-
+        if self.cur_time_step % self.vis_iter == 0 or train_end:
             img_save_path = os.path.join(self.img_dir, "t_{}.jpg".format(custom_id)) if self.save_img else None
-            position_vis(self.streaming_mock.seq_label[:cur_embeddings.shape[0]], img_save_path, cur_embeddings, title)
+            position_vis(self.history_label[:cur_embeddings.shape[0]], img_save_path, cur_embeddings, None)
 
         self.other_time += time.time() - sta
+
+    def evaluate(self, pre_embeddings, cur_embeddings, pre_labels, train_end=False):
+        if self.cur_time_step % self._eval_iter > 0 and not train_end:
+            return
+
+        self.build_metric_tool()
+
+        faithful_results = self.metric_tool.cal_all_metrics(self.eval_k, cur_embeddings, knn_k=self.eval_k)
+        faith_metric_output = ""
+        for i, item in enumerate(METRIC_NAMES):
+            faith_metric_output += " %s: %.4f" % (item, faithful_results[i])
+            self._faith_metric_records[i].append(faithful_results[i])
+
+        InfoLogger.info(faith_metric_output)
+
+        position_change = cal_global_position_change(cur_embeddings, pre_embeddings)
+        pdist_change = cal_manifold_pdist_change(cur_embeddings, pre_embeddings, pre_labels)
+
+        steady_results = [position_change, pdist_change]
+        steady_metric_output = ""
+        for i, item in enumerate(STEADY_METRIC_NAMES):
+            steady_metric_output += " %s: %.4f" % (item, steady_results[i])
+            self._steady_metric_records[i].append(faithful_results[i])
+
+        InfoLogger.info(steady_metric_output)
+
+        if self.log is not None:
+            self.log.write(faith_metric_output + "\n")
+            self.log.write(steady_metric_output + "\n")
 
     def train_end(self):
 
         if isinstance(self.model, XtreamingModel) and not self.model.buffer_empty():
             self.cur_embedding = self.model.fit()
-            self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding, force_vc=True)
+            self.save_embeddings_info(self.cur_embedding, train_end=True)
 
         if isinstance(self.model, SCDRParallel):
             self.model.save_model()
@@ -266,8 +282,81 @@ class StreamingEx:
         self.log.write(output + "\n")
         if self.do_eval:
             self.build_metric_tool()
-        evaluate_and_log(self.metric_tool, self.cur_embedding, self.eval_k, knn_k=self.eval_k, log_file=self.log)
+
+        self.evaluate(self.pre_embedding, self.cur_embedding, self.history_label[:self.pre_embedding.shape[0]], True)
         self.model.ending()
+        self._metric_conclusion()
+
+    def _metric_conclusion(self):
+
+        def _draw(y, save_name):
+            plt.figure()
+            plt.title(save_name)
+            plt.plot(x, y)
+            plt.ylabel(save_name)
+            # plt.legend()
+            plt.savefig(os.path.join(save_dir, "{}.jpg".format(save_name)))
+            plt.show()
+
+        faith_metric_output = ""
+        save_dir = os.path.join(self.img_dir, "metrics")
+        check_path_exist(save_dir)
+        x = np.arange(len(self._faith_metric_records[0]))
+        for i, item in enumerate(METRIC_NAMES):
+            faith_metric_output += " Avg %s: %.4f" % (item, float(np.mean(self._faith_metric_records[i])))
+            _draw(self._faith_metric_records[i], item)
+        InfoLogger.info(faith_metric_output)
+
+        steady_metric_output = ""
+        for i, item in enumerate(STEADY_METRIC_NAMES):
+            steady_metric_output += " Avg %s: %.4f" % (item, float(np.mean(self._steady_metric_records[i])))
+            _draw(self._steady_metric_records[i], item)
+        InfoLogger.info(steady_metric_output)
+
+        if self.log is not None:
+            self.log.write(faith_metric_output + "\n")
+            self.log.write(steady_metric_output + "\n")
+
+        self._make_embedding_video(save_dir)
+
+    def _make_embedding_video(self, save_dir):
+        self._embeddings_histories = np.array(self._embeddings_histories)
+
+        def _loose(d_min, d_max, rate=0.1):
+            scale = d_max - d_min
+            d_max += np.abs(scale * rate)
+            d_min -= np.abs(scale * rate)
+            return d_min, d_max
+
+        l_x_min, l_x_max = _loose(self._x_min, self._x_max)
+        l_y_min, l_y_max = _loose(self._y_min, self._y_max)
+
+        fig, ax = plt.subplots()
+
+        # def init():
+        #     ax.set(xlim=(l_x_min, l_x_max), ylim=(l_y_min, l_y_max))
+        #     ax.set_aspect('equal')
+        #     return ax
+        if len(np.unique(self.history_label)) > 10:
+            color_list = "tab20"
+        else:
+            color_list = "tab10"
+
+        def update(idx):
+            if idx % 100 == 0:
+                print("frame", idx)
+
+            cur_embeddings = self._embeddings_histories[idx]
+            ax.cla()
+            ax.set(xlim=(l_x_min, l_x_max), ylim=(l_y_min, l_y_max))
+            ax.set_aspect('equal')
+            # ax.axis('equal')  # 将xy轴隐藏
+            ax.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1], c=self.history_label[:cur_embeddings.shape[0]],
+                       s=3, cmap=color_list)
+            ax.set_title("Timestep: {}".format(int(idx)))
+
+        ani = FuncAnimation(fig, update, frames=self._embeddings_histories.shape[0], interval=33, blit=False)
+        ani.save(os.path.join(save_dir, "embedding.mp4"), writer='ffmpeg', dpi=300)
 
 
 class StreamingExProcess(StreamingEx, Process):
@@ -359,8 +448,7 @@ class StreamingExProcess(StreamingEx, Process):
         self.model.stream_dataset.update_embeddings(total_embeddings)
         self.model.update_thresholds(cluster_indices)
         self.pre_embedding = self.cur_embedding
-        self.save_embeddings_imgs(self.pre_embedding, total_embeddings,
-                                  custom_id="u{}".format(self.update_num), force_vc=True)
+        self.save_embeddings_info(total_embeddings, custom_id="u{}".format(self.update_num), )
         self.cur_embedding = total_embeddings
         self.update_num += 1
         self.cdr_update_queue_set.WAITING_UPDATED_DATA.value = 0
@@ -373,7 +461,7 @@ class StreamingExProcess(StreamingEx, Process):
 
         # 结束流数据处理
         self.cur_embedding = self.model.get_final_embeddings()
-        self.save_embeddings_imgs(self.pre_embedding, self.cur_embedding, force_vc=True)
+        self.save_embeddings_info(self.cur_embedding, train_end=True)
         self.model.ending()
 
         # 结束模型更新进程

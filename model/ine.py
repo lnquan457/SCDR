@@ -9,6 +9,7 @@ from sklearn.neighbors import NearestNeighbors
 from model.incrementalLE import kNNBasedIncrementalMethods
 from sklearn.manifold import TSNE
 from model.scdr.dependencies.experiment import position_vis
+from utils.logger import InfoLogger
 from utils.nn_utils import compute_knn_graph
 
 
@@ -19,11 +20,11 @@ def _select_min_loss_one(candidate_embeddings, neighbors_embeddings, high_probab
     q = tmp_prob / np.expand_dims(np.sum(tmp_prob, axis=1), axis=1)
     high_prob_matrix = np.repeat(np.expand_dims(high_probabilities, axis=0), candidate_embeddings.shape[0], axis=0)
     # [G*G]
-    loss_list = np.sum(np.multiply(np.log(q), high_prob_matrix), axis=1)
+    loss_list = -np.sum(np.multiply(np.log(q), high_prob_matrix), axis=1)
     return candidate_embeddings[np.argmin(loss_list)]
 
 
-class INE(kNNBasedIncrementalMethods, TSNE):
+class INEModel(kNNBasedIncrementalMethods, TSNE):
     def __init__(self, train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=3, init="pca"):
         kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, single=True)
         TSNE.__init__(self, n_components, perplexity=n_neighbors)
@@ -33,6 +34,7 @@ class INE(kNNBasedIncrementalMethods, TSNE):
         self.grid_num = grid_num
         self.condition_P = None
         self._learning_rate = 200.0
+        self._update_thresh = 500
 
     def _first_train(self, train_data):
         self.pre_embeddings = self.fit_transform(train_data)
@@ -50,12 +52,14 @@ class INE(kNNBasedIncrementalMethods, TSNE):
         new_data_prob = self._cal_new_data_probability(knn_dists.astype(np.float32, copy=False))
 
         initial_embedding = self._initialize_new_data_embedding(pre_data_num, knn_indices)
-
+        # print("initial", initial_embedding)
         self.pre_embeddings = self._optimize_new_data_embedding(knn_indices, initial_embedding, new_data_prob)
+        # print("after", self.pre_embeddings[-1])
         return self.pre_embeddings
 
     def _cal_new_data_probability(self, dists):
-        conditional_P = _binary_search_perplexity(dists**2, self.desired_perplexity, False)
+        # conditional_P = _binary_search_perplexity(dists**2, self.desired_perplexity, False)
+        conditional_P = search_prob(dists**2, perplexity=self.desired_perplexity)
         self.condition_P = np.concatenate([self.condition_P, conditional_P], axis=0)
         return conditional_P
 
@@ -70,13 +74,18 @@ class INE(kNNBasedIncrementalMethods, TSNE):
         def loss_func(embeddings, high_prob, neighbor_embeddings):
             similarities = 1 / (1 + cdist(embeddings[np.newaxis, :], neighbor_embeddings) ** 2)
             normed_similarities = similarities / np.expand_dims(np.sum(similarities, axis=1), axis=1)
-            return np.sum(high_prob * np.log(normed_similarities))
+            return -np.sum(high_prob * np.log(normed_similarities))
 
         res = scipy.optimize.minimize(loss_func, initial_embedding, method="BFGS",
                                       args=(new_data_prob, self.pre_embeddings[new_data_knn_indices.squeeze()]),
                                       options={'gtol': 1e-6, 'disp': False})
-
-        new_embeddings = res.x[np.newaxis, :]
+        if np.abs(res.x[0] - initial_embedding[0]) > self._update_thresh \
+                or np.abs(res.x[1] - initial_embedding[1]) > self._update_thresh:
+            print("initial:", initial_embedding)
+            print(new_data_prob)
+            new_embeddings = initial_embedding[np.newaxis, :]
+        else:
+            new_embeddings = res.x[np.newaxis, :]
         total_embeddings = np.concatenate([self.pre_embeddings, new_embeddings], axis=0)
         return total_embeddings
 
@@ -141,6 +150,9 @@ class INE(kNNBasedIncrementalMethods, TSNE):
             skip_num_points=skip_num_points,
         )
 
+    def ending(self):
+        pass
+
 
 def my_joint_probabilities_nn(distances, desired_perplexity):
     distances.sort_indices()
@@ -165,6 +177,81 @@ def my_joint_probabilities_nn(distances, desired_perplexity):
     return P, conditional_P
 
 
+def cal_perplexity(dist, idx=0, beta=1.0):
+    # '''计算perplexity, D是距离向量，
+    # idx指dist中自己与自己距离的位置，beta是高斯分布参数
+    # 这里的perp仅计算了熵，方便计算
+    # '''
+    prob = np.exp(-dist * beta)
+    # 设置自身prob为0
+    # prob[idx] = 0
+    sum_prob = np.sum(prob)
+    if sum_prob == 0:
+        prob = np.maximum(prob, 1e-12)
+        perplexity = -12
+    else:
+        prob /= sum_prob
+        perplexity = 0
+        for pj in prob:
+            if pj != 0:
+                perplexity += -pj * np.log(pj)
+    # 困惑度和pi\j的概率分布
+    return perplexity, prob
+
+
+def search_prob(distances, tol=1e-5, perplexity=30.0, debug=False):
+    # '''二分搜索寻找beta,并计算pairwise的probability
+    # '''
+    # 初始化参数
+
+    if debug:
+        InfoLogger.info("Computing pairwise distances...")
+    (n, d) = distances.shape
+
+    pair_prob = np.zeros_like(distances)
+    beta = np.ones((n, 1))
+    # 取log，方便后续计算
+    base_perplexity = np.log(perplexity)
+
+    for i in range(n):
+        if debug and i % 10 == 0:
+            InfoLogger.info("Computing pair_prob for point %s of %s ..." % (i, n))
+
+        beta_min = -np.inf
+        beta_max = np.inf
+        # dist[i]需要换不能是所有点
+        perplexity, cur_prob = cal_perplexity(distances[i], i, beta[i])
+
+        # 二分搜索,寻找最佳sigma下的prob
+        perplexity_diff = perplexity - base_perplexity
+        tries = 0
+        while np.abs(perplexity_diff) > tol and tries < 50:
+            if perplexity_diff > 0:
+                beta_min = beta[i].copy()
+                if beta_max == np.inf or beta_max == -np.inf:
+                    beta[i] = beta[i] * 2
+                else:
+                    beta[i] = (beta[i] + beta_max) / 2
+            else:
+                beta_max = beta[i].copy()
+                if beta_min == np.inf or beta_min == -np.inf:
+                    beta[i] = beta[i] / 2
+                else:
+                    beta[i] = (beta[i] + beta_min) / 2
+
+            # 更新perb,prob值
+            perplexity, cur_prob = cal_perplexity(distances[i], i, beta[i])
+            perplexity_diff = perplexity - base_perplexity
+            tries = tries + 1
+        # 记录prob值
+        pair_prob[i, ] = cur_prob
+    if debug:
+        InfoLogger.info("Mean value of sigma: ", np.mean(np.sqrt(1 / beta)))
+    # 每个点对其他点的条件概率分布pi\j
+
+    return pair_prob
+
+
 if __name__ == '__main__':
     with h5py.File("../../../Data/H5 Data/food.h5", "r") as hf:
         X = np.array(hf['x'])
@@ -174,7 +261,7 @@ if __name__ == '__main__':
     train_data = X[:train_num]
     train_labels = Y[:train_num]
 
-    ile = INE(train_num, 2, 10)
+    ile = INEModel(train_num, 2, 10)
 
     first_embeddings = ile.fit_new_data(train_data)
     position_vis(train_labels, None, first_embeddings, "first")

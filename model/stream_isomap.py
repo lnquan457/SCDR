@@ -200,7 +200,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         return data_indices, labels, unlabeled_num
 
     def _find_clusters(self, data, knn_indices):
-        dimension_pw_, main_components = CustomizedLPCA().fit_transform_pw(train_data, knn_indices)
+        dimension_pw_, main_components = CustomizedLPCA().fit_transform_pw(data, knn_indices)
         n_samples = data.shape[0]
         idx = 1
         labels = np.ones(n_samples) * -1
@@ -228,7 +228,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             labels[item] = closest_indices[i] + 1
             cluster_indices[int(closest_indices[i])].append(item)
 
-        print("cluster number:", idx)
+        # print("cluster number:", idx)
         for item in cluster_indices:
             labels = self.stream_dataset._total_label[item]
             cls, counts = np.unique(labels, return_counts=True)
@@ -334,6 +334,9 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
                                                global_embedding_list[min_idx]) / (manifold_data_num + 1)
         self.cluster_indices[min_idx].append(self.stream_dataset.get_n_samples())
         return min_idx
+
+    def ending(self):
+        pass
 
 
 class CustomizedLPCA(lPCA):
