@@ -146,31 +146,32 @@ class SCDRParallel:
             # p_need_optimize, manifold_change, need_update_model = \
             #     self.embedding_quality_supervisor.quality_record(data, data_embeddings, self.pre_cluster_centers,
             #                                                      neighbor_embeddings)
-            p_need_optimize, manifold_change, need_update_model = \
-                self.embedding_quality_supervisor.quality_record_2(data, data_embeddings, knn_dists,
-                                                                   neighbor_embeddings)
-            # fit_data = self.stream_dataset.get_total_data()[:-1] if update else None
             # p_need_optimize, manifold_change, need_update_model = \
-            #     self.embedding_quality_supervisor.quality_record_lof(data, data_embeddings, neighbor_embeddings, fit_data)
+            #     self.embedding_quality_supervisor.quality_record_2(data, data_embeddings, knn_dists,
+            #                                                        neighbor_embeddings)
+            fit_data = self.stream_dataset.get_total_data()[:-1] if update else None
+            p_need_optimize, manifold_change, need_update_model = \
+                self.embedding_quality_supervisor.quality_record_lof(data, data_embeddings, neighbor_embeddings,
+                                                                     knn_indices, knn_dists, fit_data)
 
             self._is_new_manifold.append(manifold_change)
             self._is_embedding_optimized.append(p_need_optimize)
             # print(p_need_optimize)
             self.quality_record_time += time.time() - sta
 
-            unique_labels, counts = np.unique(self.stream_dataset.get_total_label()[:self.fitted_data_num],
-                                              return_counts=True)
-            tt_indices = np.where(counts > 50)[0]
-            need_optimize = labels not in (unique_labels[tt_indices])
-            if need_optimize == p_need_optimize:
-                self._opt_judge_acc += 1
-            if need_optimize == manifold_change:
-                self._change_judge_acc += 1
-            print(labels, unique_labels[tt_indices])
-            print(p_need_optimize, need_optimize, " supervise acc:",
-                  self._opt_judge_acc / (self.stream_dataset.get_n_samples() - 861))
-            print(manifold_change, need_optimize, " manifold change acc:",
-                  self._change_judge_acc / (self.stream_dataset.get_n_samples() - 861))
+            # unique_labels, counts = np.unique(self.stream_dataset.get_total_label()[:self.fitted_data_num],
+            #                                   return_counts=True)
+            # tt_indices = np.where(counts > 50)[0]
+            # need_optimize = labels not in (unique_labels[tt_indices])
+            # if need_optimize == p_need_optimize:
+            #     self._opt_judge_acc += 1
+            # if need_optimize == manifold_change:
+            #     self._change_judge_acc += 1
+            # print(labels, unique_labels[tt_indices])
+            # print(p_need_optimize, need_optimize, " supervise acc:",
+            #       self._opt_judge_acc / (self.stream_dataset.get_n_samples() - 861))
+            # print(manifold_change, need_optimize, " manifold change acc:",
+            #       self._change_judge_acc / (self.stream_dataset.get_n_samples() - 861))
 
             if need_update_model:
                 self._send_update_signal()

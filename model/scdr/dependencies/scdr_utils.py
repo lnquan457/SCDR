@@ -7,6 +7,8 @@ import torch
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.neighbors import LocalOutlierFactor
+from sklearn.utils import check_array
+from sklearn.utils.validation import check_is_fitted
 
 from dataset.warppers import extract_csr, KNNManager
 from utils.nn_utils import compute_knn_graph
@@ -248,15 +250,19 @@ class DistributionChangeDetector:
 
         return shifted_indices
 
-    def _lof_based(self, pred_data, re_fit=True, fit_data=None, n_neighbors=5, contamination=0.1):
+    def _lof_based(self, pred_data, knn_indices, knn_dists, re_fit=True, fit_data=None, n_neighbors=5,
+                   contamination=0.1):
         if self.lof is None:
-            self.lof = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, metric="euclidean",
-                                          contamination=contamination)
+            # self.lof = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, metric="euclidean",
+            #                               contamination=contamination)
+            self.lof = MyLocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, metric="euclidean",
+                                            contamination=contamination)
         # 每次都需要重新fit，这是非常耗时的。实际上只需要在模型更新之后才需要重新fit。
         if re_fit:
             assert fit_data is not None
             self.lof.fit(fit_data)
-        labels = self.lof.predict(pred_data)
+        # labels = self.lof.predict(pred_data)
+        labels = self.lof.predict_novel(pred_data, knn_indices, knn_dists)
         shifted_indices = np.where(labels == -1)[0]
         return shifted_indices
 
@@ -304,8 +310,10 @@ class EmbeddingQualitySupervisor:
         self._data_reduction = data_reduction
         self._embedding_reduction = embedding_reduction
 
-        self._lof = LocalOutlierFactor(n_neighbors=10, novelty=True, metric="euclidean",
-                                       contamination=0.1)
+        # self._lof = LocalOutlierFactor(n_neighbors=10, novelty=True, metric="euclidean",
+        #                                contamination=0.1)
+        self._lof = MyLocalOutlierFactor(n_neighbors=10, novelty=True, metric="euclidean",
+                                         contamination=0.1)
 
     def update_threshes(self, e_thresh, d_low, d_high):
         self._update_e_thresh(e_thresh)
@@ -338,7 +346,7 @@ class EmbeddingQualitySupervisor:
 
         return update
 
-    def quality_record_lof(self, data, embedding, neighbor_embeddings, pre_data=None):
+    def quality_record_lof(self, data, embedding, neighbor_embeddings, knn_indices, knn_dists, pre_data=None):
         manifold_change = False
         need_optimize = False
 
@@ -355,7 +363,8 @@ class EmbeddingQualitySupervisor:
             sta = time.time()
             self._lof.fit(pre_data)
             print("fit time", time.time() - sta)
-        label = self._lof.predict(data)
+        # label = self._lof.predict(data)
+        label = self._lof.predict_novel(knn_indices.squeeze(), knn_dists.squeeze())
         if label == -1:
             self.__new_manifold_data_num += 1
             manifold_change = True
@@ -381,7 +390,7 @@ class EmbeddingQualitySupervisor:
             data_dist = np.mean(knn_dists)
         else:
             data_dist = np.max(knn_dists)
-        print("====================", data_dist, self.__d_scale)
+        # print("====================", data_dist, self.__d_scale)
         if data_dist >= self.__d_scale[1] or data_dist <= self.__d_scale[0]:
             self.__new_manifold_data_num += 1
             manifold_change = True
@@ -409,6 +418,43 @@ class EmbeddingQualitySupervisor:
 
         # print("manifold change num: {} bad embedding num: {}".format(self.__new_manifold_data_num, self.__bad_embedding_data_num))
         return need_optimize, manifold_change, self._judge_model_update()
+
+
+class MyLocalOutlierFactor(LocalOutlierFactor):
+    def __init__(
+            self,
+            n_neighbors=20,
+            *,
+            algorithm="auto",
+            leaf_size=30,
+            metric="minkowski",
+            p=2,
+            metric_params=None,
+            contamination="auto",
+            novelty=False,
+            n_jobs=None,
+    ):
+        LocalOutlierFactor.__init__(self, n_neighbors, algorithm=algorithm, leaf_size=leaf_size, metric=metric, p=p,
+                                    metric_params=metric_params, contamination=contamination, novelty=novelty,
+                                    n_jobs=n_jobs)
+        self._valid_rate = 0.3
+
+    def predict_novel(self, nn_indices, nn_dists):
+        valid_indices = np.where(nn_indices < self.n_samples_fit_)[0]
+        if len(valid_indices) / self.n_neighbors_ < self._valid_rate:
+            return -1
+
+        scores = self.my_score_samples(nn_indices[valid_indices], nn_dists[valid_indices]) - self.offset_
+
+        return -1 if scores < 0 else 1
+
+    def my_score_samples(self, neighbors_indices_X, distances_X):
+        X_lrd = self._local_reachability_density(distances_X[np.newaxis, :], neighbors_indices_X[np.newaxis, :])
+
+        lrd_ratios_array = self._lrd[neighbors_indices_X] / X_lrd[:, np.newaxis]
+
+        # as bigger is better:
+        return -np.mean(lrd_ratios_array, axis=1)
 
 
 def cal_cluster_acc(cluster_labels, gt_labels):
