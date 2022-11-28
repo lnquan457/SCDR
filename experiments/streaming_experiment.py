@@ -67,8 +67,8 @@ class StreamingEx:
         self.streaming_mock = None
         self.vis_iter = cfg.exp_params.vis_iter
         self.save_embedding_iter = cfg.exp_params.save_iter
-        self._eval_nums = None
-        # self._eval_nums = 100
+        # self._eval_nums = None
+        self._eval_nums = 2
         self._eval_iter = cfg.exp_params.eval_iter
         self.log_path = log_path
         self.result_save_dir = result_save_dir
@@ -95,7 +95,8 @@ class StreamingEx:
 
         self.cls2idx = {}
         self.debug = True
-        self.save_img = False
+        self.save_img = True
+        self._make_animation = cfg.exp_params.make_animation
         self.save_embedding_npy = False
 
         # 实验用
@@ -120,7 +121,7 @@ class StreamingEx:
         self.log = open(os.path.join(self.result_save_dir, self.log_path), 'a')
 
         if self._eval_nums is not None:
-            time_steps = len(self.streaming_mock.data_num_list) - 1
+            time_steps = self.streaming_mock.time_step_num
             self._eval_iter = time_steps // self._eval_nums
 
     def build_metric_tool(self):
@@ -228,8 +229,8 @@ class StreamingEx:
             return False
 
     def save_embeddings_info(self, cur_embeddings, custom_id=None, train_end=False):
+        custom_id = self.cur_time_step if custom_id is None else custom_id
         if self.save_embedding_npy and (self.cur_time_step % self.save_embedding_iter == 0 or train_end):
-            custom_id = self.cur_time_step if custom_id is None else custom_id
             np.save(os.path.join(self.embedding_dir, "t_{}.npy".format(custom_id)), self.cur_embedding)
 
         if self.cur_time_step % self.vis_iter == 0 or train_end:
@@ -257,7 +258,7 @@ class StreamingEx:
         steady_metric_output = ""
         for i, item in enumerate(STEADY_METRIC_NAMES):
             steady_metric_output += " %s: %.4f" % (item, steady_results[i])
-            self._steady_metric_records[i].append(faithful_results[i])
+            self._steady_metric_records[i].append(steady_results[i])
 
         InfoLogger.info(steady_metric_output)
 
@@ -282,7 +283,7 @@ class StreamingEx:
             self.build_metric_tool()
 
         self.evaluate(self.pre_embedding, self.cur_embedding, self.history_label[:self.pre_embedding.shape[0]], True)
-        self.model.ending()
+
         self._metric_conclusion()
 
     def _metric_conclusion(self):
@@ -315,7 +316,8 @@ class StreamingEx:
             self.log.write(faith_metric_output + "\n")
             self.log.write(steady_metric_output + "\n")
 
-        self._make_embedding_video(save_dir)
+        if self._make_animation:
+            self._make_embedding_video(save_dir)
 
     def _make_embedding_video(self, save_dir):
         self._embeddings_histories = np.array(self._embeddings_histories)
@@ -349,8 +351,8 @@ class StreamingEx:
             ax.set(xlim=(l_x_min, l_x_max), ylim=(l_y_min, l_y_max))
             ax.set_aspect('equal')
             # ax.axis('equal')  # 将xy轴隐藏
-            ax.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1], c=self.history_label[:cur_embeddings.shape[0]],
-                       s=2, cmap=color_list)
+            ax.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1],
+                       c=self.streaming_mock.seq_label[:cur_embeddings.shape[0]], s=2, cmap=color_list)
             ax.set_title("Timestep: {}".format(int(idx)))
 
         ani = FuncAnimation(fig, update, frames=self._embeddings_histories.shape[0], interval=33, blit=False)
@@ -430,8 +432,6 @@ class StreamingExProcess(StreamingEx, Process):
 
             # 获取数据
             stream_end_flag, stream_data, stream_labels = self._get_stream_data(accumulate=False)
-            # stream_data, stream_labels, stream_end_flag = self.streaming_mock.next_time_data()
-            # self.cur_time_step += 1
             if stream_end_flag:
                 break
 
@@ -465,5 +465,7 @@ class StreamingExProcess(StreamingEx, Process):
 
         # 结束模型更新进程
         self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
-
+        ret = self.model.ending()
+        if self.log is not None:
+            self.log.write(ret + "\n")
         super().train_end()

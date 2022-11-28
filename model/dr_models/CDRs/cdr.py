@@ -136,6 +136,7 @@ class LwFCDR(CDRModel):
         cluster_num = cluster_indices.shape[0]
         c_indices = [item[random.randint(0, len(item) - 1)] for item in cluster_indices]
 
+        # TODO: 排斥旧数据以及preserve rank和position的时候用到了聚类相关的信息，但是对于这些方法，聚类精度的影响并不是特别大。
         if self.preserve_rank and cluster_num > 1:
             sta = time.time()
             rank_loss = cal_rank_relation_loss(rep_embeddings[c_indices], pre_rep_embeddings[c_indices])

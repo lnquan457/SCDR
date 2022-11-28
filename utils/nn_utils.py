@@ -1,6 +1,7 @@
 import os
 import time
 
+import numba
 import numpy as np
 from pynndescent import NNDescent
 from scipy.spatial.ckdtree import cKDTree
@@ -244,7 +245,7 @@ class StreamingANNSearchKD:
 
 
 class StreamingANNSearchAnnoy:
-    def __init__(self, beta=10, update_iter=500):
+    def __init__(self, beta=10, update_iter=500, automatic_beta=False):
         self._searcher = None
         self._beta = beta
         self._update_iter = update_iter
@@ -253,13 +254,38 @@ class StreamingANNSearchAnnoy:
         self._optimized_data = None
         self._infer_embedding_indices = np.array([], dtype=int)
         self._inferred_data = None
+        self._automatic_beta = automatic_beta
+
+    def search_2(self, k, pre_embeddings, pre_data, fitted_num, query_embeddings, query_data, update=False):
+        update = update or (pre_embeddings.shape[0] - self._fitted_num) % self._update_iter == 0
+        if update:
+            self._build_annoy_index(pre_embeddings)
+
+        new_k = self._beta * k
+        candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
+        candidate_indices = np.array(candidate_indices, dtype=int)
+        candidate_data = pre_data[candidate_indices]
+        if not update:
+            candidate_data = np.concatenate([candidate_data, pre_data[fitted_num:]], axis=0)
+            candidate_indices = np.concatenate([candidate_indices, np.arange(fitted_num, pre_data.shape[0])])
+
+        dists = cdist(query_data, candidate_data).squeeze()
+        sorted_indices = np.argsort(dists)[:k].astype(int)
+        final_indices = candidate_indices[sorted_indices]
+        final_dists = dists[sorted_indices]
+
+        return final_indices, final_dists
 
     def search(self, k, pre_embeddings, pre_data, query_embeddings, query_data, optimized, update=False):
         update = update or (pre_embeddings.shape[0] - self._fitted_num) % self._update_iter == 0
         if update:
             self._build_annoy_index(pre_embeddings)
 
-        new_k = self._beta * k
+        if not self._automatic_beta:
+            new_k = self._beta * k
+        else:
+            new_k = 0.2 * np.sqrt(pre_embeddings.shape[0]) * k
+
         candidate_indices, knn_dists = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k,
                                                                         include_distances=True)
         candidate_indices = np.array(candidate_indices, dtype=int)
@@ -309,3 +335,52 @@ class StreamingANNSearchAnnoy:
         self._optimized_data = None
         self._infer_embedding_indices = np.array([], dtype=int)
         self._inferred_data = None
+
+
+# @numba.jit(nopython=True)
+def heapK(ary, nums, k):
+    if nums <= k:
+        return ary
+
+    ks = ary[:k]
+    build_heap(ks, k)  # 构建大顶堆（先不排序）
+
+    for index in range(k, nums):
+        ele = ary[index]
+        if ks[0] > ele:
+            ks[0] = ele
+            downAdjust(ks, 0, k)
+
+    return ks
+
+
+# @numba.jit(nopython=True)
+def build_heap(ary_list, k):
+    index = k // 2 - 1  # 最后一个非叶子结点
+    while index >= 0:
+        downAdjust(ary_list, index, k)
+        index -= 1
+
+
+# @numba.jit(nopython=True)
+def downAdjust(ary_list, parent_index, k):
+    tmp = ary_list[parent_index]
+    child_index = 2 * parent_index + 1
+
+    while child_index < k:
+        if child_index + 1 < k and ary_list[child_index + 1] > ary_list[child_index]:
+            child_index += 1
+
+        if tmp >= ary_list[child_index]:
+            break
+
+        ary_list[parent_index] = ary_list[child_index]
+        parent_index = child_index
+        child_index = 2 * parent_index + 1
+
+    ary_list[parent_index] = tmp
+
+
+def find_k_minimums(data, k):
+    nums = data.shape[0]
+    return heapK(data, nums, k)

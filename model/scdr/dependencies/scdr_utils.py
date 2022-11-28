@@ -19,7 +19,8 @@ class KeyPointsGenerator:
     DBSCAN = "dbscan"
 
     @staticmethod
-    def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, cover_all=False, **kwargs):
+    def generate(data, key_rate, method=RANDOM, cluster_inner_random=True, prob=None, min_num=0, cover_all=False,
+                 **kwargs):
         # cover_all = True：表示将在一次epoch中采样之前的所有数据，每个batch中均包含来自不同聚类的数据
         if key_rate >= 1 or (cover_all and method == KeyPointsGenerator.RANDOM):
             return data, np.arange(0, data.shape[0], 1), None, None
@@ -164,10 +165,10 @@ class KeyPointsGenerator:
             # print()
             for item in selected_labels:
                 num = batch_cluster_num[idx]
-                end_idx = min((i+1)*num, len(total_cluster_indices[idx]))
-                select_indices = np.arange(i*num, end_idx)
+                end_idx = min((i + 1) * num, len(total_cluster_indices[idx]))
+                select_indices = np.arange(i * num, end_idx)
 
-                if end_idx < (i + 1) * num:     # 需要补齐
+                if end_idx < (i + 1) * num:  # 需要补齐
                     # print("current len:", end_idx - i*num)
                     left = (i + 1) * num - end_idx
                     select_indices = np.append(select_indices, np.arange(left))
@@ -287,10 +288,11 @@ class DistributionChangeDetector:
 
 
 class EmbeddingQualitySupervisor:
-    def __init__(self, interval_seconds, manifold_change_num_thresh, bad_embedding_num_thresh, d_thresh=None, e_thresh=None):
+    def __init__(self, interval_seconds, manifold_change_num_thresh, bad_embedding_num_thresh, d_scale=None,
+                 e_thresh=None, data_reduction="mean", embedding_reduction="mean"):
         self.__last_update_time = None
         # 当新数据到最近流形中心的距离高于d_thresh时，就认为可能来自新的流形。d_thresh可以通过计算模型拟合过的数据到最近流形中心的平均距离得到
-        self.__d_thresh = d_thresh
+        self.__d_scale = d_scale
         # 当新数据的嵌入到k近邻的嵌入的平均距离高于e_thresh时，就认为模型嵌入的质量较差。e_thresh可以通过计算模型拟合过的数据嵌入到k近邻嵌入的平均距离得到
         self.__e_thresh = e_thresh
         self.__interval_seconds = interval_seconds
@@ -299,9 +301,21 @@ class EmbeddingQualitySupervisor:
         self.__bad_embedding_num_thresh = bad_embedding_num_thresh
         self.__new_manifold_data_num = 0
         self.__bad_embedding_data_num = 0
+        self._data_reduction = data_reduction
+        self._embedding_reduction = embedding_reduction
 
-    def update_d_e_thresh(self, new_d_thresh, new_e_thresh):
-        self.__d_thresh = new_d_thresh
+        self._lof = LocalOutlierFactor(n_neighbors=10, novelty=True, metric="euclidean",
+                                       contamination=0.1)
+
+    def update_threshes(self, e_thresh, d_low, d_high):
+        self._update_e_thresh(e_thresh)
+        self._update_d_scale(d_low, d_high)
+
+    def _update_d_scale(self, low, high):
+        low = max(low, 0)
+        self.__d_scale = [low, high]
+
+    def _update_e_thresh(self, new_e_thresh):
         self.__e_thresh = new_e_thresh
 
     def update_model_update_time(self, update_time):
@@ -324,25 +338,74 @@ class EmbeddingQualitySupervisor:
 
         return update
 
+    def quality_record_lof(self, data, embedding, neighbor_embeddings, pre_data=None):
+        manifold_change = False
+        need_optimize = False
+
+        assert embedding is not None
+        if self._embedding_reduction == "mean":
+            embedding_dist = np.mean(cdist(embedding, neighbor_embeddings))
+        else:
+            embedding_dist = np.max(cdist(embedding, neighbor_embeddings))
+        if embedding_dist >= self.__e_thresh:
+            self.__bad_embedding_data_num += 1
+            need_optimize = True
+
+        if pre_data is not None:
+            sta = time.time()
+            self._lof.fit(pre_data)
+            print("fit time", time.time() - sta)
+        label = self._lof.predict(data)
+        if label == -1:
+            self.__new_manifold_data_num += 1
+            manifold_change = True
+
+        return need_optimize, manifold_change, self._judge_model_update()
+
+    def quality_record_2(self, data, embedding, knn_dists, neighbor_embeddings):
+        manifold_change = False
+        need_optimize = False
+
+        assert embedding is not None
+        if self._embedding_reduction == "mean":
+            embedding_dist = np.mean(cdist(embedding, neighbor_embeddings))
+        else:
+            embedding_dist = np.max(cdist(embedding, neighbor_embeddings))
+        if embedding_dist >= self.__e_thresh:
+            self.__bad_embedding_data_num += 1
+            need_optimize = True
+
+        assert data is not None
+
+        if self._data_reduction == "mean":
+            data_dist = np.mean(knn_dists)
+        else:
+            data_dist = np.max(knn_dists)
+        print("====================", data_dist, self.__d_scale)
+        if data_dist >= self.__d_scale[1] or data_dist <= self.__d_scale[0]:
+            self.__new_manifold_data_num += 1
+            manifold_change = True
+
+        return need_optimize, manifold_change, self._judge_model_update()
+
     def quality_record(self, data, embedding, cluster_centers=None, neighbor_embeddings=None):
         manifold_change = False
         need_optimize = False
-        if cluster_centers is not None:
-            assert data is not None
-            min_dist = np.min(cdist(data, cluster_centers))
-            # print("min dist:", min_dist)
-            if min_dist >= self.__d_thresh:
-                self.__new_manifold_data_num += 1
-                manifold_change = True
-                need_optimize = True
 
         if not manifold_change and neighbor_embeddings is not None:
             assert embedding is not None
             avg_dist = np.mean(cdist(embedding, neighbor_embeddings))
-            # print("neighbor embedding dist:", avg_dist)
             if avg_dist >= self.__e_thresh:
                 self.__bad_embedding_data_num += 1
                 need_optimize = True
+
+        if cluster_centers is not None:
+            assert data is not None
+            min_dist = np.min(cdist(data, cluster_centers))
+            # print("min dist:", min_dist)
+            if min_dist >= self.__d_scale:
+                self.__new_manifold_data_num += 1
+                manifold_change = True
 
         # print("manifold change num: {} bad embedding num: {}".format(self.__new_manifold_data_num, self.__bad_embedding_data_num))
         return need_optimize, manifold_change, self._judge_model_update()
@@ -387,4 +450,4 @@ def cal_cluster_acc(cluster_labels, gt_labels):
             continue
         acc_num += labels_counts[i]
 
-    print("clustering acc:", acc_num/n_samples)
+    print("clustering acc:", acc_num / n_samples)

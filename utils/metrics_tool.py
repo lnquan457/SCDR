@@ -490,7 +490,10 @@ class Metric:
         cls_centroids = []
         for cls in classes:
             indices = np.argwhere(self.origin_label == cls).squeeze()
-            centroid = np.mean(embedding_data[indices], axis=0)
+            cls_embeddings = embedding_data[indices]
+            if len(cls_embeddings.shape) < 2:
+                cls_embeddings = cls_embeddings[np.newaxis, :]
+            centroid = np.mean(cls_embeddings, axis=0)
             cls_centroids.append(centroid)
         flags = np.ones(self.n_samples)
         diff = np.repeat(np.expand_dims(embedding_data, axis=1), len(classes), 1) - \

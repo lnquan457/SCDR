@@ -10,8 +10,8 @@ from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREA
 from utils.common_utils import get_config
 from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet, CalTimeQueueSet
 
-device = "cuda:0"
-log_path = "logs/logs.txt"
+device = "cuda:1"
+log_path = "logs/logs_1.txt"
 
 
 def stream_rate_ex():
@@ -100,9 +100,8 @@ def random_training():
     # initial_cls_ratio = 0.6
     # initial_labels = unique_labels[:int(initial_cls_ratio * len(unique_labels))]
     # print("initial_labels", initial_labels)
-    initial_labels = [15, 24, 25]
 
-    ex = StreamingEx(initial_labels, cfg, None, result_save_dir)
+    ex = StreamingEx(cfg, None, result_save_dir, "log_stream_con_1.txt")
 
     start(ex)
 
@@ -136,13 +135,17 @@ if __name__ == '__main__':
     cfg.merge_from_file(cfg_path)
     result_save_dir = "results/{}/".format(args.method)
 
-    custom_indices_path = os.path.join(args.indices_dir, "{}_TV.npy".format(cfg.exp_params.dataset))
-    custom_indices_training(custom_indices_path)
+    # random_training()
+
+    # custom_indices_path = os.path.join(args.indices_dir, "{}_TI.npy".format(cfg.exp_params.dataset))
+    # custom_indices_training(custom_indices_path)
 
     # suffix_list = ["TI", "FV", "TV"]
-    # for item in suffix_list:
-    #     custom_indices_path = os.path.join(args.indices_dir, "{}_{}.npy".format(cfg.exp_params.dataset, item))
-    #
-    #     for i in range(1):
-    #         cfg.exp_params.make_animation = i == 0
-    #         custom_indices_training(custom_indices_path)
+    suffix_list = ["TV", "FV"]
+    for item in suffix_list:
+        custom_indices_path = os.path.join(args.indices_dir, "{}_{}.npy".format(cfg.exp_params.dataset, item))
+        # custom_indices_training(custom_indices_path)
+
+        for i in range(1):
+            cfg.exp_params.make_animation = i == 0
+            custom_indices_training(custom_indices_path)

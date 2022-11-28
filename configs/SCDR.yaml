@@ -6,14 +6,15 @@ exp_params:
   stream_rate: 1
   indices_file_path: -1
   initial_data_num: 300
-  vis_iter: 50
+  vis_iter: 100
   save_iter: 100000
-  eval_iter: 500
+  eval_iter: 1000
+  make_animation: False
 
 
 method_params:
   method: "LwF_CDR"
-  initial_train_epoch: 100
+  initial_train_epoch: 200
   finetune_epoch: 50
   batch_size: 256
   LR: 0.001

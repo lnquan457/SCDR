@@ -90,7 +90,8 @@ class XtreamingModel:
         return self.pre_embedding
 
     def _initial_project(self, medoids, sampled_indices):
-        dists = cal_dist(self.buffered_data)
+        # dists = cal_dist(self.buffered_data)
+        dists = cdist(self.buffered_data, self.buffered_data)
         cntp2cntp_dists = dists[sampled_indices, :][:, sampled_indices]
         dists2cntp = dists[:, sampled_indices]
         self.pre_control_points = medoids

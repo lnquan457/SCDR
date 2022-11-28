@@ -77,13 +77,16 @@ class SimulatedStreamingData(Process):
         initial_num = 0
         if custom_seq is None:
             self.custom_seq = np.arange(0, self.n_samples, 1)
+            self.time_step_num = int(np.ceil(len(self.custom_seq) / self.stream_rate))
         else:
             if not isinstance(custom_seq[0], int):
                 initial_indices, stream_indices = custom_seq
                 self.custom_seq = np.concatenate([initial_indices, stream_indices])
                 initial_num = len(initial_indices)
+                self.time_step_num = int(np.ceil(len(stream_indices) / self.stream_rate)) + 1
             else:
                 self.custom_seq = custom_seq
+                self.time_step_num = int(np.ceil(len(self.custom_seq) / self.stream_rate))
 
         self.seq_label = None if self.targets is None else resort_label(self.targets[self.custom_seq])
 
