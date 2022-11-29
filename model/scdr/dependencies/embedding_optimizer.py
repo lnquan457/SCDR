@@ -3,8 +3,11 @@ import time
 
 import numpy as np
 import scipy
+from autograd import elementwise_grad
 
 from scipy import optimize
+
+from demo import my_nce_grads, nce_loss_single_ag
 from utils.loss_grads import nce_loss_single, nce_loss_grad
 from utils.umap_utils import find_ab_params
 
@@ -18,7 +21,7 @@ def initial_embedding_with_weighted_mean(neighbor_sims, neighbor_embeddings):
 class EmbeddingOptimizer:
     def __init__(self, local_move_thresh, bfgs_update_thresh, neg_num=50, min_dist=0.1, temperature=0.15,
                  skip_opt=False, timeout_thresh=5.0):
-        self.nce_opt_update_thresh = 10
+        self.nce_opt_update_thresh = 5
         self.__neg_num = neg_num
         self.__local_move_thresh = local_move_thresh
         self.__bfgs_update_thresh = bfgs_update_thresh
@@ -26,6 +29,8 @@ class EmbeddingOptimizer:
         self.__a, self.__b = find_ab_params(1.0, min_dist)
         self.skip_opt = skip_opt
         self.skip_optimizer = SkipOptimizer(bfgs_update_thresh, timeout_thresh) if skip_opt else None
+        self._nce_grads = nce_loss_grad
+        # self._nce_grads = None
 
     def update_local_move_thresh(self, new_thresh):
         self.__local_move_thresh = new_thresh
@@ -38,7 +43,7 @@ class EmbeddingOptimizer:
     def optimize_new_data_embedding(self, neighbor_sims, neighbor_embeddings, other_embeddings):
         initial_embedding = initial_embedding_with_weighted_mean(neighbor_sims, neighbor_embeddings)
         neg_embeddings = other_embeddings[random.sample(list(np.arange(other_embeddings.shape[0])), self.__neg_num)]
-        res = scipy.optimize.minimize(nce_loss_single, initial_embedding, method="BFGS", jac=None,
+        res = scipy.optimize.minimize(nce_loss_single, initial_embedding, method="BFGS", jac=self._nce_grads,
                                       args=(
                                           neighbor_embeddings, neg_embeddings, self.__a, self.__b, self.__temperature),
                                       options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
@@ -131,7 +136,7 @@ class EmbeddingOptimizer:
 
     def _nce_optimize_step(self, optimize_embedding, positive_embeddings, neg_embeddings):
         res = scipy.optimize.minimize(nce_loss_single, optimize_embedding,
-                                      method="BFGS", jac=None,
+                                      method="BFGS", jac=self._nce_grads,
                                       args=(positive_embeddings, neg_embeddings, self.__a, self.__b, self.__temperature),
                                       options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
         optimized_e = res.x

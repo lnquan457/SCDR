@@ -67,12 +67,14 @@ def nce_loss_grad(center_embedding, neighbor_embeddings, neg_embeddings, a, b, t
     # k*(1+m)
     total_umap_sims = np.concatenate([pos_umap_sims.T, np.repeat(neg_umap_sims, neighbor_embeddings.shape[0], 0)],
                                      axis=1) / t
+    total_umap_sims = np.exp(total_umap_sims)
     # k*(1+m), total_neg_umap_sims也可以直接使用模型训练时的平均值
     total_nce_sims = total_umap_sims / np.sum(total_umap_sims, axis=1)[:, np.newaxis]
-    pos_grads = -1 / t * (np.sum(total_nce_sims[:, 1:], axis=1) * umap_sim_grad(pos_dist, a, b)).T \
-                * norm_grad(center_embedding, neighbor_embeddings, pos_dist.T)
-    neg_grads = 1 / t * np.sum((total_nce_sims[:, 1:] * umap_sim_grad(neg_dist, a, b))[:, :, np.newaxis] *
-                               norm_grad(center_embedding, neg_embeddings, neg_dist.T)[np.newaxis, :, :], axis=1)
+    pos_grads = -np.sum(total_nce_sims[:, 1:], axis=1)[:, np.newaxis] *\
+                (umap_sim_grad(pos_dist, a, b).T * norm_grad(center_embedding, neighbor_embeddings, pos_dist.T)) / t
+    neg_grads = np.sum((total_nce_sims[:, 1:][:, :, np.newaxis] *
+                        (umap_sim_grad(neg_dist, a, b).T * norm_grad(center_embedding, neg_embeddings,
+                                                                     neg_dist.T))[np.newaxis, :, :]) / t, axis=1)
 
     return np.mean(pos_grads + neg_grads, axis=0)
 
@@ -88,14 +90,12 @@ def ce_loss_grad(center_embedding, neighbor_embeddings, high_sims, a, b, sigma=N
     return np.mean(grad_per, axis=0)
 
 
-@jit
 def umap_sim_grad(dist, a, b):
-    return -2 * a * b * np.power((1 + a * np.power(dist, 2 * b)), -2) * np.power(dist, 2 * b - 1)
+    return -2 * a * b * ((1 + a * (dist ** (2 * b))) ** -2) * (dist ** (2 * b - 1))
 
 
-@jit
 def norm_grad(pred, gt, dist):
-    return np.power(np.power(dist, 2), -0.5) * (pred - gt)
+    return (dist ** -1) * (pred - gt)
 
 
 def umap_loss_single(center_embedding, neighbor_embeddings, high_sims, a, b, sigma=None):
@@ -156,6 +156,7 @@ def nce_loss_single(center_embedding, neighbor_embeddings, neg_embeddings, a, b,
     # k*(1+m)
     total_umap_sims = np.concatenate([pos_umap_sims.T, np.repeat(neg_umap_sims, neighbor_embeddings.shape[0], 0)],
                                      axis=1) / t
+    total_umap_sims = np.exp(total_umap_sims)
     # k*1, total_neg_umap_sims也可以直接使用模型训练时的平均值
     pos_nce_sims = (total_umap_sims[:, 0]) / np.sum(total_umap_sims, axis=1)
 
@@ -198,7 +199,7 @@ def tsne_grad(center_embedding, high_sims, neighbor_embeddings, k):
     center_embedding = center_embedding[np.newaxis, :]
     dists = cdist(center_embedding, neighbor_embeddings) ** 2
     a = (1 + dists) ** -1
-    f = 1 / (1 + dists) ** (0.5 + k/10)
+    f = 1 / (1 + dists) ** (0.5 + k / 10)
     q = f / np.sum(f)
-    grad = (1 + k/5) * np.sum(a * (high_sims - q) * (center_embedding - neighbor_embeddings).T, axis=1)
+    grad = (1 + k / 5) * np.sum(a * (high_sims - q) * (center_embedding - neighbor_embeddings).T, axis=1)
     return grad
