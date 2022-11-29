@@ -449,12 +449,15 @@ class MyLocalOutlierFactor(LocalOutlierFactor):
         return -1 if scores < 0 else 1
 
     def my_score_samples(self, neighbors_indices_X, distances_X):
-        X_lrd = self._local_reachability_density(distances_X[np.newaxis, :], neighbors_indices_X[np.newaxis, :])
+        dist_k = self._distances_fit_X_[neighbors_indices_X, self.n_neighbors_ - 1]
+        reach_dist_array = np.maximum(distances_X, dist_k)
 
-        lrd_ratios_array = self._lrd[neighbors_indices_X] / X_lrd[:, np.newaxis]
+        X_lrd = 1.0 / (np.mean(reach_dist_array) + 1e-10)
+
+        lrd_ratios_array = self._lrd[neighbors_indices_X] / X_lrd
 
         # as bigger is better:
-        return -np.mean(lrd_ratios_array, axis=1)
+        return -np.mean(lrd_ratios_array)
 
 
 def cal_cluster_acc(cluster_labels, gt_labels):

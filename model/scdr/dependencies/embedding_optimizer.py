@@ -5,7 +5,7 @@ import numpy as np
 import scipy
 
 from scipy import optimize
-from utils.loss_grads import nce_loss_single
+from utils.loss_grads import nce_loss_single, nce_loss_grad
 from utils.umap_utils import find_ab_params
 
 

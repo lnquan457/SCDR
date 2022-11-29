@@ -190,4 +190,15 @@ def simple_nce_loss_grad(center_embedding, neighbor_embeddings, neg_embeddings, 
 
     pos_umap_sims = umap_sims[:, :neighbor_num]
     neg_umap_sims = umap_sims[:, neighbor_num:]
-    # grad_per =
+    # grad_per =\
+
+
+# @jit
+def tsne_grad(center_embedding, high_sims, neighbor_embeddings, k):
+    center_embedding = center_embedding[np.newaxis, :]
+    dists = cdist(center_embedding, neighbor_embeddings) ** 2
+    a = (1 + dists) ** -1
+    f = 1 / (1 + dists) ** (0.5 + k/10)
+    q = f / np.sum(f)
+    grad = (1 + k/5) * np.sum(a * (high_sims - q) * (center_embedding - neighbor_embeddings).T, axis=1)
+    return grad
