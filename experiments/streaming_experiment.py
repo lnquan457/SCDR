@@ -439,15 +439,12 @@ class StreamingExProcess(StreamingEx, Process):
 
     def _update_scdr_model(self):
         embeddings, infer_model, stream_dataset, cluster_indices = self.cdr_update_queue_set.embedding_queue.get()
-        self.model.update_scdr(infer_model, embeddings, stream_dataset)
+        total_embeddings, replace_model = self.model.update_scdr(infer_model, embeddings, stream_dataset, cluster_indices)
         # TODO: 对于模型更新期间接收到的数据，如何对其进行处理以保证其余模型更新后的嵌入结果保持一致
-        new_data_embeddings = self.model.embed_updating_collected_data()
-        total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)
-        # print("====update:", total_embeddings.shape[0])
-        self.model.stream_dataset.update_embeddings(total_embeddings)
-        self.model.update_thresholds(cluster_indices)
+
         self.pre_embedding = self.cur_embedding
-        self.save_embeddings_info(total_embeddings, custom_id="u{}".format(self.update_num), )
+        if replace_model:
+            self.save_embeddings_info(total_embeddings, custom_id="u{}".format(self.update_num), )
         self.cur_embedding = total_embeddings
         self.update_num += 1
         self.cdr_update_queue_set.WAITING_UPDATED_DATA.value = 0

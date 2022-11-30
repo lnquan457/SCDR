@@ -294,8 +294,8 @@ class DistributionChangeDetector:
 
 
 class EmbeddingQualitySupervisor:
-    def __init__(self, interval_seconds, manifold_change_num_thresh, bad_embedding_num_thresh, d_scale=None,
-                 e_thresh=None, data_reduction="mean", embedding_reduction="mean"):
+    def __init__(self, interval_seconds, manifold_change_num_thresh, bad_embedding_num_thresh, model_update_thresh,
+                 d_scale=None, e_thresh=None, data_reduction="mean", embedding_reduction="mean"):
         self.__last_update_time = None
         # 当新数据到最近流形中心的距离高于d_thresh时，就认为可能来自新的流形。d_thresh可以通过计算模型拟合过的数据到最近流形中心的平均距离得到
         self.__d_scale = d_scale
@@ -305,8 +305,10 @@ class EmbeddingQualitySupervisor:
         # manifold_change_num_thresh应该要小于bad_embedding_num_thresh，因为来自新的流形的数据对嵌入的可信度影响较大
         self.__manifold_change_num_thresh = manifold_change_num_thresh
         self.__bad_embedding_num_thresh = bad_embedding_num_thresh
+        self.__model_update_thresh = model_update_thresh
         self.__new_manifold_data_num = 0
         self.__bad_embedding_data_num = 0
+        self.__need_update_num = 0
         self._data_reduction = data_reduction
         self._embedding_reduction = embedding_reduction
 
@@ -329,7 +331,17 @@ class EmbeddingQualitySupervisor:
     def update_model_update_time(self, update_time):
         self.__last_update_time = update_time
 
-    def _judge_model_update(self):
+    def _judge_model_update(self, need_update):
+        if need_update:
+            self.__need_update_num += 1
+
+        if self.__need_update_num > self.__model_update_thresh:
+            self.__need_update_num = 0
+            return True
+
+        return False
+
+    def _judge_model_replace(self):
         # 当累积了指定数量的新的流形数据时，或者是累积了指定数量的嵌入质量差的数据时，就更新模型
         update = False
         if self.__last_update_time is not None and time.time() - self.__last_update_time >= self.__interval_seconds:
@@ -369,7 +381,7 @@ class EmbeddingQualitySupervisor:
             self.__new_manifold_data_num += 1
             manifold_change = True
 
-        return need_optimize, manifold_change, self._judge_model_update()
+        return need_optimize, manifold_change, self._judge_model_replace(), self._judge_model_update(manifold_change)
 
     def quality_record_2(self, data, embedding, knn_dists, neighbor_embeddings):
         manifold_change = False
@@ -395,7 +407,7 @@ class EmbeddingQualitySupervisor:
             self.__new_manifold_data_num += 1
             manifold_change = True
 
-        return need_optimize, manifold_change, self._judge_model_update()
+        return need_optimize, manifold_change, self._judge_model_replace()
 
     def quality_record(self, data, embedding, cluster_centers=None, neighbor_embeddings=None):
         manifold_change = False
@@ -417,7 +429,7 @@ class EmbeddingQualitySupervisor:
                 manifold_change = True
 
         # print("manifold change num: {} bad embedding num: {}".format(self.__new_manifold_data_num, self.__bad_embedding_data_num))
-        return need_optimize, manifold_change, self._judge_model_update()
+        return need_optimize, manifold_change, self._judge_model_replace()
 
 
 class MyLocalOutlierFactor(LocalOutlierFactor):

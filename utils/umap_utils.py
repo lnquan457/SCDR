@@ -185,8 +185,8 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
     sta = time.time()
     sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, np.mean(updated_knn_dists, axis=1), float(n_neighbors),
                                               local_connectivity=float(local_connectivity))
-    if apply_set_operations:
-        print("smooth knn", time.time() - sta)
+    # if apply_set_operations:
+    #     print("smooth knn", time.time() - sta)
 
     # 第二耗时，5%
     rows, cols, vals, dists = compute_membership_strengths(
@@ -212,7 +212,7 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
     if apply_set_operations:
         sta = time.time()
         result = apply_set(all_raw_knn_weights, result, set_op_mix_ratio, symmetric)
-        print("set apply", time.time() - sta)
+        # print("set apply", time.time() - sta)
 
     result.eliminate_zeros()
     return result, sigmas, rhos, all_raw_knn_weights

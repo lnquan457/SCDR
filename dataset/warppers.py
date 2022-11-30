@@ -330,24 +330,6 @@ class StreamingDatasetWrapper(DataSetWrapper):
         knn_distances = self._knn_manager.knn_dists if cut_num is None else self._knn_manager.knn_dists[:cut_num]
         knn_indices = self._knn_manager.knn_indices if cut_num is None else self._knn_manager.knn_indices[:cut_num]
 
-        # O(m*n*D)
-        sta = time.time()
-        # TODO: 这里是目前最耗时的，可以考虑近似方法
-        #
-
-        # if candidate_indices is None:
-        #     dists = cdist(new_data, total_data)
-        # else:
-        #     if self._dists2pre is None:
-        #         self._dists2pre = np.ones((1, total_data.shape[0])) * 1e7
-        #     else:
-        #         # self._dists2pre = self._dists2pre * 0 + 1e7
-        #         self._dists2pre = np.concatenate([self._dists2pre, [[1e7]]], axis=1)
-        #     dists = self._dists2pre
-        #     dists[0][candidate_indices] = candidate_dists
-        self.dist_t += time.time() - sta
-        # print("cdist", self.dist_t)
-
         neighbor_changed_indices = [pre_n_samples]
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
