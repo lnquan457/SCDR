@@ -262,7 +262,7 @@ def incremental_cdr_pipeline():
                     sta = time.time()
 
                     final_embedding = embedding_optimizer.optimize_new_data_embedding(
-                        stream_dataset.raw_knn_weights[-1],
+                        stream_dataset.raw_knn_weights[stream_dataset.get_n_samples()-1],
                         cur_neighbor_embeddings, experimenter.pre_embeddings)
                     final_embedding = final_embedding[np.newaxis, :]
 

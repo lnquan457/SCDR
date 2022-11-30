@@ -84,6 +84,7 @@ class SCDRParallel:
         self.embedding_update_time = 0
         self.quality_record_time = 0
         self.update_model_time = 0
+        self.update_count = 0
 
         self.debug = True
 
@@ -118,7 +119,7 @@ class SCDRParallel:
             # knn_indices, knn_dists = \
             #     self.knn_searcher_approx.search(self.n_neighbors, pre_embeddings, self.stream_dataset.get_total_data(),
             #                                     data_embeddings, data, pre_optimized, update)
-            knn_indices, knn_dists = \
+            knn_indices, knn_dists, candidate_indices, candidate_dists = \
                 self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
                                                   self.stream_dataset.get_total_data(),
                                                   self.fitted_data_num, data_embeddings, data, update)
@@ -134,9 +135,10 @@ class SCDRParallel:
             self.stream_dataset.add_new_data(data, None, labels, knn_indices, knn_dists)
 
             sta = time.time()
-            self.stream_dataset.update_knn_graph(pre_n_samples, data, None, update_similarity=False,
-                                                 symmetric=False)
-            self.knn_update_time += time.time() - sta
+            self.stream_dataset.update_knn_graph(pre_n_samples, data, None, candidate_indices, candidate_dists,
+                                                 update_similarity=False, symmetric=False)
+            if self.embedding_opt_time > 0:
+                self.knn_update_time += time.time() - sta
 
             sta = time.time()
             neighbor_embeddings = self._model_embeddings[knn_indices.squeeze()]
@@ -181,7 +183,7 @@ class SCDRParallel:
                 if OPTIMIZE_NEW_DATA_EMBEDDING:
                     sta = time.time()
                     data_embeddings = self.embedding_optimizer.optimize_new_data_embedding(
-                        self.stream_dataset.raw_knn_weights[-1],
+                        self.stream_dataset.raw_knn_weights[self.stream_dataset.get_n_samples()-1],
                         neighbor_embeddings, pre_embeddings)[np.newaxis, :]
                     self.embedding_opt_time += time.time() - sta
                 # =====================================================================================================
@@ -213,7 +215,8 @@ class SCDRParallel:
 
         sta = time.time()
         self.stream_dataset.update_cached_neighbor_similarities()
-        self.knn_update_time += time.time() - sta
+        if self.update_count > 0:
+            self.knn_update_time += time.time() - sta
         # 如果还有模型更新任务没有完成，此处应该阻塞等待
         sta = time.time()
         while self.model_update_queue_set.MODEL_UPDATING.value == 1:
@@ -226,6 +229,7 @@ class SCDRParallel:
             [self.stream_dataset, self.cluster_rep_data_sampler, self.fitted_data_num,
              self.stream_dataset.get_n_samples() - self.fitted_data_num, sample_indices])
         self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.UPDATE)
+        self.update_count += 1
         self.update_model_time += time.time() - sta
 
         # TODO: 使得模型更新和数据处理变成串行的

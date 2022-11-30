@@ -274,7 +274,7 @@ class StreamingANNSearchAnnoy:
         final_indices = candidate_indices[sorted_indices]
         final_dists = dists[sorted_indices]
 
-        return final_indices, final_dists
+        return final_indices, final_dists, candidate_indices, dists
 
     def search(self, k, pre_embeddings, pre_data, query_embeddings, query_data, optimized, update=False):
         update = update or (pre_embeddings.shape[0] - self._fitted_num) % self._update_iter == 0

@@ -18,7 +18,7 @@ from utils.constant_pool import ComponentInfo
 from utils.logger import InfoLogger
 from utils.math_utils import linear_search
 from utils.nn_utils import compute_knn_graph
-from utils.umap_utils import fuzzy_simplicial_set_partial
+from utils.umap_utils import fuzzy_simplicial_set_partial, simple_fuzzy
 
 
 def build_dataset(data_file_path, dataset_name, is_image, normalize_method, root_dir):
@@ -155,8 +155,9 @@ class DataSetWrapper(DataRepo):
     def update_transform(self, data_augment, epoch_num, is_image, train_dataset):
         # 更新transform，迭代时对邻居进行采样返回正例对
         train_dataset.update_transform(CDRDataTransform(epoch_num, self.similar_num, train_dataset, is_image,
-                                                        data_augment, self.n_neighbor, self.symmetric_nn_indices,
-                                                        self.symmetric_nn_weights))
+                                                        data_augment, self.n_neighbor,
+                                                        self.symmetric_nn_indices[:train_dataset.data_num],
+                                                        self.symmetric_nn_weights[:train_dataset.data_num]))
         train_num = train_dataset.data_num
 
         self.batch_num = math.floor(train_num / self.batch_size)
@@ -248,8 +249,16 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.__replaced_raw_weights = []
         self.__sigmas = None
         self.__rhos = None
+        self._concat_num = 1000
         self._tmp_neighbor_weights = np.ones((1, self.n_neighbor))
         self._device = device
+        self._dists2pre = None
+
+        self.dist_t = 0
+        self.update_t = 0
+        self.concat_t = 0
+        self.fuzzy_t = 0
+        self.get_t = 0
 
     def distance2prob(self, train_dataset, symmetric):
         # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
@@ -281,8 +290,9 @@ class StreamingDatasetWrapper(DataSetWrapper):
         return train_loader, train_num
 
     def update_data_loaders(self, epoch_nums, sampled_indices, multi=False):
-        self.train_dataset.transform.update(self.train_dataset, epoch_nums, self.symmetric_nn_indices,
-                                            self.symmetric_nn_weights)
+        self.train_dataset.transform.update(self.train_dataset, epoch_nums,
+                                            self.symmetric_nn_indices[:self.get_n_samples()],
+                                            self.symmetric_nn_weights[:self.get_n_samples()])
 
         train_loader = self._get_train_data_loader(self.train_dataset, sampled_indices)
         return train_loader, len(sampled_indices)
@@ -314,52 +324,91 @@ class StreamingDatasetWrapper(DataSetWrapper):
                                   drop_last=True, shuffle=False)
         return train_loader
 
-    def update_knn_graph(self, pre_n_samples, new_data, data_num_list, cut_num=None, update_similarity=True,
-                         symmetric=True):
-        total_data = self.get_total_data() if cut_num is None else self.get_total_data()[:cut_num]
+    def update_knn_graph(self, pre_n_samples, new_data, data_num_list, candidate_indices=None, candidate_dists=None,
+                         cut_num=None, update_similarity=True, symmetric=True):
+        # total_data = self.get_total_data() if cut_num is None else self.get_total_data()[:cut_num]
         knn_distances = self._knn_manager.knn_dists if cut_num is None else self._knn_manager.knn_dists[:cut_num]
         knn_indices = self._knn_manager.knn_indices if cut_num is None else self._knn_manager.knn_indices[:cut_num]
 
         # O(m*n*D)
-        dists = cdist(new_data, total_data)
+        sta = time.time()
+        # TODO: 这里是目前最耗时的，可以考虑近似方法
+        #
+
+        # if candidate_indices is None:
+        #     dists = cdist(new_data, total_data)
+        # else:
+        #     if self._dists2pre is None:
+        #         self._dists2pre = np.ones((1, total_data.shape[0])) * 1e7
+        #     else:
+        #         # self._dists2pre = self._dists2pre * 0 + 1e7
+        #         self._dists2pre = np.concatenate([self._dists2pre, [[1e7]]], axis=1)
+        #     dists = self._dists2pre
+        #     dists[0][candidate_indices] = candidate_dists
+        self.dist_t += time.time() - sta
+        # print("cdist", self.dist_t)
 
         neighbor_changed_indices = [pre_n_samples]
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
+        sta = time.time()
         self.__replaced_raw_weights = []
-        neighbor_changed_indices = self._knn_manager.update_previous_kNN(1, pre_n_samples, dists,
-                                                                         data_num_list, neighbor_changed_indices)
+        # neighbor_changed_indices = self._knn_manager.update_previous_kNN(1, pre_n_samples, dists,
+        #                                                                  data_num_list, neighbor_changed_indices)
+        neighbor_changed_indices = self._knn_manager.update_previous_kNN_simple(pre_n_samples, candidate_indices,
+                                                                                candidate_dists, neighbor_changed_indices)
         self.cur_neighbor_changed_indices = neighbor_changed_indices
+        if self.concat_t > 0:
+            self.update_t += time.time() - sta
+        # print("update", self.update_t)
 
+        sta = time.time()
         knn_changed_neighbor_meta = self._knn_manager.get_pre_neighbor_changed_positions()
         if len(knn_changed_neighbor_meta) > 0:
             changed_neighbor_sims = self.raw_knn_weights[knn_changed_neighbor_meta[:, 1]]
             self.__replaced_raw_weights = changed_neighbor_sims[:, -1] / np.sum(changed_neighbor_sims, axis=1)
+        self.get_t += time.time() - sta
+        # print("get", self.get_t)
 
-        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, self._tmp_neighbor_weights], axis=0)
-        self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(shape=1)])
-        self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(shape=1)])
-        self.__sigmas = np.concatenate([self.__sigmas, np.ones(1)])
-        self.__rhos = np.concatenate([self.__rhos, np.ones(1)])
+        sta = time.time()
+        # self.raw_knn_weights = np.concatenate([self.raw_knn_weights, self._tmp_neighbor_weights], axis=0)
+        # TODO: 这里的拼接也较为耗时，需要减少拼接次数
+        if pre_n_samples >= self.__sigmas.shape[0]:
+            self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((self._concat_num, self.n_neighbor))], axis=0)
+            self.__sigmas = np.concatenate([self.__sigmas, np.ones(self._concat_num)])
+            self.__rhos = np.concatenate([self.__rhos, np.ones(self._concat_num)])
+            self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(self._concat_num)])
+            self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(self._concat_num)])
+        self.concat_t += time.time() - sta
+        # print("concat", self.concat_t)
 
         if not update_similarity:
             cur_update_indices = [pre_n_samples]
         else:
             cur_update_indices = neighbor_changed_indices
 
-        umap_graph, cur_sigmas, cur_rhos, self.raw_knn_weights = \
-            fuzzy_simplicial_set_partial(knn_indices, knn_distances, self.raw_knn_weights, cur_update_indices,
-                                         apply_set_operations=symmetric, return_coo_results=symmetric)
-
-        self.__sigmas[cur_update_indices] = cur_sigmas
-        self.__rhos[cur_update_indices] = cur_rhos
-
-        if symmetric:
+        sta = time.time()
+        if not symmetric:
+            cur_sigmas, cur_rhos, updated_raw_knn_weights = \
+                simple_fuzzy(knn_indices[cur_update_indices], knn_distances[cur_update_indices])
+            self.raw_knn_weights[cur_update_indices] = updated_raw_knn_weights
+        else:
+            umap_graph, cur_sigmas, cur_rhos, self.raw_knn_weights[:self.get_n_samples()] = \
+                fuzzy_simplicial_set_partial(knn_indices, knn_distances, self.raw_knn_weights[:self.get_n_samples()],
+                                             cur_update_indices, apply_set_operations=symmetric,
+                                             return_coo_results=symmetric)
             updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, cur_update_indices)
 
             self.symmetric_nn_weights[cur_update_indices] = updated_symm_nn_weights
             self.symmetric_nn_indices[cur_update_indices] = updated_sym_nn_indices
+
+        if self.update_t > 0:
+            self.fuzzy_t += time.time() - sta
+        # print("fuzzy", self.fuzzy_t)
+
+        self.__sigmas[cur_update_indices] = cur_sigmas
+        self.__rhos[cur_update_indices] = cur_rhos
 
         if not update_similarity:
             self.__cached_neighbor_change_indices = \
@@ -369,10 +418,11 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
     def update_cached_neighbor_similarities(self):
         self.__cached_neighbor_change_indices = list(self.__cached_neighbor_change_indices)
-        umap_graph, sigmas, rhos, self.raw_knn_weights = \
+        umap_graph, sigmas, rhos, self.raw_knn_weights[:self.get_n_samples()] = \
             fuzzy_simplicial_set_partial(self._knn_manager.knn_indices, self._knn_manager.knn_dists,
-                                         self.raw_knn_weights,
+                                         self.raw_knn_weights[:self.get_n_samples()],
                                          self.__cached_neighbor_change_indices)
+
         updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, self.__cached_neighbor_change_indices)
 
         self.__sigmas[self.__cached_neighbor_change_indices] = sigmas
@@ -401,9 +451,9 @@ class StreamingDatasetWrapper(DataSetWrapper):
         old_rhos = self.__rhos[:old_n_samples]
         old_sigmas = self.__sigmas[:old_n_samples]
         dists = cdist(old_data, new_data)
-        normed_dists = dists-old_rhos[:, np.newaxis]
+        normed_dists = dists - old_rhos[:, np.newaxis]
         normed_dists[normed_dists < 0] = 0
-        total_relationships = np.exp(-normed_dists/old_sigmas[:, np.newaxis])
+        total_relationships = np.exp(-normed_dists / old_sigmas[:, np.newaxis])
 
         if reduction == "mean":
             relationships = np.mean(total_relationships, axis=1)
@@ -489,27 +539,48 @@ class KNNManager:
 
         return neighbor_changed_indices
 
-    @numba.jit
-    def _do_update(self, knn_indices, knn_dists, pre_neighbor_changed_meta, dists2pre_data, idx, indices,
-                   neighbor_changed_indices, pre_n_samples, symm):
-        for j in indices:
-            if j not in neighbor_changed_indices:
-                neighbor_changed_indices.append(j)
-            # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
-            insert_index = knn_dists.shape[1] - 1
-            while insert_index >= 0 and dists2pre_data[idx][j] <= knn_dists[j][insert_index]:
-                insert_index -= 1
+    def update_previous_kNN_simple(self, pre_n_samples, candidate_indices, candidate_dists,
+                                   neighbor_changed_indices=None, symm=True):
+        neighbor_changed_indices, self._pre_neighbor_changed_meta, self.knn_indices, self.knn_dists = \
+            _do_update(pre_n_samples, candidate_indices, candidate_dists, self.knn_indices, self.knn_dists,
+                       neighbor_changed_indices, symm)
+        self._pre_neighbor_changed_meta = np.array(self._pre_neighbor_changed_meta, dtype=int)
 
-            if symm and knn_indices[j][-1] not in neighbor_changed_indices:
-                neighbor_changed_indices.append(knn_indices[j][-1])
-
-            pre_neighbor_changed_meta.append(
-                [idx + pre_n_samples, j, insert_index + 1, self.knn_indices[j][-1]])
-            # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
-            arr_move_one(knn_dists[j], insert_index + 1, dists2pre_data[idx][j])
-            arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + idx)
+        return neighbor_changed_indices
 
 
+@jit(nopython=True)
+def _do_update(pre_n_samples, candidate_indices, candidate_dists, knn_indices, knn_dists, neighbor_changed_indices, symm=True):
+    pre_neighbor_changed_meta = []
+
+    for j, data_idx in enumerate(candidate_indices):
+        if knn_dists[data_idx][-1] <= candidate_dists[j]:
+            continue
+        # data_idx = candidate_indices[j]
+        if data_idx not in neighbor_changed_indices:
+            neighbor_changed_indices.append(data_idx)
+        # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
+        insert_index = knn_dists.shape[1] - 1
+        while insert_index >= 0 and candidate_dists[j] <= knn_dists[data_idx][insert_index]:
+            insert_index -= 1
+
+        if symm and knn_indices[data_idx][-1] not in neighbor_changed_indices:
+            neighbor_changed_indices.append(knn_indices[data_idx][-1])
+
+        pre_neighbor_changed_meta.append(
+            [pre_n_samples, data_idx, insert_index + 1, knn_indices[data_idx][-1]])
+        # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
+        # arr_move_one(knn_dists[data_idx], insert_index + 1, candidate_dists[j])
+        knn_dists[data_idx][insert_index + 2:] = knn_dists[data_idx][insert_index + 1:-1]
+        knn_dists[data_idx][insert_index + 1] = candidate_dists[j]
+        # arr_move_one(knn_indices[data_idx], insert_index + 1, pre_n_samples)
+        knn_indices[data_idx][insert_index + 2:] = knn_indices[data_idx][insert_index + 1:-1]
+        knn_indices[data_idx][insert_index + 1] = pre_n_samples
+
+    return neighbor_changed_indices, pre_neighbor_changed_meta, knn_indices, knn_dists
+
+
+# @jit
 def extract_csr(csr_graph, indices, norm=True):
     nn_indices = []
     nn_weights = []

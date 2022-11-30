@@ -160,16 +160,33 @@ smooth_t = 0
 member_t = 0
 
 
+def simple_fuzzy(updated_knn_indices, updated_knn_dists, local_connectivity=1.0, return_dists=False):
+    n_neighbors = updated_knn_indices.shape[1]
+
+    sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, np.mean(updated_knn_dists, axis=1), float(n_neighbors),
+                                              local_connectivity=float(local_connectivity))
+
+    # 第二耗时，5%
+    rows, cols, vals, dists = compute_membership_strengths(
+        updated_knn_indices, updated_knn_dists, sigmas, rhos, return_dists
+    )
+
+    return sigmas, rhos,  vals.reshape(updated_knn_indices.shape)
+
+
 def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_weights, update_indices,
                                  set_op_mix_ratio=1.0, local_connectivity=1.0, apply_set_operations=True,
-                                 symmetric="TSNE", return_dists=None, return_coo_results=True):
+                                 symmetric="TSNE", return_dists=False, return_coo_results=True):
     updated_knn_indices = all_knn_indices[update_indices]
     updated_knn_dists = all_knn_dists[update_indices].astype(np.float32)
     n_neighbors = all_knn_indices.shape[1]
     # 最耗时的！ 90+%
     # sigmas, rhos = smooth_knn_dist(updated_knn_dists, float(n_neighbors), local_connectivity=float(local_connectivity))
+    sta = time.time()
     sigmas, rhos = simplified_smooth_knn_dist(updated_knn_dists, np.mean(updated_knn_dists, axis=1), float(n_neighbors),
                                               local_connectivity=float(local_connectivity))
+    if apply_set_operations:
+        print("smooth knn", time.time() - sta)
 
     # 第二耗时，5%
     rows, cols, vals, dists = compute_membership_strengths(
@@ -193,7 +210,9 @@ def fuzzy_simplicial_set_partial(all_knn_indices, all_knn_dists, all_raw_knn_wei
     # TODO：这一段的代码是目前最耗时的
     # 这一步只在模型更新中是必要的
     if apply_set_operations:
+        sta = time.time()
         result = apply_set(all_raw_knn_weights, result, set_op_mix_ratio, symmetric)
+        print("set apply", time.time() - sta)
 
     result.eliminate_zeros()
     return result, sigmas, rhos, all_raw_knn_weights
