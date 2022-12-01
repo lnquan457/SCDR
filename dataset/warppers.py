@@ -89,12 +89,15 @@ class DataRepo:
         return np.mean(mean_per_data), np.std(mean_per_data)
 
     def add_new_data(self, data=None, embeddings=None, labels=None, knn_indices=None, knn_dists=None):
+        sta = time.time()
         if data is not None:
             if self._total_data is None:
                 self._total_data = data
             else:
-                self._total_data = np.concatenate([self._total_data, data], axis=0)
+                # self._total_data = np.concatenate([self._total_data, data], axis=0)
+                self._total_data = np.append(self._total_data, data, axis=0)
             self._total_n_samples += data.shape[0]
+        # print("add data:", time.time() - sta)
 
         if embeddings is not None:
             if self._total_embeddings is None:
@@ -445,6 +448,15 @@ class StreamingDatasetWrapper(DataSetWrapper):
             raise RuntimeError("'reduction' should be one of 'mean/max'")
 
         return 1 - relationships
+
+    def update_previous_info(self, pre_num, new_self):
+        self.symmetric_nn_indices[:pre_num] = new_self.symmetric_nn_indices[:pre_num]
+        self.symmetric_nn_weights[:pre_num] = new_self.symmetric_nn_weights[:pre_num]
+        self.__sigmas[:pre_num] = new_self.__sigmas[:pre_num]
+        self.__rhos[:pre_num] = new_self.__rhos[:pre_num]
+        # self._knn_manager.knn_indices[:pre_num] = new_self._knn_manager.knn_indices[:pre_num]
+        # self._knn_manager.knn_dists[:pre_num] = new_self._knn_manager.knn_dists[:pre_num]
+        self.raw_knn_weights[:pre_num] = new_self.raw_knn_weights[:pre_num]
 
 
 # 负责存储以及更新kNN

@@ -195,9 +195,11 @@ class StreamingEx:
         cache_flag, stream_data, stream_labels = self._cache_initial(stream_data, stream_labels)
         if cache_flag:
             self.pre_embedding = self.cur_embedding
+            if self.cur_time_step > 1:
+                self.model.stream_dataset.add_new_data(data=stream_data)
             sta = time.time()
             ret_embeddings = self.model.fit_new_data(stream_data, stream_labels)
-            if self.cur_time_step > 1:
+            if self.cur_time_step > 2:
                 self._key_time += time.time() - sta
 
             if ret_embeddings is not None:
@@ -439,7 +441,7 @@ class StreamingExProcess(StreamingEx, Process):
 
     def _update_scdr_model(self):
         embeddings, infer_model, stream_dataset, cluster_indices = self.cdr_update_queue_set.embedding_queue.get()
-        total_embeddings, replace_model = self.model.update_scdr(infer_model, embeddings, stream_dataset, cluster_indices)
+        total_embeddings, replace_model = self.model.update_scdr(infer_model, embeddings, stream_dataset)
         # TODO: 对于模型更新期间接收到的数据，如何对其进行处理以保证其余模型更新后的嵌入结果保持一致
 
         self.pre_embedding = self.cur_embedding

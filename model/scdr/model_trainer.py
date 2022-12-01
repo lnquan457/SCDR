@@ -321,6 +321,7 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 steady_constraints = self.stream_dataset.cal_old2new_relationship(old_n_samples=fitted_data_num)
                 self.pre_rep_data_info.append(steady_constraints)
                 embeddings = self.resume_train(self.finetune_epoch, self.pre_rep_data_info)
+                self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
                 self.model_finetune_time += time.time() - sta
 
             cluster_indices, rep_batch_nums, rep_data_indices, total_cluster_indices = \

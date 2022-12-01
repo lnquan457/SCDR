@@ -21,7 +21,8 @@ def initial_embedding_with_weighted_mean(neighbor_sims, neighbor_embeddings):
 class EmbeddingOptimizer:
     def __init__(self, local_move_thresh, bfgs_update_thresh, neg_num=50, min_dist=0.1, temperature=0.15,
                  skip_opt=False, timeout_thresh=5.0):
-        self.nce_opt_update_thresh = 5
+        # Todo: 后续应该修改成百分比
+        self.nce_opt_update_thresh = 2
         self.__neg_num = neg_num
         self.__local_move_thresh = local_move_thresh
         self.__bfgs_update_thresh = bfgs_update_thresh

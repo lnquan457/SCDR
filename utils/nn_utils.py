@@ -257,17 +257,21 @@ class StreamingANNSearchAnnoy:
         self._automatic_beta = automatic_beta
 
     def search_2(self, k, pre_embeddings, pre_data, fitted_num, query_embeddings, query_data, update=False):
-        update = update or (pre_embeddings.shape[0] - self._fitted_num) % self._update_iter == 0
+        update = update or (pre_embeddings.shape[0] - self._fitted_num) >= self._update_iter
         if update:
             self._build_annoy_index(pre_embeddings)
 
-        new_k = self._beta * k
+        if not self._automatic_beta:
+            new_k = self._beta * k
+        else:
+            new_k = 0.2 * np.sqrt(pre_embeddings.shape[0]) * k
+
         candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
         candidate_indices = np.array(candidate_indices, dtype=int)
-        candidate_data = pre_data[candidate_indices]
+
         if not update:
-            candidate_data = np.concatenate([candidate_data, pre_data[fitted_num:]], axis=0)
-            candidate_indices = np.concatenate([candidate_indices, np.arange(fitted_num, pre_data.shape[0])])
+            candidate_indices = np.union1d(candidate_indices, np.arange(fitted_num, pre_data.shape[0]))
+        candidate_data = pre_data[candidate_indices]
 
         dists = cdist(query_data, candidate_data).squeeze()
         sorted_indices = np.argsort(dists)[:k].astype(int)
