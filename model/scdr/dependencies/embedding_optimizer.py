@@ -33,6 +33,12 @@ class EmbeddingOptimizer:
         self._nce_grads = nce_loss_grad
         # self._nce_grads = None
 
+        self.pre_time = 0
+        self.mask_time = 0
+        self.mid_time = 0
+        self.update_time = 0
+        self.end_time = 0
+
     def update_local_move_thresh(self, new_thresh):
         self.__local_move_thresh = new_thresh
 
@@ -48,7 +54,13 @@ class EmbeddingOptimizer:
                                       args=(
                                           neighbor_embeddings, neg_embeddings, self.__a, self.__b, self.__temperature),
                                       options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
-        return res.x
+        optimized_e = res.x
+        update_step = optimized_e - initial_embedding
+        # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
+        update_step[update_step > self.nce_opt_update_thresh] = 0
+        update_step[update_step < -self.nce_opt_update_thresh] = 0
+        initial_embedding += update_step
+        return initial_embedding
 
     def update_old_data_embedding(self, new_data_embedding, old_embeddings, update_indices, knn_indices,
                                   knn_dists, corr_target_sims, anchor_positions, replaced_indices,
@@ -129,9 +141,23 @@ class EmbeddingOptimizer:
                 move = anchor_sims * (new_embeddings - total_embeddings[item])
                 total_embeddings[item] = total_embeddings[item] + move
             else:
-                total_embeddings[item] = self._nce_optimize_step(total_embeddings[item],
-                                                                 total_embeddings[corr_knn_indices[i]],
-                                                                 total_embeddings[neg_indices])
+                # sta = time.time()
+                # total_embeddings[item] = self._nce_optimize_step(total_embeddings[item],
+                #                                                  total_embeddings[corr_knn_indices[i]],
+                #                                                  total_embeddings[neg_indices])
+
+                res = scipy.optimize.minimize(nce_loss_single, total_embeddings[item],
+                                              method="BFGS", jac=self._nce_grads,
+                                              args=(total_embeddings[corr_knn_indices[i]], total_embeddings[neg_indices], self.__a, self.__b,
+                                                    self.__temperature),
+                                              options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
+                optimized_e = res.x
+                update_step = optimized_e - total_embeddings[item]
+                # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
+                update_step[update_step > self.nce_opt_update_thresh] = 0
+                update_step[update_step < -self.nce_opt_update_thresh] = 0
+                total_embeddings[item] += update_step
+                # return optimize_embedding
 
         return total_embeddings[update_indices]
 
@@ -160,6 +186,7 @@ class SkipOptimizer:
         self.skipped_data_indices = []
 
     def update_bfgs_thresh(self, new_thresh):
+        print("__bfgs_update_thresh", self.__bfgs_update_thresh)
         self.__bfgs_update_thresh = new_thresh
 
     def get_timeouts_indices(self):
@@ -172,6 +199,7 @@ class SkipOptimizer:
         return ret
 
     def skip(self, update_indices, knn_dists, local_move_mask):
+        # print(np.mean(knn_dists, axis=1))
         optimize_mask = np.mean(knn_dists, axis=1) < self.__bfgs_update_thresh
         embedding_update_mask = (local_move_mask + optimize_mask) > 0
         self.updated_data_indices = update_indices[embedding_update_mask]

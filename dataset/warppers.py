@@ -75,19 +75,6 @@ class DataRepo:
     def update_embeddings(self, new_embeddings):
         self._total_embeddings = new_embeddings
 
-    def get_data_neighbor_mean_std_dist(self):
-        mean_per_data = np.mean(self._knn_manager.knn_dists, axis=1)
-        return np.mean(mean_per_data), np.std(mean_per_data)
-
-    def get_embedding_neighbor_mean_std_dist(self):
-        pre_low_neighbor_embedding_dists = np.linalg.norm(self._total_embeddings[:, np.newaxis, :] - np.reshape(
-            self._total_embeddings[np.ravel(self._knn_manager.knn_indices)],
-            (self.get_n_samples(), self.n_neighbor, -1)), axis=-1)
-
-        mean_per_data = np.mean(pre_low_neighbor_embedding_dists, axis=1)
-
-        return np.mean(mean_per_data), np.std(mean_per_data)
-
     def add_new_data(self, data=None, embeddings=None, labels=None, knn_indices=None, knn_dists=None):
         sta = time.time()
         if data is not None:
@@ -256,12 +243,16 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self._tmp_neighbor_weights = np.ones((1, self.n_neighbor))
         self._device = device
         self._dists2pre = None
+        self._fitted_data_num = 0
 
         self.dist_t = 0
         self.update_t = 0
         self.concat_t = 0
         self.fuzzy_t = 0
         self.get_t = 0
+
+    def update_fitted_data_num(self, fitted_num):
+        self._fitted_data_num = fitted_num
 
     def distance2prob(self, train_dataset, symmetric):
         # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
@@ -342,7 +333,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # neighbor_changed_indices = self._knn_manager.update_previous_kNN(1, pre_n_samples, dists,
         #                                                                  data_num_list, neighbor_changed_indices)
         neighbor_changed_indices = self._knn_manager.update_previous_kNN_simple(pre_n_samples, candidate_indices,
-                                                                                candidate_dists, neighbor_changed_indices)
+                                                                                candidate_dists,
+                                                                                neighbor_changed_indices)
         self.cur_neighbor_changed_indices = neighbor_changed_indices
         if self.concat_t > 0:
             self.update_t += time.time() - sta
@@ -360,7 +352,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # self.raw_knn_weights = np.concatenate([self.raw_knn_weights, self._tmp_neighbor_weights], axis=0)
         # TODO: 这里的拼接也较为耗时，需要减少拼接次数
         if pre_n_samples >= self.__sigmas.shape[0]:
-            self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((self._concat_num, self.n_neighbor))], axis=0)
+            self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((self._concat_num, self.n_neighbor))],
+                                                  axis=0)
             self.__sigmas = np.concatenate([self.__sigmas, np.ones(self._concat_num)])
             self.__rhos = np.concatenate([self.__rhos, np.ones(self._concat_num)])
             self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(self._concat_num)])
@@ -458,6 +451,20 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # self._knn_manager.knn_dists[:pre_num] = new_self._knn_manager.knn_dists[:pre_num]
         self.raw_knn_weights[:pre_num] = new_self.raw_knn_weights[:pre_num]
 
+    def get_data_neighbor_mean_std_dist(self):
+        mean_per_data = np.mean(self._knn_manager.knn_dists[:self._fitted_data_num], axis=1)
+        return np.mean(mean_per_data), np.std(mean_per_data)
+
+    def get_embedding_neighbor_mean_std_dist(self):
+        pre_low_neighbor_embedding_dists = \
+            np.linalg.norm(self._total_embeddings[:self._fitted_data_num, np.newaxis, :] - np.reshape(
+                self._total_embeddings[np.ravel(self._knn_manager.knn_indices[:self._fitted_data_num])],
+                (self._fitted_data_num, self.n_neighbor, -1)), axis=-1)
+
+        mean_per_data = np.mean(pre_low_neighbor_embedding_dists, axis=1)
+
+        return np.mean(mean_per_data), np.std(mean_per_data)
+
 
 # 负责存储以及更新kNN
 class KNNManager:
@@ -544,7 +551,8 @@ class KNNManager:
 
 
 @jit(nopython=True)
-def _do_update(pre_n_samples, candidate_indices, candidate_dists, knn_indices, knn_dists, neighbor_changed_indices, symm=True):
+def _do_update(pre_n_samples, candidate_indices, candidate_dists, knn_indices, knn_dists, neighbor_changed_indices,
+               symm=True):
     pre_neighbor_changed_meta = []
 
     for j, data_idx in enumerate(candidate_indices):

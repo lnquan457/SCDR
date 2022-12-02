@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 
 from model.scdr.dependencies.cdr_experiment import CDRsExperiments
 from dataset.warppers import StreamingDatasetWrapper
+from model.scdr.scdr_parallel import _sample_training_data
 from utils.constant_pool import *
 from utils.metrics_tool import MetricProcess
 from utils.queue_set import ModelUpdateQueueSet
@@ -289,6 +290,8 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
         SCDRTrainer.__init__(self, model, dataset_name, configs, result_save_dir, config_path, device, log_path)
         Process.__init__(self, name="SCDR模型更新进程")
         self.model_update_queue_set = model_update_queue_set
+        self._min_training_num = 100
+        self._old_manifold_sample_rate = 0.5
         self.update_count = 0
 
         self.clustering_sample_time = 0
@@ -315,9 +318,19 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 stream_dataset, rep_data_sampler, ckpt_path = training_info
                 embeddings = self.first_train(stream_dataset, ckpt_path)
             else:
-                self.stream_dataset, rep_data_sampler, fitted_data_num, cur_data_num, sample_indices = training_info
+                stream_dataset, rep_data_sampler, fitted_data_num, cur_data_num, _is_new_manifold = training_info
+                # print("fitted num", fitted_data_num)
                 sta = time.time()
-                self.prepare_resume(fitted_data_num, cur_data_num, self.finetune_epoch, sample_indices)
+                pre_num = self.pre_embeddings.shape[0]
+                stream_dataset.update_previous_info(pre_num, self.stream_dataset)
+                self.stream_dataset = stream_dataset
+                self.stream_dataset.update_cached_neighbor_similarities()
+                n_samples = self.stream_dataset.get_n_samples()
+                sample_indices = _sample_training_data(pre_num, n_samples,
+                                                       _is_new_manifold[pre_num:n_samples],
+                                                       self._min_training_num, self._old_manifold_sample_rate)
+
+                self.prepare_resume(fitted_data_num, len(sample_indices), self.finetune_epoch, sample_indices)
                 steady_constraints = self.stream_dataset.cal_old2new_relationship(old_n_samples=fitted_data_num)
                 self.pre_rep_data_info.append(steady_constraints)
                 embeddings = self.resume_train(self.finetune_epoch, self.pre_rep_data_info)

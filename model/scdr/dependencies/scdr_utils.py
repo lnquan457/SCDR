@@ -326,6 +326,7 @@ class EmbeddingQualitySupervisor:
         self.__d_scale = [low, high]
 
     def _update_e_thresh(self, new_e_thresh):
+        print("new_e_thresh", new_e_thresh)
         self.__e_thresh = new_e_thresh
 
     def update_model_update_time(self, update_time):
@@ -368,13 +369,14 @@ class EmbeddingQualitySupervisor:
         else:
             embedding_dist = np.max(cdist(embedding, neighbor_embeddings))
         if embedding_dist >= self.__e_thresh:
+            # print(embedding_dist, " --", self.__e_thresh)
             self.__bad_embedding_data_num += 1
             need_optimize = True
 
         if pre_data is not None:
             sta = time.time()
             self._lof.fit(pre_data)
-            print("fit time", time.time() - sta)
+            # print("fit time", time.time() - sta)
         # label = self._lof.predict(data)
         label = self._lof.predict_novel(knn_indices.squeeze(), knn_dists.squeeze())
         if label == -1:

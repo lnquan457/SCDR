@@ -271,6 +271,7 @@ class StreamingANNSearchAnnoy:
 
         if not update:
             candidate_indices = np.union1d(candidate_indices, np.arange(fitted_num, pre_data.shape[0]))
+        # InfoLogger.info(candidate_indices)
         candidate_data = pre_data[candidate_indices]
 
         dists = cdist(query_data, candidate_data).squeeze()
