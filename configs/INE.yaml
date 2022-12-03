@@ -9,7 +9,7 @@ exp_params:
   vis_iter: 100
   save_iter: 100000
   eval_iter: 1000
-  make_animation: True
+  make_animation: False
 
 method_params:
   n_neighbors: 10

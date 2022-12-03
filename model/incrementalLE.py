@@ -1,3 +1,5 @@
+import time
+
 import h5py
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -21,6 +23,7 @@ class kNNBasedIncrementalMethods:
         self.stream_dataset = DataRepo(n_neighbors)
         self.pre_embeddings = None
         self.trained = False
+        self.time_cost = 0
 
     def _update_kNN(self, new_data):
         # 1. 计算新数据的kNN
@@ -65,7 +68,9 @@ class kNNBasedIncrementalMethods:
             self.trained = True
             self._first_train(self.stream_dataset.get_total_data())
         else:
+            sta = time.time()
             self._incremental_embedding(x)
+            self.time_cost += time.time() - sta
 
         return self.pre_embeddings
 
@@ -78,12 +83,19 @@ class kNNBasedIncrementalMethods:
         else:
             for i, item in enumerate(x):
                 self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
+                sta = time.time()
                 self._incremental_embedding(item)
+                self.time_cost += time.time() - sta
 
         return self.pre_embeddings
 
     def _incremental_embedding(self, new_data):
         pass
+
+    def ending(self):
+        output = "Time Cost: %.4f" % self.time_cost
+        print(output)
+        return output
 
 
 class IncrementalLE(SpectralEmbedding, kNNBasedIncrementalMethods):

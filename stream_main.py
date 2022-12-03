@@ -140,9 +140,9 @@ if __name__ == '__main__':
     custom_indices_training(custom_indices_path)
 
     # suffix_list = ["TI", "FV", "TV"]
+    # suffix_list = ["TI", "TV"]
     # for item in suffix_list:
     #     custom_indices_path = os.path.join(args.indices_dir, "{}_{}.npy".format(cfg.exp_params.dataset, item))
-    #
     #     for i in range(1):
-    #         cfg.exp_params.make_animation = i == 0
+    #         # cfg.exp_params.make_animation = i == 0
     #         custom_indices_training(custom_indices_path)

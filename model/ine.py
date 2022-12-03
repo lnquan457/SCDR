@@ -1,3 +1,5 @@
+import time
+
 import h5py
 import numpy as np
 import scipy.optimize
@@ -84,8 +86,8 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
         # print("opt x:", res.x)
         if np.abs(res.x[0] - initial_embedding[0]) > self._update_thresh \
                 or np.abs(res.x[1] - initial_embedding[1]) > self._update_thresh:
-            print("initial:", initial_embedding)
-            print(new_data_prob)
+            # print("initial:", initial_embedding)
+            # print(new_data_prob)
             new_embeddings = initial_embedding[np.newaxis, :]
         else:
             new_embeddings = res.x[np.newaxis, :]
@@ -154,9 +156,6 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
             neighbors=neighbors_nn,
             skip_num_points=skip_num_points,
         )
-
-    def ending(self):
-        pass
 
 
 def my_joint_probabilities_nn(distances, desired_perplexity):

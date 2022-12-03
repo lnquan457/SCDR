@@ -256,7 +256,7 @@ class StreamingANNSearchAnnoy:
         self._inferred_data = None
         self._automatic_beta = automatic_beta
 
-    def search_2(self, k, pre_embeddings, pre_data, fitted_num, query_embeddings, query_data, update=False):
+    def search_2(self, k, pre_embeddings, pre_data, query_embeddings, query_data, update=False):
         update = update or (pre_embeddings.shape[0] - self._fitted_num) >= self._update_iter
         if update:
             self._build_annoy_index(pre_embeddings)
@@ -270,7 +270,7 @@ class StreamingANNSearchAnnoy:
         candidate_indices = np.array(candidate_indices, dtype=int)
 
         if not update:
-            candidate_indices = np.union1d(candidate_indices, np.arange(fitted_num, pre_data.shape[0]))
+            candidate_indices = np.union1d(candidate_indices, np.arange(self._fitted_num, pre_data.shape[0]))
         # InfoLogger.info(candidate_indices)
         candidate_data = pre_data[candidate_indices]
 

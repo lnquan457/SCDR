@@ -68,7 +68,7 @@ class StreamingEx:
         self.vis_iter = cfg.exp_params.vis_iter
         self.save_embedding_iter = cfg.exp_params.save_iter
         # self._eval_nums = None
-        self._eval_nums = 2
+        self._eval_nums = 100
         self._eval_iter = cfg.exp_params.eval_iter
         self.log_path = log_path
         self.result_save_dir = result_save_dir
@@ -195,7 +195,7 @@ class StreamingEx:
         cache_flag, stream_data, stream_labels = self._cache_initial(stream_data, stream_labels)
         if cache_flag:
             self.pre_embedding = self.cur_embedding
-            if self.cur_time_step > 1:
+            if self.cur_time_step > 1 and isinstance(self.model, SCDRParallel):
                 self.model.stream_dataset.add_new_data(data=stream_data)
             sta = time.time()
             ret_embeddings = self.model.fit_new_data(stream_data, stream_labels)
@@ -276,6 +276,10 @@ class StreamingEx:
 
         if isinstance(self.model, SCDRParallel):
             self.model.save_model()
+
+        ret = self.model.ending()
+        if self.log is not None:
+            self.log.write(ret + "\n")
 
         end_time = time.time()
         output = "Key Cost Time: %.4f" % self._key_time
@@ -464,7 +468,5 @@ class StreamingExProcess(StreamingEx, Process):
 
         # 结束模型更新进程
         self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
-        ret = self.model.ending()
-        if self.log is not None:
-            self.log.write(ret + "\n")
+
         super().train_end()

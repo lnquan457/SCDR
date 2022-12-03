@@ -13,8 +13,8 @@ from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet
 from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, DistributionChangeDetector, ClusterRepDataSampler, \
     EmbeddingQualitySupervisor
 
-OPTIMIZE_NEW_DATA_EMBEDDING = True
-OPTIMIZE_NEIGHBORS = True
+OPTIMIZE_NEW_DATA_EMBEDDING = False
+OPTIMIZE_NEIGHBORS = False
 
 
 def _sample_training_data(fitted_data_num, n_samples, _is_new_manifold, min_num, sample_rate):
@@ -46,7 +46,7 @@ class SCDRParallel:
         # 用于确定何时要更新模型，1）新的流形出现；2）模型对旧流形数据的嵌入质量太低；3）长时间没有更新；
         self.model_update_intervals = 6000
         # TODO: 这个过程中，保持的knn可能是不对的，在之后也无法得到修正。所以这个值不能设置的太小了。
-        self.model_update_num_thresh = 100
+        self.model_update_num_thresh = 50
         self.manifold_change_num_thresh = 200
         self.bad_embedding_num_thresh = 400
 
@@ -155,7 +155,7 @@ class SCDRParallel:
             knn_indices, knn_dists, candidate_indices, candidate_dists = \
                 self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
                                                   self.stream_dataset.get_total_data()[:-1],
-                                                  self.current_model_fitted_num, data_embeddings, data, update)
+                                                  data_embeddings, data, update)
             knn_indices = knn_indices[np.newaxis, :]
             knn_dists = knn_dists[np.newaxis, :]
 
@@ -170,9 +170,11 @@ class SCDRParallel:
 
             if self._record_time:
                 sta = time.time()
-            self.stream_dataset.update_knn_graph(pre_n_samples, data, None, candidate_indices, candidate_dists,
-                                                 update_similarity=False, symmetric=False)
-            if self._record_time and self.embedding_opt_time > 0:
+            # if OPTIMIZE_NEIGHBORS:    # Todo: 会有bug，数据对不上
+            if True:
+                self.stream_dataset.update_knn_graph(pre_n_samples, data, None, candidate_indices, candidate_dists,
+                                                     update_similarity=False, symmetric=False)
+            if self._record_time and self.model_infer_time > 0:
                 self.knn_update_time += time.time() - sta
 
             if self._record_time:

@@ -142,22 +142,9 @@ class EmbeddingOptimizer:
                 total_embeddings[item] = total_embeddings[item] + move
             else:
                 # sta = time.time()
-                # total_embeddings[item] = self._nce_optimize_step(total_embeddings[item],
-                #                                                  total_embeddings[corr_knn_indices[i]],
-                #                                                  total_embeddings[neg_indices])
-
-                res = scipy.optimize.minimize(nce_loss_single, total_embeddings[item],
-                                              method="BFGS", jac=self._nce_grads,
-                                              args=(total_embeddings[corr_knn_indices[i]], total_embeddings[neg_indices], self.__a, self.__b,
-                                                    self.__temperature),
-                                              options={'gtol': 1e-5, 'disp': False, 'return_all': False, 'eps': 1e-10})
-                optimized_e = res.x
-                update_step = optimized_e - total_embeddings[item]
-                # TODO:不像参数化方法，这种非参方法对NCE损失的鲁棒性比较差
-                update_step[update_step > self.nce_opt_update_thresh] = 0
-                update_step[update_step < -self.nce_opt_update_thresh] = 0
-                total_embeddings[item] += update_step
-                # return optimize_embedding
+                total_embeddings[item] = self._nce_optimize_step(total_embeddings[item],
+                                                                 total_embeddings[corr_knn_indices[i]],
+                                                                 total_embeddings[neg_indices])
 
         return total_embeddings[update_indices]
 
