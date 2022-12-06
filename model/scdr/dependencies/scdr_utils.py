@@ -350,7 +350,7 @@ class EmbeddingQualitySupervisor:
 
         return update
 
-    def quality_record_lof(self, data, embedding, neighbor_embeddings, knn_indices, knn_dists, pre_data=None):
+    def quality_record_lof(self, embedding, neighbor_embeddings, knn_indices, knn_dists, pre_data=None):
         manifold_change = False
         need_optimize = False
 
@@ -376,6 +376,20 @@ class EmbeddingQualitySupervisor:
 
         return need_optimize, manifold_change, self._judge_model_replace(), self._judge_model_update(manifold_change)
 
+    def quality_record_simple(self, knn_indices, knn_dists, pre_data=None):
+        manifold_change = False
+
+        if pre_data is not None:
+            # self._lof.fit(pre_data)
+            self._lof.my_fit(*pre_data)
+
+        label = self._lof.predict_novel(knn_indices.squeeze(), knn_dists.squeeze())
+        if label == -1:
+            self.__new_manifold_data_num += 1
+            manifold_change = True
+
+        return manifold_change, manifold_change, self._judge_model_replace(), self._judge_model_update(manifold_change)
+
 
 class MyLocalOutlierFactor(LocalOutlierFactor):
     def __init__(
@@ -394,7 +408,7 @@ class MyLocalOutlierFactor(LocalOutlierFactor):
         LocalOutlierFactor.__init__(self, n_neighbors, algorithm=algorithm, leaf_size=leaf_size, metric=metric, p=p,
                                     metric_params=metric_params, contamination=contamination, novelty=novelty,
                                     n_jobs=n_jobs)
-        self._valid_rate = 0.3
+        self._valid_rate = 0.5
 
     def predict_novel(self, nn_indices, nn_dists):
         valid_indices = np.where(nn_indices < self.n_samples_fit_)[0]
@@ -415,6 +429,29 @@ class MyLocalOutlierFactor(LocalOutlierFactor):
 
         # as bigger is better:
         return -np.mean(lrd_ratios_array)
+
+    def my_fit(self, knn_indices, knn_dists, fitted_num):
+        self.n_samples_fit_ = fitted_num
+        self._distances_fit_X_ = knn_dists
+        self.n_neighbors_ = knn_indices.shape[1]
+        self._lrd = self._local_reachability_density(
+            knn_dists, knn_indices
+        )
+        lrd_ratios_array = (
+            self._lrd[knn_indices] / self._lrd[:, np.newaxis]
+        )
+
+        self.negative_outlier_factor_ = -np.mean(lrd_ratios_array[:fitted_num], axis=1)
+
+        if self.contamination == "auto":
+            # inliers score around -1 (the higher, the less abnormal).
+            self.offset_ = -1.5
+        else:
+            self.offset_ = np.percentile(
+                self.negative_outlier_factor_, 100.0 * self.contamination
+            )
+
+        return self
 
 
 def cal_cluster_acc(cluster_labels, gt_labels):

@@ -245,7 +245,7 @@ class StreamingANNSearchKD:
 
 
 class StreamingANNSearchAnnoy:
-    def __init__(self, beta=10, update_iter=1000, automatic_beta=True):
+    def __init__(self, beta=10, update_iter=800, automatic_beta=True):
         self._searcher = None
         self._beta = beta
         self._update_iter = update_iter
@@ -265,7 +265,7 @@ class StreamingANNSearchAnnoy:
         if not self._automatic_beta:
             new_k = self._beta * k
         else:
-            new_k = int(0.2 * np.sqrt(pre_data.shape[0]) * k)
+            new_k = int(0.15 * np.sqrt(pre_data.shape[0]) * k)
 
         candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
         candidate_indices = np.array(candidate_indices, dtype=int)

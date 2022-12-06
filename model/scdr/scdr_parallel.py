@@ -2,6 +2,7 @@ import os.path
 import time
 
 import numpy as np
+import scipy
 import torch
 from scipy.spatial.distance import cdist
 
@@ -95,7 +96,7 @@ class SCDRParallel:
         self._last_update_meta = None
         # 新数据是否来自新的流形，以及其嵌入是否经过优化
         self._is_new_manifold = []
-        self._is_embedding_optimized = None
+        # self._is_embedding_optimized = None
 
         self.whole_time = 0
         self.knn_cal_time = 0
@@ -152,8 +153,7 @@ class SCDRParallel:
             knn_indices, knn_dists, candidate_indices, candidate_dists = \
                 self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
                                                   self.stream_dataset.get_total_data()[:-1],
-                                                  data_embeddings, data, self.current_model_fitted_num,
-                                                  update)
+                                                  data_embeddings, data, self.current_model_fitted_num, update)
             knn_indices = knn_indices[np.newaxis, :]
             knn_dists = knn_dists[np.newaxis, :]
 
@@ -174,22 +174,30 @@ class SCDRParallel:
             if self._record_time and self.embedding_update_time > 0:
                 self.knn_update_time += time.time() - sta
 
-            if self._record_time:
-                sta = time.time()
-            neighbor_embeddings = self._model_embeddings[knn_indices.squeeze()]
-            if self._record_time:
-                self.model_infer_time += time.time() - sta
+            if update:
+                fit_data = [self.stream_dataset.get_knn_indices(), self.stream_dataset.get_knn_dists(), self.current_model_fitted_num]
+                # fit_data = self.stream_dataset.get_total_data()[:self.current_model_fitted_num]
+            else:
+                fit_data = None
+
+            neighbor_embeddings = None
+            # if self._record_time:
+            #     sta = time.time()
+            # neighbor_embeddings = self._model_embeddings[knn_indices.squeeze()]
+            # if self._record_time:
+            #     self.model_infer_time += time.time() - sta
 
             if self._record_time:
                 sta = time.time()
+            # p_need_optimize, manifold_change, need_replace_model, need_update_model = \
+            #     self.embedding_quality_supervisor.quality_record_lof(data_embeddings, neighbor_embeddings,
+            #                                                          knn_indices, knn_dists, fit_data)
 
-            fit_data = self.stream_dataset.get_total_data()[:self.current_model_fitted_num] if update else None
             p_need_optimize, manifold_change, need_replace_model, need_update_model = \
-                self.embedding_quality_supervisor.quality_record_lof(data, data_embeddings, neighbor_embeddings,
-                                                                     knn_indices, knn_dists, fit_data)
+                self.embedding_quality_supervisor.quality_record_simple(knn_indices, knn_dists, fit_data)
 
             self._is_new_manifold.append(manifold_change)
-            self._is_embedding_optimized = np.append(self._is_embedding_optimized, p_need_optimize)
+            # self._is_embedding_optimized = np.append(self._is_embedding_optimized, p_need_optimize)
             # print(p_need_optimize)
             if self._record_time:
                 self.quality_record_time += time.time() - sta
@@ -286,11 +294,11 @@ class SCDRParallel:
 
     def _send_update_signal(self):
 
-        sta = time.time()
-        acc_knn_indices, _ = compute_knn_graph(self.stream_dataset.get_total_data(), None, self.n_neighbors, None)
-        acc = np.ravel(self.stream_dataset.get_knn_indices()) == np.ravel(acc_knn_indices)
-        print("kNN acc:", np.sum(acc) / len(acc))
-        self.whole_time -= time.time() - sta
+        # sta = time.time()
+        # acc_knn_indices, _ = compute_knn_graph(self.stream_dataset.get_total_data(), None, self.n_neighbors, None)
+        # acc = np.ravel(self.stream_dataset.get_knn_indices()) == np.ravel(acc_knn_indices)
+        # print("kNN acc:", np.sum(acc) / len(acc))
+        # self.whole_time -= time.time() - sta
 
         pre_fitted_num = self.fitted_data_num
         self.fitted_data_num = self.stream_dataset.get_n_samples()
@@ -354,7 +362,7 @@ class SCDRParallel:
         self.stream_dataset.add_new_data(embeddings=embeddings)
         self.model_update_queue_set.INITIALIZING.value = False
         self.model_just_replaced = True
-        self._is_embedding_optimized = np.zeros(self.fitted_data_num).astype(bool)
+        # self._is_embedding_optimized = np.zeros(self.fitted_data_num).astype(bool)
         return cluster_indices
 
     def _initial_embedding_optimizer_and_quality_supervisor(self):
