@@ -245,7 +245,7 @@ class StreamingANNSearchKD:
 
 
 class StreamingANNSearchAnnoy:
-    def __init__(self, beta=10, update_iter=500, automatic_beta=False):
+    def __init__(self, beta=10, update_iter=1000, automatic_beta=True):
         self._searcher = None
         self._beta = beta
         self._update_iter = update_iter
@@ -256,22 +256,23 @@ class StreamingANNSearchAnnoy:
         self._inferred_data = None
         self._automatic_beta = automatic_beta
 
-    def search_2(self, k, pre_embeddings, pre_data, query_embeddings, query_data, update=False):
-        update = update or (pre_embeddings.shape[0] - self._fitted_num) >= self._update_iter
+    def search_2(self, k, pre_embeddings, pre_data, query_embeddings, query_data, fitted_num, update=False):
         if update:
+            self._build_annoy_index(pre_embeddings[:fitted_num])
+        elif (pre_embeddings.shape[0] - self._fitted_num) >= self._update_iter:
             self._build_annoy_index(pre_embeddings)
 
         if not self._automatic_beta:
             new_k = self._beta * k
         else:
-            new_k = 0.2 * np.sqrt(pre_embeddings.shape[0]) * k
+            new_k = int(0.2 * np.sqrt(pre_data.shape[0]) * k)
 
         candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
         candidate_indices = np.array(candidate_indices, dtype=int)
 
         if not update:
-            candidate_indices = np.union1d(candidate_indices, np.arange(self._fitted_num, pre_data.shape[0]))
-        # InfoLogger.info(candidate_indices)
+            candidate_indices = np.union1d(candidate_indices, np.arange(self._fitted_num, pre_data.shape[0]).astype(int))
+
         candidate_data = pre_data[candidate_indices]
 
         dists = cdist(query_data, candidate_data).squeeze()

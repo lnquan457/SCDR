@@ -95,7 +95,7 @@ class SCDRParallel:
         self._last_update_meta = None
         # 新数据是否来自新的流形，以及其嵌入是否经过优化
         self._is_new_manifold = []
-        self._is_embedding_optimized = []
+        self._is_embedding_optimized = None
 
         self.whole_time = 0
         self.knn_cal_time = 0
@@ -148,14 +148,12 @@ class SCDRParallel:
             if self.model_just_replaced:
                 update = True
                 self.model_just_replaced = False
-            # pre_optimized = self._is_embedding_optimized[-1] if len(self._is_embedding_optimized) > 0 else None
-            # knn_indices, knn_dists = \
-            #     self.knn_searcher_approx.search(self.n_neighbors, pre_embeddings, self.stream_dataset.get_total_data(),
-            #                                     data_embeddings, data, pre_optimized, update)
+
             knn_indices, knn_dists, candidate_indices, candidate_dists = \
                 self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
                                                   self.stream_dataset.get_total_data()[:-1],
-                                                  data_embeddings, data, update)
+                                                  data_embeddings, data, self.current_model_fitted_num,
+                                                  update)
             knn_indices = knn_indices[np.newaxis, :]
             knn_dists = knn_dists[np.newaxis, :]
 
@@ -184,19 +182,14 @@ class SCDRParallel:
 
             if self._record_time:
                 sta = time.time()
-            # p_need_optimize, manifold_change, need_update_model = \
-            #     self.embedding_quality_supervisor.quality_record(data, data_embeddings, self.pre_cluster_centers,
-            #                                                      neighbor_embeddings)
-            # p_need_optimize, manifold_change, need_update_model = \
-            #     self.embedding_quality_supervisor.quality_record_2(data, data_embeddings, knn_dists,
-            #                                                        neighbor_embeddings)
+
             fit_data = self.stream_dataset.get_total_data()[:self.current_model_fitted_num] if update else None
             p_need_optimize, manifold_change, need_replace_model, need_update_model = \
                 self.embedding_quality_supervisor.quality_record_lof(data, data_embeddings, neighbor_embeddings,
                                                                      knn_indices, knn_dists, fit_data)
 
             self._is_new_manifold.append(manifold_change)
-            self._is_embedding_optimized.append(p_need_optimize)
+            self._is_embedding_optimized = np.append(self._is_embedding_optimized, p_need_optimize)
             # print(p_need_optimize)
             if self._record_time:
                 self.quality_record_time += time.time() - sta
@@ -224,23 +217,7 @@ class SCDRParallel:
                     print("replace model")
                     if self._record_time:
                         sta = time.time()
-                    # Todo: 这里进行替换时，不一定是最新的模型
-                    newest_model, embeddings = self._last_update_meta
-                    self.infer_model = newest_model
-                    self.infer_model = self.infer_model.to(self.device)
-                    # 最简单的方式就是直接使用模型嵌入，但是如果这些数据来自新的流形，就可能会破坏稳定性并且降低质量。
-                    new_data_embeddings = self.embed_updating_collected_data(embeddings.shape[0])
-                    total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)
-                    self.stream_dataset.update_embeddings(total_embeddings)
-                    self.stream_dataset.update_fitted_data_num(embeddings.shape[0])
-                    self.update_thresholds()
-                    # self.stream_dataset.update_embeddings(total_embeddings)
-                    self._model_embeddings = total_embeddings
-                    self.model_just_replaced = True
-                    self.current_model_fitted_num = embeddings.shape[0]
-                    self._last_update_meta = None
-                    self._need_replace_model = False
-                    self._update_after_replace_signal = False
+                    self._replace_model()
                     need_replace_model = True
                     if self._record_time:
                         self.replace_model_time += time.time() - sta
@@ -288,45 +265,44 @@ class SCDRParallel:
         # print("whole_time", self.whole_time)
         return ret
 
+    def _replace_model(self):
+        # Todo: 这里进行替换时，不一定是最新的模型
+        newest_model, embeddings = self._last_update_meta
+        self.infer_model = newest_model
+        self.infer_model = self.infer_model.to(self.device)
+        # 最简单的方式就是直接使用模型嵌入，但是如果这些数据来自新的流形，就可能会破坏稳定性并且降低质量。
+        new_data_embeddings = self.embed_updating_collected_data(embeddings.shape[0])
+        total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)
+        self.stream_dataset.update_embeddings(total_embeddings)
+        self.stream_dataset.update_fitted_data_num(embeddings.shape[0])
+        self.update_thresholds()
+        # self.stream_dataset.update_embeddings(total_embeddings)
+        self._model_embeddings = total_embeddings
+        self.model_just_replaced = True
+        self.current_model_fitted_num = embeddings.shape[0]
+        self._last_update_meta = None
+        self._need_replace_model = False
+        self._update_after_replace_signal = False
+
     def _send_update_signal(self):
 
-        # sta = time.time()
-        # acc_knn_indices, _ = compute_knn_graph(self.stream_dataset.get_total_data(), None, self.n_neighbors, None)
-        # acc = np.ravel(self.stream_dataset.get_knn_indices()) == np.ravel(acc_knn_indices)
-        # print("kNN acc:", np.sum(acc) / len(acc))
-        # self.whole_time -= time.time() - sta
-
-        # if self._record_time:
-        #     sta = time.time()
-        # self.stream_dataset.update_cached_neighbor_similarities()
-        # if self.update_count > 0:
-        #     self.knn_update_time += time.time() - sta
-        # 如果还有模型更新任务没有完成，此处应该阻塞等待
         sta = time.time()
-
-        # sample_indices = _sample_training_data(self.fitted_data_num, self.stream_dataset.get_n_samples(),
-        #                                        self._is_new_manifold, self._min_training_num, self._old_manifold_sample_rate)
+        acc_knn_indices, _ = compute_knn_graph(self.stream_dataset.get_total_data(), None, self.n_neighbors, None)
+        acc = np.ravel(self.stream_dataset.get_knn_indices()) == np.ravel(acc_knn_indices)
+        print("kNN acc:", np.sum(acc) / len(acc))
+        self.whole_time -= time.time() - sta
 
         pre_fitted_num = self.fitted_data_num
         self.fitted_data_num = self.stream_dataset.get_n_samples()
-        # print("send signal . curren data num", self.fitted_data_num)
-
-        # while self.model_update_queue_set.MODEL_UPDATING.value == 1:
-        #     pass
-        # self.model_update_queue_set.MODEL_UPDATING.value = 1
 
         while not self.model_update_queue_set.training_data_queue.empty():
             self.model_update_queue_set.training_data_queue.get()
-        # self.model_update_queue_set.training_data_queue.clear()
 
         self.model_update_queue_set.training_data_queue.put(
             [self.stream_dataset, self.cluster_rep_data_sampler, pre_fitted_num,
              self.stream_dataset.get_n_samples() - pre_fitted_num, self._is_new_manifold])
         self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.UPDATE)
         self.update_count += 1
-
-        # if self._record_time:
-        #     self.update_model_time += time.time() - sta
 
         # TODO: 使得模型更新和数据处理变成串行的
         # while self.model_update_queue_set.MODEL_UPDATING.value:
@@ -378,6 +354,7 @@ class SCDRParallel:
         self.stream_dataset.add_new_data(embeddings=embeddings)
         self.model_update_queue_set.INITIALIZING.value = False
         self.model_just_replaced = True
+        self._is_embedding_optimized = np.zeros(self.fitted_data_num).astype(bool)
         return cluster_indices
 
     def _initial_embedding_optimizer_and_quality_supervisor(self):
