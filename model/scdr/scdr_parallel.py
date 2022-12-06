@@ -14,7 +14,7 @@ from model.scdr.dependencies.scdr_utils import KeyPointsGenerator, DistributionC
     EmbeddingQualitySupervisor
 
 OPTIMIZE_NEW_DATA_EMBEDDING = False
-OPTIMIZE_NEIGHBORS = False
+OPTIMIZE_NEIGHBORS = True
 
 
 def _sample_training_data(fitted_data_num, n_samples, _is_new_manifold, min_num, sample_rate):
@@ -126,8 +126,8 @@ class SCDRParallel:
                 return None
             sta = time.time()
             self.stream_dataset.add_new_data(data=self.initial_data_buffer, labels=self.initial_label_buffer)
-            cluster_indices = self._initial_project_model()
-            self._initial_embedding_optimizer_and_quality_supervisor(cluster_indices)
+            self._initial_project_model()
+            self._initial_embedding_optimizer_and_quality_supervisor()
             if self._record_time:
                 self.model_init_time += time.time() - sta
             self.whole_time -= time.time() - sta
@@ -165,16 +165,15 @@ class SCDRParallel:
             if self._record_time:
                 self.knn_cal_time += time.time() - sta
             # print("knn acc:", len(np.intersect1d(knn_indices.squeeze(), acc_knn_indices.squeeze()))/self.n_neighbors)
-            # Todo: 这里非常耗时
+
             self.stream_dataset.add_new_data(None, None, labels, knn_indices, knn_dists)
 
             if self._record_time:
                 sta = time.time()
-            # if OPTIMIZE_NEIGHBORS:    # Todo: 会有bug，数据对不上
-            if True:
+            if OPTIMIZE_NEIGHBORS:    # Todo: 会有bug，数据对不上
                 self.stream_dataset.update_knn_graph(pre_n_samples, data, None, candidate_indices, candidate_dists,
                                                      update_similarity=False, symmetric=False)
-            if self._record_time and self.model_infer_time > 0:
+            if self._record_time and self.embedding_update_time > 0:
                 self.knn_update_time += time.time() - sta
 
             if self._record_time:
@@ -234,7 +233,7 @@ class SCDRParallel:
                     total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)
                     self.stream_dataset.update_embeddings(total_embeddings)
                     self.stream_dataset.update_fitted_data_num(embeddings.shape[0])
-                    self.update_thresholds(embeddings.shape[0], None)
+                    self.update_thresholds()
                     # self.stream_dataset.update_embeddings(total_embeddings)
                     self._model_embeddings = total_embeddings
                     self.model_just_replaced = True
@@ -276,7 +275,7 @@ class SCDRParallel:
                 if len(neighbor_changed_indices) > 0:
                     # self._neighbor_changed_indices = self._neighbor_changed_indices.union(neighbor_changed_indices)
                     optimized_embeddings = self.embedding_optimizer.update_old_data_embedding(
-                        data_embeddings, self.stream_dataset.get_total_embeddings(), neighbor_changed_indices,
+                        self.stream_dataset.get_total_embeddings(), neighbor_changed_indices,
                         self.stream_dataset.get_knn_indices(), self.stream_dataset.get_knn_dists(),
                         self.stream_dataset.raw_knn_weights[neighbor_changed_indices], anchor_positions,
                         replaced_indices, replaced_raw_weights)
@@ -381,31 +380,22 @@ class SCDRParallel:
         self.model_just_replaced = True
         return cluster_indices
 
-    def _initial_embedding_optimizer_and_quality_supervisor(self, cluster_indices):
-        pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist, pre_neighbor_mean_dist, \
-        pre_neighbor_std_dist, mean_dist2clusters, std_dist2clusters = \
-            self.get_pre_embedding_statistics(self.fitted_data_num, cluster_indices)
+    def _initial_embedding_optimizer_and_quality_supervisor(self):
+        pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist = \
+            self.stream_dataset.get_embedding_neighbor_mean_std_dist()
 
         # =====================================初始化embedding_quality_supervisor===================================
-
-        d_scale_low = pre_neighbor_mean_dist - self._manifold_change_d_weight * pre_neighbor_std_dist
-        d_scale_high = pre_neighbor_mean_dist + self._manifold_change_d_weight * pre_neighbor_std_dist
-        # d_thresh = mean_dist2clusters + 1 * std_dist2clusters
         e_thresh = pre_neighbor_embedding_m_dist + 3 * pre_neighbor_embedding_s_dist
-        print("d thresh:", d_scale_low, d_scale_high)
         self.embedding_quality_supervisor = EmbeddingQualitySupervisor(self.model_update_intervals,
                                                                        self.manifold_change_num_thresh,
                                                                        self.bad_embedding_num_thresh,
                                                                        self.model_update_num_thresh,
-                                                                       [d_scale_low, d_scale_high], e_thresh)
+                                                                       e_thresh)
         self.embedding_quality_supervisor.update_model_update_time(time.time())
         # ==========================================================================================================
 
         # =====================================初始化embedding_optimizer==============================================
-        local_move_thresh = pre_neighbor_embedding_m_dist + self._local_move_std_weight * pre_neighbor_embedding_s_dist
-        bfgs_update_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
-        self.embedding_optimizer = EmbeddingOptimizer(local_move_thresh, bfgs_update_thresh,
-                                                      neg_num=self.opt_neg_num, skip_opt=self.skip_opt)
+        self.embedding_optimizer = EmbeddingOptimizer(neg_num=self.opt_neg_num, skip_opt=self.skip_opt)
         # ===========================================================================================================
 
     def get_pre_embedding_statistics(self, fitted_num, cluster_indices=None):
@@ -462,27 +452,16 @@ class SCDRParallel:
 
         return self.stream_dataset.get_total_embeddings(), replace_model
 
-    def update_thresholds(self, fitted_num, cluster_indices):
+    def update_thresholds(self):
         sta = time.time()
         # 只在替换模型时，才更新这些阈值，导致滞后性比较严重。
-        pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist, pre_neighbor_mean_dist, \
-        pre_neighbor_std_dist, mean_dist2clusters, std_dist2clusters = self.get_pre_embedding_statistics(fitted_num,
-                                                                                                         cluster_indices)
+        pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist = \
+            self.stream_dataset.get_embedding_neighbor_mean_std_dist()
         if self.embedding_quality_supervisor is not None:
-            d_scale_low = pre_neighbor_mean_dist - self._manifold_change_d_weight * pre_neighbor_std_dist
-            d_scale_high = pre_neighbor_mean_dist + self._manifold_change_d_weight * pre_neighbor_std_dist
-            # d_thresh = mean_dist2clusters + 1 * std_dist2clusters
             e_thresh = pre_neighbor_embedding_m_dist + 3 * pre_neighbor_embedding_s_dist
-            self.embedding_quality_supervisor.update_threshes(e_thresh, d_scale_low, d_scale_high)
+            self.embedding_quality_supervisor.update_threshes(e_thresh)
             # print("d thresh:", d_scale_low, d_scale_high)
 
-        # Todo：这里的阈值确定还要再想一想。
-        # bfgs优化的结果可能比较发散，随着时间增加，阈值没有更新，实施local move的点会越来越少。
-        local_move_thresh = pre_neighbor_embedding_m_dist + self._local_move_std_weight * pre_neighbor_embedding_s_dist
-        # 这里用第k邻居距离比较合适
-        bfgs_update_thresh = pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist
-        self.embedding_optimizer.update_local_move_thresh(local_move_thresh)
-        self.embedding_optimizer.update_bfgs_update_thresh(bfgs_update_thresh)
         self.update_model_time += time.time() - sta
 
     def ending(self):

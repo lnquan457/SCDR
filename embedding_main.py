@@ -183,8 +183,7 @@ def incremental_cdr_pipeline():
     embedding_quality_supervisor = EmbeddingQualitySupervisor(60, 150, 200, d_thresh, e_thresh)
     embedding_quality_supervisor.update_model_update_time(time.time())
 
-    embedding_optimizer = EmbeddingOptimizer(pre_neighbor_embedding_m_dist + 1 * pre_neighbor_embedding_s_dist,
-                                             pre_neighbor_mean_dist + 1 * pre_neighbor_std_dist, skip_opt=SKIP_OPT)
+    embedding_optimizer = EmbeddingOptimizer(skip_opt=SKIP_OPT)
 
     total_sta = time.time()
     for i in range(1, n_step):

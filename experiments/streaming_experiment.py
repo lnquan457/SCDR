@@ -68,7 +68,7 @@ class StreamingEx:
         self.vis_iter = cfg.exp_params.vis_iter
         self.save_embedding_iter = cfg.exp_params.save_iter
         # self._eval_nums = None
-        self._eval_nums = 100
+        self._eval_nums = 2
         self._eval_iter = cfg.exp_params.eval_iter
         self.log_path = log_path
         self.result_save_dir = result_save_dir
