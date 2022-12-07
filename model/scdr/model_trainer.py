@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 from model.scdr.dependencies.cdr_experiment import CDRsExperiments
 from dataset.warppers import StreamingDatasetWrapper
-from model.scdr.scdr_parallel import _sample_training_data
+from model.scdr.dependencies.scdr_utils import ClusterRepDataSampler
 from utils.constant_pool import *
 from utils.metrics_tool import MetricProcess
 from utils.queue_set import ModelUpdateQueueSet
@@ -293,6 +293,14 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
         self._min_training_num = 100
         self._old_manifold_sample_rate = 0.5
         self.update_count = 0
+        # 模型优化时，每个batch中的旧数据采样率
+        self.rep_data_sample_rate = 0.07
+        self.rep_data_minimum_num = 50
+        # 是否要采样所有旧数据
+        self.cover_all = True
+
+        self.cluster_rep_data_sampler = ClusterRepDataSampler(self.rep_data_sample_rate, self.rep_data_minimum_num,
+                                                              self.cover_all)
 
         self.clustering_sample_time = 0
         self.model_finetune_time = 0
@@ -315,10 +323,10 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
             training_info = self.model_update_queue_set.training_data_queue.get()
             # print("准备更新模型！")
             if self.update_count == 0:
-                stream_dataset, rep_data_sampler, ckpt_path = training_info
+                stream_dataset, _, ckpt_path = training_info
                 embeddings = self.first_train(stream_dataset, ckpt_path)
             else:
-                stream_dataset, rep_data_sampler, fitted_data_num, cur_data_num, _is_new_manifold = training_info
+                stream_dataset, _, fitted_data_num, cur_data_num, _is_new_manifold = training_info
                 # print("fitted num", fitted_data_num)
                 sta = time.time()
                 pre_num = self.pre_embeddings.shape[0]
@@ -326,9 +334,9 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 self.stream_dataset = stream_dataset
                 self.stream_dataset.update_cached_neighbor_similarities()
                 n_samples = self.stream_dataset.get_n_samples()
-                sample_indices = _sample_training_data(pre_num, n_samples,
-                                                       _is_new_manifold[pre_num:n_samples],
-                                                       self._min_training_num, self._old_manifold_sample_rate)
+                sample_indices = sample_training_data(pre_num, n_samples,
+                                                      _is_new_manifold[pre_num:n_samples],
+                                                      self._min_training_num, self._old_manifold_sample_rate)
 
                 self.prepare_resume(fitted_data_num, len(sample_indices), self.finetune_epoch, sample_indices)
                 steady_constraints = self.stream_dataset.cal_old2new_relationship(old_n_samples=fitted_data_num)
@@ -338,7 +346,7 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 self.model_finetune_time += time.time() - sta
 
             cluster_indices, rep_batch_nums, rep_data_indices, total_cluster_indices = \
-                self._sample_rep_data(embeddings, rep_data_sampler)
+                self._sample_rep_data(embeddings)
             self.pre_rep_data_info = [rep_batch_nums, rep_data_indices, cluster_indices]
 
             ret = [embeddings, self.model.copy_network().cpu(), self.stream_dataset, total_cluster_indices]
@@ -346,16 +354,30 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
             self.model_update_queue_set.MODEL_UPDATING.value = 0
             self.update_count += 1
 
-    def _sample_rep_data(self, embeddings, rep_data_sampler):
+    def _sample_rep_data(self, embeddings):
         sta = time.time()
         ravel_1 = np.reshape(np.repeat(embeddings[:, np.newaxis, :], self.n_neighbors // 2, 1), (-1, 2))
         ravel_2 = embeddings[np.ravel(self.stream_dataset.get_knn_indices()[:, :self.n_neighbors // 2])]
         embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
         rep_batch_nums, rep_data_indices, cluster_indices, _, total_cluster_indices = \
-            rep_data_sampler.sample(embeddings, eps=embedding_nn_dist, min_samples=self.n_neighbors,
-                                    labels=self.stream_dataset.get_total_label())
+            self.cluster_rep_data_sampler.sample(embeddings, eps=embedding_nn_dist, min_samples=self.n_neighbors,
+                                                 labels=self.stream_dataset.get_total_label())
         self.clustering_sample_time += time.time() - sta
         return cluster_indices, rep_batch_nums, rep_data_indices, total_cluster_indices
 
     def ending(self):
         print("Cluster Sample: %.4f Model Finetune: %.4f" % (self.clustering_sample_time, self.model_finetune_time))
+
+
+def sample_training_data(fitted_data_num, n_samples, _is_new_manifold, min_num, sample_rate):
+    new_data_indices = np.arange(fitted_data_num, n_samples)
+    if sample_rate >= 1 or min_num >= len(new_data_indices) * sample_rate:
+        return new_data_indices
+    new_manifold_data_indices = new_data_indices[_is_new_manifold]
+    old_manifold_data_indices = np.setdiff1d(new_data_indices, new_manifold_data_indices)
+    np.random.shuffle(old_manifold_data_indices)
+    sample_num = max(min_num - len(new_manifold_data_indices),
+                     int(len(old_manifold_data_indices) * sample_rate))
+    sample_indices = np.concatenate([new_manifold_data_indices,
+                                     old_manifold_data_indices[:min(sample_num, len(old_manifold_data_indices))]])
+    return sample_indices

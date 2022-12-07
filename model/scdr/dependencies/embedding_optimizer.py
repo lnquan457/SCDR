@@ -1,14 +1,12 @@
 import random
 import time
-
+import torch
 import numba
 import numpy as np
 import scipy
 from autograd import elementwise_grad
 
 from scipy import optimize
-
-from demo import my_nce_grads, nce_loss_single_ag
 from utils.loss_grads import nce_loss_single, nce_loss_grad
 from utils.umap_utils import find_ab_params
 
@@ -34,7 +32,7 @@ class EmbeddingOptimizer:
                  skip_opt=False, timeout_thresh=5.0):
         # Todo: 后续应该修改成百分比
         self.nce_opt_update_thresh = 5
-        self.__local_move_thresh_w = 3
+        self.__local_move_thresh_w = 4
         self.__neg_num = neg_num
         self.__temperature = temperature
         self.__a, self.__b = find_ab_params(1.0, min_dist)
@@ -72,7 +70,7 @@ class EmbeddingOptimizer:
                                   replaced_raw_weights):
         old_embeddings = total_embeddings
         if self.skip_opt:
-            sta = time.time()
+            # sta = time.time()
             # 耗时0.3s左右
             old_embeddings = self._pre_skip_opt(old_embeddings, knn_indices)
 
@@ -101,11 +99,11 @@ class EmbeddingOptimizer:
         # self.update_time += time.time() - sta
         # print("update", self.update_time)
 
-        sta = time.time()
+        # sta = time.time()
         if self.skip_opt:
             # 耗时0.3s左右
             self._end_skip_opt()
-        self.end_time += time.time() - sta
+        # self.end_time += time.time() - sta
         # print("end", self.end_time)
 
         return old_embeddings
@@ -287,32 +285,18 @@ class SkipOptimizer:
             return self.delayed_meta[:, 0].astype(int)
 
 
-@numba.jit()
-def update_records(delayed_meta, timeout_meta_indices, updated_data_indices, skipped_data_indices):
-    left_delayed_meta = None
-    if delayed_meta is not None:
-        left_delayed_meta_indices = np.setdiff1d(np.arange(delayed_meta.shape[0]),
-                                                 timeout_meta_indices)
-        left_delayed_meta = delayed_meta[left_delayed_meta_indices]
-        updated_data_indices, position_1, _ = \
-            np.intersect1d(left_delayed_meta[:, 0], updated_data_indices, return_indices=True)
+class NNEmbedder:
+    def __init__(self, device):
+        self._model = None
+        self._device = device
 
-        pre_left_meta_indices = np.setdiff1d(np.arange(len(left_delayed_meta_indices)), position_1)
-        left_delayed_meta = left_delayed_meta[pre_left_meta_indices]
+    def update_model(self, new_model):
+        self._model = new_model.to(self._device)
 
-    if left_delayed_meta is not None:
-        if len(left_delayed_meta.shape) < 2:
-            left_delayed_meta = left_delayed_meta[np.newaxis, :]
+    def embed(self, data):
+        if not isinstance(data, torch.Tensor):
+            data = torch.tensor(data, dtype=torch.float, device=self._device)
+        with torch.no_grad():
+            data_embeddings = self._model(data).cpu()
 
-        skipped_data_indices = np.setdiff1d(skipped_data_indices, left_delayed_meta[:, 0])
-        skipped_data_meta = np.zeros(shape=(len(skipped_data_indices), 2))
-        skipped_data_meta[:, 0] = skipped_data_indices
-        skipped_data_meta[:, 1] = time.time()
-
-        total_skipped_meta = np.concatenate([left_delayed_meta, skipped_data_meta], axis=0)
-    else:
-        total_skipped_meta = np.zeros(shape=(len(skipped_data_indices), 2))
-        total_skipped_meta[:, 0] = skipped_data_indices
-        total_skipped_meta[:, 1] = time.time()
-
-    return total_skipped_meta
+        return data_embeddings.numpy()

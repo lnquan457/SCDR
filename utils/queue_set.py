@@ -48,13 +48,46 @@ class ModelUpdateQueueSet:
 
 
 # 用于对新数据进行处理时的数据传输
-class DataProcessorQueueSet:
+class DataProcessorQueue:
 
     def __init__(self):
-        self.data_queue = Queue()
+        self._embedding_data_queue = Queue()
+        self._res_data_queue = Queue()
+        self._PROCESSING = Value("b", False)
+        self._STOP = Value("b", False)
+
+    def get(self):
+        return self._embedding_data_queue.get()
+
+    def is_empty(self):
+        return self._embedding_data_queue.empty()
+
+    def put(self, data):
+        self._embedding_data_queue.put(data)
 
     def clear(self):
-        self.data_queue.close()
+        self._embedding_data_queue.close()
+
+    def processing(self):
+        self._PROCESSING.value = 1
+
+    def processed(self):
+        self._PROCESSING.value = 0
+
+    def is_processing(self):
+        return self._PROCESSING.value == 1
+
+    def get_res(self):
+        return self._res_data_queue.get()
+
+    def put_res(self, res):
+        self._res_data_queue.put(res)
+
+    def is_stop(self):
+        return self._STOP.value == 1
+
+    def stop(self):
+        self._STOP.value = 1
 
 
 # 用于传输各阶段用时数据

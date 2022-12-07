@@ -8,10 +8,10 @@ from matplotlib.animation import FuncAnimation
 from scipy.spatial.distance import cdist
 
 from model.ine import INEModel
-from model.scdr.scdr_parallel import SCDRParallel
+from model.scdr.scdr_parallel import SCDRParallel, SCDRFullParallel
 from model.stream_isomap import SIsomapPlus
 from utils.constant_pool import METRIC_NAMES, STEADY_METRIC_NAMES
-from utils.queue_set import ModelUpdateQueueSet
+from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueue
 from dataset.streaming_data_mock import StreamingDataMock, SimulatedStreamingData, StreamingDataMock2Stage
 from model.scdr.dependencies.experiment import position_vis
 from model.atSNE import atSNEModel
@@ -22,7 +22,6 @@ from utils.logger import InfoLogger
 from utils.metrics_tool import Metric, cal_global_position_change, cal_neighbor_pdist_change, cal_manifold_pdist_change
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 from utils.queue_set import StreamDataQueueSet
-
 
 plt.rcParams['animation.ffmpeg_path'] = r'H:\Softwares\ffmpeg\bin\ffmpeg.exe'
 
@@ -195,8 +194,8 @@ class StreamingEx:
         cache_flag, stream_data, stream_labels = self._cache_initial(stream_data, stream_labels)
         if cache_flag:
             self.pre_embedding = self.cur_embedding
-            if self.cur_time_step > 1 and isinstance(self.model, SCDRParallel):
-                self.model.stream_dataset.add_new_data(data=stream_data)
+            # if self.cur_time_step > 1 and (isinstance(self.model, SCDRParallel)):
+            #     self.model.stream_dataset.add_new_data(data=stream_data)
             sta = time.time()
             ret_embeddings = self.model.fit_new_data(stream_data, stream_labels)
             if self.cur_time_step > 2:
@@ -281,14 +280,13 @@ class StreamingEx:
         if self.log is not None:
             self.log.write(ret + "\n")
 
-        end_time = time.time()
         output = "Key Cost Time: %.4f" % self._key_time
         InfoLogger.info(output)
         self.log.write(output + "\n")
         if self.do_eval:
             self.build_metric_tool()
 
-        self.evaluate(self.pre_embedding, self.cur_embedding, self.history_label[:self.pre_embedding.shape[0]], True)
+        # self.evaluate(self.pre_embedding, self.cur_embedding, self.history_label[:self.pre_embedding.shape[0]], True)
 
         self._metric_conclusion()
 
@@ -369,6 +367,7 @@ class StreamingExProcess(StreamingEx, Process):
     def __init__(self, cfg, seq_indices, result_save_dir, log_path="log_streaming_process.txt", do_eval=True):
         self.name = "数据处理进程"
         self.stream_data_queue_set = StreamDataQueueSet()
+        self.embedding_data_queue = None
         self.cdr_update_queue_set = None
         self.update_num = 0
 
@@ -386,6 +385,17 @@ class StreamingExProcess(StreamingEx, Process):
         self.model = SCDRParallel(self.cfg.method_params.n_neighbors, self.cfg.method_params.batch_size,
                                   model_update_queue_set, self.cfg.exp_params.initial_data_num,
                                   ckpt_path=self.cfg.method_params.ckpt_path, device=model_trainer.device)
+        model_trainer.daemon = True
+        model_trainer.start()
+        self.stream_fitting()
+
+    def start_full_parallel_scdr(self, model_update_queue_set, model_trainer):
+        self.cdr_update_queue_set = model_update_queue_set
+        self.embedding_data_queue = DataProcessorQueue()
+        self.model = SCDRFullParallel(self.embedding_data_queue, self.cfg.method_params.n_neighbors,
+                                      self.cfg.method_params.batch_size, model_update_queue_set,
+                                      self.cfg.exp_params.initial_data_num,
+                                      ckpt_path=self.cfg.method_params.ckpt_path, device=model_trainer.device)
         model_trainer.daemon = True
         model_trainer.start()
         self.stream_fitting()
@@ -433,27 +443,14 @@ class StreamingExProcess(StreamingEx, Process):
         # 开始产生数据
         self.stream_data_queue_set.start_flag_queue.put(True)
         while True:
-            if self.cdr_update_queue_set.WAITING_UPDATED_DATA.value == 1:
-                self._update_scdr_model()
 
             # 获取数据
             stream_end_flag, stream_data, stream_labels = self._get_stream_data(accumulate=False)
             if stream_end_flag:
+                self.model.fit_new_data(None, end=True)
                 break
 
             self._project_pipeline(stream_data, stream_labels)
-
-    def _update_scdr_model(self):
-        embeddings, infer_model, stream_dataset, cluster_indices = self.cdr_update_queue_set.embedding_queue.get()
-        total_embeddings, replace_model = self.model.update_scdr(infer_model, embeddings, stream_dataset)
-        # TODO: 对于模型更新期间接收到的数据，如何对其进行处理以保证其余模型更新后的嵌入结果保持一致
-
-        self.pre_embedding = self.cur_embedding
-        if replace_model:
-            self.save_embeddings_info(total_embeddings, custom_id="u{}".format(self.update_num), )
-        self.cur_embedding = total_embeddings
-        self.update_num += 1
-        self.cdr_update_queue_set.WAITING_UPDATED_DATA.value = 0
 
     def train_end(self):
         # 结束流数据产生进程
@@ -462,9 +459,9 @@ class StreamingExProcess(StreamingEx, Process):
         self.stream_data_queue_set.clear()
 
         # 结束流数据处理
-        self.cur_embedding = self.model.get_final_embeddings()
-        self.save_embeddings_info(self.cur_embedding, train_end=True)
-        self.model.ending()
+        # self.cur_embedding = self.model.get_final_embeddings()
+        # self.save_embeddings_info(self.cur_embedding, train_end=True)
+        # self.model.ending()
 
         # 结束模型更新进程
         self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)

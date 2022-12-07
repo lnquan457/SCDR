@@ -8,7 +8,7 @@ from experiments.streaming_experiment import StreamingEx, StreamingExProcess
 from model.dr_models.ModelSets import MODELS
 from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, INE, SISOMAPPP
 from utils.common_utils import get_config
-from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueueSet, CalTimeQueueSet
+from utils.queue_set import ModelUpdateQueueSet
 
 device = "cuda:0"
 log_path = "logs/logs.txt"
@@ -88,7 +88,8 @@ def start(ex):
 
         model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, cfg.exp_params.dataset,
                                            cfg_path, cfg, result_save_dir, device=device, log_path=log_path)
-        ex.start_parallel_scdr(model_update_queue_set, model_trainer)
+        # ex.start_parallel_scdr(model_update_queue_set, model_trainer)
+        ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 

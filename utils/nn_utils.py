@@ -245,7 +245,7 @@ class StreamingANNSearchKD:
 
 
 class StreamingANNSearchAnnoy:
-    def __init__(self, beta=10, update_iter=800, automatic_beta=True):
+    def __init__(self, beta=10, update_iter=500, automatic_beta=True):
         self._searcher = None
         self._beta = beta
         self._update_iter = update_iter

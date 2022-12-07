@@ -241,7 +241,6 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.__rhos = None
         self._concat_num = 1000
         self._tmp_neighbor_weights = np.ones((1, self.n_neighbor))
-        self._device = device
         self._dists2pre = None
         self._fitted_data_num = 0
 
