@@ -44,6 +44,8 @@ class SCDRParallel:
             self.data_processor.init_stream_dataset(self.stream_dataset)
             self.data_processor.nn_embedder = self.nn_embedder
         else:
+            if data is None:
+                return None
             self._listen_model_update()
 
             sta = time.time()
@@ -52,8 +54,6 @@ class SCDRParallel:
             total_embeddings, other_time = self.data_processor.process(data, data_embeddings, labels)
             self._time_cost_records.append(time.time() - sta - other_time + self._time_cost_records[-1])
 
-        # self.whole_time += time.time() - w_sta
-        # print("whole_time", self.whole_time)
         return total_embeddings
 
     def _listen_model_update(self):

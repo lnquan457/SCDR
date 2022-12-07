@@ -466,11 +466,6 @@ class StreamingExProcess(StreamingEx, Process):
         self.streaming_mock.kill()
         self.stream_data_queue_set.clear()
 
-        # 结束流数据处理
-        # self.cur_embedding = self.model.get_final_embeddings()
-        # self.save_embeddings_info(self.cur_embedding, train_end=True)
-        # self.model.ending()
-
         # 结束模型更新进程
         self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
 

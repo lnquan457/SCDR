@@ -88,8 +88,8 @@ def start(ex):
 
         model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, cfg.exp_params.dataset,
                                            cfg_path, cfg, result_save_dir, device=device, log_path=log_path)
-        # ex.start_parallel_scdr(model_update_queue_set, model_trainer)
-        ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
+        ex.start_parallel_scdr(model_update_queue_set, model_trainer)
+        # ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 
