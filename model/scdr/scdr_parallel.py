@@ -2,6 +2,7 @@ import os.path
 import time
 
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
 
 from dataset.warppers import StreamingDatasetWrapper
@@ -29,6 +30,7 @@ class SCDRParallel:
         self.model_trained = False
 
         self.model_infer_time = 0
+        self._time_cost_records = [0]
 
     # scdr本身属于嵌入进程，负责数据的处理和嵌入
     def fit_new_data(self, data, labels=None, end=False):
@@ -47,7 +49,8 @@ class SCDRParallel:
             sta = time.time()
             data_embeddings = self.nn_embedder.embed(data)
             self.model_infer_time += time.time() - sta
-            total_embeddings = self.data_processor.process(data, data_embeddings, labels)
+            total_embeddings, other_time = self.data_processor.process(data, data_embeddings, labels)
+            self._time_cost_records.append(time.time() - sta - other_time + self._time_cost_records[-1])
 
         # self.whole_time += time.time() - w_sta
         # print("whole_time", self.whole_time)
@@ -97,7 +100,8 @@ class SCDRParallel:
 
     def ending(self):
         print("Model Infer: %.4f " % self.model_infer_time)
-        return self.data_processor.ending()
+
+        return self.data_processor.ending(), self._time_cost_records
 
 
 class SCDRFullParallel(SCDRParallel):
@@ -118,10 +122,10 @@ class SCDRFullParallel(SCDRParallel):
             self.stream_dataset.add_new_data(data=self.initial_data_buffer, labels=self.initial_label_buffer)
             total_embeddings = self._initial_project_model()
             self.data_processor.init_stream_dataset(self.stream_dataset)
-            
+
             self.data_processor.daemon = True
             self.data_processor.start()
-            self._embedding_data_queue.put_res([total_embeddings, None])
+            self._embedding_data_queue.put_res([total_embeddings, None, 0])
         else:
             if data is None:
                 self._embedding_data_queue.put([data, None, labels, end])
@@ -129,12 +133,14 @@ class SCDRFullParallel(SCDRParallel):
 
             data_embeddings = self.nn_embedder.embed(data)
 
-            total_embeddings, newest_model = self._embedding_data_queue.get_res()
+            total_embeddings, newest_model, cost_time = self._embedding_data_queue.get_res()
+            sta = time.time()
             total_embeddings = np.concatenate([total_embeddings, data_embeddings], axis=0)
 
             if newest_model is not None:
                 self.nn_embedder.update_model(newest_model)
             self._embedding_data_queue.put([data, data_embeddings, labels, end])
+            self._time_cost_records.append(time.time() - sta + cost_time + self._time_cost_records[-1])
 
         return total_embeddings
 

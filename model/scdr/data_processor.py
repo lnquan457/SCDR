@@ -89,7 +89,8 @@ class DataProcessor:
 
     # scdr本身属于嵌入进程，负责数据的处理和嵌入
     def process(self, data, data_embeddings, labels=None):
-        w_sta = time.time()
+        # w_sta = time.time()
+        other_time = 0
         pre_n_samples = self.stream_dataset.get_n_samples()
         pre_embeddings = self.stream_dataset.get_total_embeddings()
 
@@ -114,7 +115,9 @@ class DataProcessor:
             self.knn_cal_time += time.time() - sta
         # print("knn acc:", len(np.intersect1d(knn_indices.squeeze(), acc_knn_indices.squeeze()))/self.n_neighbors)
 
+        sta = time.time()
         self.stream_dataset.add_new_data(data, None, labels, knn_indices, knn_dists)
+        other_time += time.time() - sta
 
         if self._record_time:
             sta = time.time()
@@ -219,9 +222,9 @@ class DataProcessor:
                 self.embedding_update_time += time.time() - sta
 
         ret = self.stream_dataset.get_total_embeddings()
-        self.whole_time += time.time() - w_sta
+        # self.whole_time += time.time() - w_sta
         # print("whole_time", self.whole_time)
-        return ret
+        return ret, other_time
 
     def _replace_model(self):
         # Todo: 这里进行替换时，不一定是最新的模型
@@ -367,8 +370,9 @@ class DataProcessorProcess(DataProcessor, Process):
 
             self._embedding_data_queue.processing()
             self._newest_model = None
-            total_embeddings = super().process(data, data_embedding, label)
-            self._embedding_data_queue.put_res([total_embeddings, self._newest_model])
+            sta = time.time()
+            total_embeddings, other_time = super().process(data, data_embedding, label)
+            self._embedding_data_queue.put_res([total_embeddings, self._newest_model, time.time() - sta - other_time])
             self._embedding_data_queue.processed()
 
         self.ending()

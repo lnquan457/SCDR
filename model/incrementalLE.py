@@ -24,6 +24,7 @@ class kNNBasedIncrementalMethods:
         self.pre_embeddings = None
         self.trained = False
         self.time_cost = 0
+        self._time_cost_records = [0]
 
     def _update_kNN(self, new_data):
         # 1. 计算新数据的kNN
@@ -71,6 +72,7 @@ class kNNBasedIncrementalMethods:
             sta = time.time()
             self._incremental_embedding(x)
             self.time_cost += time.time() - sta
+            self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
 
         return self.pre_embeddings
 
@@ -95,7 +97,7 @@ class kNNBasedIncrementalMethods:
     def ending(self):
         output = "Time Cost: %.4f" % self.time_cost
         print(output)
-        return output
+        return output, self._time_cost_records
 
 
 class IncrementalLE(SpectralEmbedding, kNNBasedIncrementalMethods):

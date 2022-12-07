@@ -276,7 +276,15 @@ class StreamingEx:
         if isinstance(self.model, SCDRParallel):
             self.model.save_model()
 
-        ret = self.model.ending()
+        ret, time_cost_records = self.model.ending()
+
+        x_indices = np.arange(len(time_cost_records))
+        plt.figure()
+        plt.plot(x_indices, time_cost_records)
+        plt.title("Time Costs")
+        plt.savefig(os.path.join(self.result_save_dir, "time costs.jpg"), dpi=400, bbox_inches='tight')
+        plt.show()
+
         if self.log is not None:
             self.log.write(ret + "\n")
 
