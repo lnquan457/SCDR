@@ -33,7 +33,6 @@ class IncrementalLLE(LocallyLinearEmbedding, kNNBasedIncrementalMethods):
 
     def _incremental_embedding(self, new_data):
         new_knn_indices, new_knn_dists, neighbor_changed_indices = self._update_kNN(new_data)
-
         self._update_weight_matrix(new_data, neighbor_changed_indices)
 
         self.pre_embeddings = self._embedding_new_data_RayleighRitz(new_data.shape[0])
@@ -41,18 +40,22 @@ class IncrementalLLE(LocallyLinearEmbedding, kNNBasedIncrementalMethods):
 
     def _update_weight_matrix(self, new_data, neighbor_changed_indices):
         new_data_num = new_data.shape[0]
-        neighbor_changed_data = self.stream_dataset._total_data[neighbor_changed_indices]
-        indices = self.knn_manager.knn_indices[neighbor_changed_indices]
-        changed_weights = barycenter_weights(neighbor_changed_data, self.stream_dataset._total_data, indices)
         pre_data_num = self.weight_matrix.shape[0]
         self.weight_matrix = np.concatenate([self.weight_matrix, np.zeros((pre_data_num, new_data_num))], axis=1)
-        self.weight_matrix = np.concatenate([self.weight_matrix, np.zeros((new_data_num, new_data_num + pre_data_num))], axis=0)
+        self.weight_matrix = np.concatenate([self.weight_matrix, np.zeros((new_data_num, new_data_num + pre_data_num))],
+                                            axis=0)
+        if len(neighbor_changed_indices) == 0:
+            return
+        neighbor_changed_data = self.stream_dataset.get_total_data()[neighbor_changed_indices]
+        indices = self.knn_manager.knn_indices[neighbor_changed_indices]
+        changed_weights = barycenter_weights(neighbor_changed_data, self.stream_dataset.get_total_data(), indices)
+
         self.weight_matrix[neighbor_changed_indices] *= 0
 
         for i, item in enumerate(neighbor_changed_indices):
             self.weight_matrix[item, self.knn_manager.knn_indices[item]] = changed_weights[i]
 
-        new_data_weights = barycenter_weights(new_data, self.stream_dataset._total_data,
+        new_data_weights = barycenter_weights(new_data, self.stream_dataset.get_total_data(),
                                               self.knn_manager.knn_indices[pre_data_num:])
         for i in range(new_data_num):
             index = pre_data_num + i
@@ -68,7 +71,7 @@ class IncrementalLLE(LocallyLinearEmbedding, kNNBasedIncrementalMethods):
                      Q_bar[:, :self.n_components+self.k_skip]
             _, U = schur(T_star)
             Q0 = Q_bar[:, :self.k_skip+self.n_components] * U
-
+        self.eigen_vectors = Q0
         return np.array(Q0[:, self.k_skip:])
 
     def _fit_transform(self, X):

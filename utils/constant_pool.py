@@ -11,6 +11,7 @@ ALL_DATASETS = ["animals", "banknote", "Anuran Calls_8c", "cifar10_ex_10000", "c
                 "texture", "usps_clear", "wethers", "wifi"]
 DATASET_MAP = {"stanford dogs": "stanford dogs_subset", "animals": "animals_clear", "pendigits": "pendigits_clear"}
 
+ILLE = "iLLE"
 SIPCA = "siPCA"
 ATSNE = "atSNE"
 XTREAMING = "Xtreaming"

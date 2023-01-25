@@ -1,7 +1,7 @@
 exp_params:
 #  dataset: 'isolet_subset'
-  dataset: 'usps'
-  input_dims: 256   # x for vectors or (h, w, c) for images
+  dataset: 'food'
+  input_dims: 512   # x for vectors or (h, w, c) for images
   latent_dim: 2
   stream_rate: 2
   indices_file_path: -1

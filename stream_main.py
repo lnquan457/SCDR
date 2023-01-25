@@ -6,7 +6,7 @@ import os
 from model.scdr.model_trainer import SCDRTrainer, SCDRTrainerProcess
 from experiments.streaming_experiment import StreamingEx, StreamingExProcess
 from model.dr_models.ModelSets import MODELS
-from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, INE, SISOMAPPP
+from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, INE, SISOMAPPP, ILLE
 from utils.common_utils import get_config
 from utils.queue_set import ModelUpdateQueueSet
 
@@ -70,6 +70,8 @@ def start(ex):
     if args.method == ATSNE:
         # ==============1. at-SNE model=====================
         ex.start_atSNE()
+    elif args.method == ILLE:
+        ex.start_ille()
     elif args.method == SIPCA:
         # ==============2. siPCA model=====================
         ex.start_siPCA()
@@ -123,8 +125,8 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=SCDR,
-                        choices=[ATSNE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
+    parser.add_argument("--method", type=str, default=SISOMAPPP,
+                        choices=[ILLE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()

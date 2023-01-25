@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 from procrustes import orthogonal
 from scipy.spatial.distance import cdist
@@ -45,6 +47,8 @@ class XtreamingModel:
         self.pre_embedding = None
         self.pre_cntp_embeddings = None
         self.lof = LocalOutlierFactor(n_neighbors=5, novelty=True, metric="euclidean", contamination=0.1)
+        self.time_costs = 0
+        self._time_cost_records = [0]
 
     def _buffering(self, data):
         if self.buffered_data is None:
@@ -56,10 +60,14 @@ class XtreamingModel:
         return self.buffered_data.shape[0] >= self.buffer_size
 
     def fit_new_data(self, data, labels=None):
+        sta = time.time()
         if not self._buffering(data):
             return None
 
-        return self.fit()
+        ret = self.fit()
+        self.time_costs += time.time() - sta
+        self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
+        return ret
 
     def buffer_empty(self):
         return self.buffered_data is None
@@ -140,4 +148,6 @@ class XtreamingModel:
         return aligned_total_embeddings, total_cntp_points
 
     def ending(self):
-        pass
+        output = "Time Cost: %.4f" % self.time_costs
+        print(output)
+        return output, self._time_cost_records

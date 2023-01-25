@@ -19,7 +19,6 @@ import torch
 from utils.constant_pool import *
 import argparse
 import time
-from sklearn.cluster import KMeans, DBSCAN
 from model.scdr.dependencies.cdr_experiment import CDRsExperiments
 from model.scdr.model_trainer import SCDRTrainer
 import matplotlib.pyplot as plt

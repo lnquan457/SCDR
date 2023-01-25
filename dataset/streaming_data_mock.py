@@ -5,7 +5,7 @@ import numpy as np
 from dataset.datasets import load_local_h5_by_path
 import os
 
-from utils.constant_pool import ConfigInfo
+from utils.constant_pool import ConfigInfo, ProjectSettings
 from utils.common_utils import date_time2timestamp
 from multiprocessing import Process, Queue
 
@@ -13,10 +13,12 @@ from multiprocessing import Process, Queue
 def resort_label(label_seq):
     # 按照cls出现的顺序重新分配标签
     unique_cls, show_seq = np.unique(label_seq, return_index=True)
+    color_list = []
     for i, item in enumerate(unique_cls):
         indices = np.argwhere(label_seq == item).squeeze()
-        label_seq[indices] = show_seq[i]
-    return label_seq
+        label_seq[indices] = i
+        color_list.extend([ProjectSettings.LABEL_COLORS[i]] * len(indices))
+    return label_seq.astype(int), color_list
 
 
 class RealStreamingData(Process):
@@ -36,7 +38,11 @@ class RealStreamingData(Process):
     def _load_data(self):
         self.data, self.targets = load_local_h5_by_path(self.data_file_path, ['x', 'y'])
         time_file = open(self.time_file_path)
-        self.seq_label = None if self.targets is None else resort_label(self.targets)
+        if self.targets is None:
+            self.seq_label = None
+            self.seq_color = None
+        else:
+            self.seq_label, self.seq_color = resort_label(self.targets)
         for line in time_file.readlines():
             date_time, data_num = line.split(",")
             timestamp = date_time2timestamp(date_time)
@@ -88,7 +94,11 @@ class SimulatedStreamingData(Process):
                 self.custom_seq = custom_seq
                 self.time_step_num = int(np.ceil(len(self.custom_seq) / self.stream_rate))
 
-        self.seq_label = None if self.targets is None else resort_label(self.targets[self.custom_seq])
+        if self.targets is None:
+            self.seq_label = None
+            self.seq_color = None
+        else:
+            self.seq_label, self.seq_color = resort_label(self.targets[self.custom_seq])
 
         stream_num = self.n_samples - initial_num
 
@@ -151,7 +161,11 @@ class StreamingDataMock:
             else:
                 self.custom_seq = seq_indices
 
-        self.seq_label = None if self.targets is None else resort_label(self.targets[self.custom_seq])
+        if self.targets is None:
+            self.seq_label = None
+            self.seq_color = None
+        else:
+            self.seq_label, self.seq_color = resort_label(self.targets[self.custom_seq])
 
         self.num_per_step = num_per_step
         self.time_step = 0

@@ -32,7 +32,7 @@ class EmbeddingOptimizer:
                  skip_opt=False, timeout_thresh=5.0):
         # Todo: 后续应该修改成百分比
         self.nce_opt_update_thresh = 5
-        self.__local_move_thresh_w = 4
+        self.__local_move_thresh_w = 1.5    # 4
         self.__neg_num = neg_num
         self.__temperature = temperature
         self.__a, self.__b = find_ab_params(1.0, min_dist)
@@ -212,7 +212,7 @@ class SkipOptimizer:
         self.updated_data_indices = []
         self.skipped_data_indices = []
 
-        self.thresh = 0
+        self.thresh = 1.5   # 0
 
     def get_timeouts_indices(self):
         cur_time = time.time()

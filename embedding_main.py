@@ -20,7 +20,6 @@ from utils.common_utils import time_stamp_to_date_time_adjoin, get_config
 from utils.constant_pool import ConfigInfo
 from utils.loss_grads import umap_loss_single, mae_loss_gard, nce_loss_single
 from utils.metrics_tool import Metric, knn_score
-from sklearn.manifold import TSNE
 from utils.umap_utils import find_ab_params, convert_distance_to_probability
 from scipy import optimize
 

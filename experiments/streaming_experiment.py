@@ -7,6 +7,7 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 from scipy.spatial.distance import cdist
 
+from model.incrementalLLE import IncrementalLLE
 from model.ine import INEModel
 from model.scdr.scdr_parallel import SCDRParallel, SCDRFullParallel
 from model.stream_isomap import SIsomapPlus
@@ -23,7 +24,7 @@ from utils.metrics_tool import Metric, cal_global_position_change, cal_neighbor_
 from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 from utils.queue_set import StreamDataQueueSet
 
-plt.rcParams['animation.ffmpeg_path'] = r'H:\Softwares\ffmpeg\bin\ffmpeg.exe'
+plt.rcParams['animation.ffmpeg_path'] = r'D:\softwares\ffmpeg\bin\ffmpeg.exe'
 
 
 def check_path_exist(t_path):
@@ -153,6 +154,11 @@ class StreamingEx:
     def start_sisomap(self):
         self.model = SIsomapPlus(self.cfg.exp_params.initial_data_num, self.n_components,
                                  self.cfg.method_params.n_neighbors)
+        self.stream_fitting()
+
+    def start_ille(self):
+        self.model = IncrementalLLE(self.cfg.exp_params.initial_data_num, self.n_components,
+                                    self.cfg.method_params.n_neighbors)
         self.stream_fitting()
 
     def stream_fitting(self):
@@ -334,7 +340,7 @@ class StreamingEx:
     def _make_embedding_video(self, save_dir):
         self._embeddings_histories = np.array(self._embeddings_histories)
 
-        def _loose(d_min, d_max, rate=0.1):
+        def _loose(d_min, d_max, rate=0.05):
             scale = d_max - d_min
             d_max += np.abs(scale * rate)
             d_min -= np.abs(scale * rate)
@@ -345,10 +351,6 @@ class StreamingEx:
 
         fig, ax = plt.subplots()
 
-        # def init():
-        #     ax.set(xlim=(l_x_min, l_x_max), ylim=(l_y_min, l_y_max))
-        #     ax.set_aspect('equal')
-        #     return ax
         if len(np.unique(self.history_label)) > 10:
             color_list = "tab20"
         else:
@@ -362,12 +364,12 @@ class StreamingEx:
             ax.cla()
             ax.set(xlim=(l_x_min, l_x_max), ylim=(l_y_min, l_y_max))
             ax.set_aspect('equal')
-            # ax.axis('equal')  # 将xy轴隐藏
+            ax.axis('equal')
             ax.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1],
-                       c=self.streaming_mock.seq_label[:cur_embeddings.shape[0]], s=2, cmap=color_list)
+                       c=list(self.streaming_mock.seq_color[:cur_embeddings.shape[0]]), s=2)
             ax.set_title("Timestep: {}".format(int(idx)))
 
-        ani = FuncAnimation(fig, update, frames=self._embeddings_histories.shape[0], interval=33, blit=False)
+        ani = FuncAnimation(fig, update, frames=self._embeddings_histories.shape[0], interval=15, blit=False)
         ani.save(os.path.join(save_dir, "embedding.mp4"), writer='ffmpeg', dpi=300)
 
 

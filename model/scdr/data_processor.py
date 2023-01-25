@@ -30,15 +30,15 @@ class DataProcessor:
         self.manifold_change_num_thresh = 200
         self.bad_embedding_num_thresh = 400
 
-        self._manifold_change_d_weight = 1
-        self._local_move_std_weight = 3
+        # self._manifold_change_d_weight = 1
+        # self._local_move_std_weight = 3
         # 是否进行跳步优化
         self.skip_opt = True
         # bfgs优化时,使用的负例数目
         self.opt_neg_num = 50
 
         # 模型优化时，对于旧流形中的数据，采样的比例
-        self._old_manifold_sample_rate = 0.5
+        self._old_manifold_sample_rate = 1.0    # 0.5
         self._min_training_num = 100
 
         self.update_when_end = False

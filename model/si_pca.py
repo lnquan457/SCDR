@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 from inc_pca import IncPCA
 
@@ -8,13 +10,15 @@ class StreamingIPCA:
         self.pca_model = IncPCA(n_components, forgetting_factor)
         self.total_data = None
         self.pre_embeddings = None
+        self.time_cost = 0
+        self._time_cost_records = [0]
 
     def fit_new_data(self, x, labels=None):
         if self.total_data is None:
             self.total_data = x
         else:
             self.total_data = np.concatenate([self.total_data, x], axis=0)
-
+        sta = time.time()
         self.pca_model.partial_fit(x)
         cur_embeddings = self.pca_model.transform(self.total_data)
 
@@ -22,8 +26,11 @@ class StreamingIPCA:
             self.pre_embeddings = cur_embeddings
         else:
             self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings, cur_embeddings)
-
+        self.time_cost += time.time() - sta
+        self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
         return self.pre_embeddings
 
     def ending(self):
-        pass
+        output = "Time Cost: %.4f" % self.time_cost
+        print(output)
+        return output, self._time_cost_records

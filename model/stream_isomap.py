@@ -335,8 +335,6 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         self.cluster_indices[min_idx].append(self.stream_dataset.get_n_samples())
         return min_idx
 
-    def ending(self):
-        pass
 
 
 class CustomizedLPCA(lPCA):
