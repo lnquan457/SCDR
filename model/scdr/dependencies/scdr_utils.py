@@ -324,8 +324,9 @@ class EmbeddingQualitySupervisor:
         self.__last_update_time = update_time
 
     def _judge_model_update(self, need_update):
-        if need_update:
-            self.__need_update_num += 1
+        self.__need_update_num += np.sum(need_update)
+        # if need_update:
+        #     self.__need_update_num += 1
 
         if self.__need_update_num > self.__model_update_thresh:
             self.__need_update_num = 0
@@ -377,18 +378,23 @@ class EmbeddingQualitySupervisor:
         return need_optimize, manifold_change, self._judge_model_replace(), self._judge_model_update(manifold_change)
 
     def quality_record_simple(self, knn_indices, knn_dists, pre_data=None):
-        manifold_change = False
+        # for batch process
+        manifold_change_list = []
 
         if pre_data is not None:
             # self._lof.fit(pre_data)
             self._lof.my_fit(*pre_data)
 
-        label = self._lof.predict_novel(knn_indices.squeeze(), knn_dists.squeeze())
-        if label == -1:
-            self.__new_manifold_data_num += 1
-            manifold_change = True
+        for i in range(knn_indices.shape[0]):
+            label = self._lof.predict_novel(knn_indices[i], knn_dists[i])
+            if label == -1:
+                self.__new_manifold_data_num += 1
+                manifold_change_list.append(True)
+            else:
+                manifold_change_list.append(False)
 
-        return manifold_change, manifold_change, self._judge_model_replace(), self._judge_model_update(manifold_change)
+        return manifold_change_list, manifold_change_list, self._judge_model_replace(), \
+            self._judge_model_update(manifold_change_list)
 
 
 class MyLocalOutlierFactor(LocalOutlierFactor):

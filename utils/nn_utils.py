@@ -267,18 +267,45 @@ class StreamingANNSearchAnnoy:
         else:
             new_k = int(0.15 * np.sqrt(pre_data.shape[0]) * k)
 
-        candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
-        candidate_indices = np.array(candidate_indices, dtype=int)
+        query_num = query_data.shape[0]
+        if query_num == 1:
+            candidate_indices = self._searcher.get_nns_by_vector(query_embeddings.squeeze(), new_k)
+            candidate_indices = np.array(candidate_indices, dtype=int)
+            if not update:
+                candidate_indices = np.union1d(candidate_indices,
+                                               np.arange(self._fitted_num, pre_data.shape[0]).astype(int))
 
-        if not update:
-            candidate_indices = np.union1d(candidate_indices, np.arange(self._fitted_num, pre_data.shape[0]).astype(int))
+            candidate_data = pre_data[candidate_indices]
 
-        candidate_data = pre_data[candidate_indices]
+            dists = cdist(query_data, candidate_data).squeeze()
+            sorted_indices = np.argsort(dists)[:k].astype(int)
+            final_indices = candidate_indices[sorted_indices][np.newaxis, :]
+            final_dists = dists[sorted_indices][np.newaxis, :]
+            candidate_indices = [candidate_indices]
+            dists = [dists]
+        else:
+            # ====================================for batch process=====================================
+            final_indices = np.empty((query_num, k), dtype=int)
+            final_dists = np.empty((query_num, k), dtype=float)
+            final_candidate_indices = []
+            dists = []
+            unfitted_data_indices = np.arange(self._fitted_num, pre_data.shape[0]).astype(int)
+            for i in range(query_num):
+                candidate_indices = self._searcher.get_nns_by_vector(query_embeddings[i], new_k)
+                candidate_indices = np.array(candidate_indices, dtype=int)
 
-        dists = cdist(query_data, candidate_data).squeeze()
-        sorted_indices = np.argsort(dists)[:k].astype(int)
-        final_indices = candidate_indices[sorted_indices]
-        final_dists = dists[sorted_indices]
+                if not update:
+                    candidate_indices = np.union1d(candidate_indices, unfitted_data_indices)
+
+                final_candidate_indices.append(candidate_indices)
+                cur_dists = cdist(query_data[i][np.newaxis, :], pre_data[candidate_indices]).squeeze()
+                dists.append(cur_dists)
+                sorted_indices = np.argsort(cur_dists)[:k]
+                final_indices[i] = candidate_indices[sorted_indices]
+                final_dists[i] = cur_dists[sorted_indices]
+
+            candidate_indices = final_candidate_indices
+            # ====================================for batch process=====================================
 
         return final_indices, final_dists, candidate_indices, dists
 
@@ -316,7 +343,8 @@ class StreamingANNSearchAnnoy:
                 dists = cdist(query_embeddings, pre_embeddings[self._infer_embedding_indices])
                 selected_indices = np.where(dists < np.max(knn_dists))[0]
                 if len(selected_indices) > 0:
-                    candidate_indices = np.concatenate([candidate_indices, self._infer_embedding_indices[selected_indices]])
+                    candidate_indices = np.concatenate(
+                        [candidate_indices, self._infer_embedding_indices[selected_indices]])
                     candidate_data = np.concatenate([candidate_data, self._inferred_data[selected_indices]], axis=0)
 
         dists = cdist(query_data, candidate_data).squeeze()

@@ -14,7 +14,7 @@ exp_params:
 
 method_params:
   method: "LwF_CDR"
-  initial_train_epoch: 200
+  initial_train_epoch: 100
   finetune_epoch: 50
   batch_size: 256
   LR: 0.001

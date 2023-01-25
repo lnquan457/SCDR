@@ -323,7 +323,9 @@ class StreamingDatasetWrapper(DataSetWrapper):
         knn_distances = self._knn_manager.knn_dists if cut_num is None else self._knn_manager.knn_dists[:cut_num]
         knn_indices = self._knn_manager.knn_indices if cut_num is None else self._knn_manager.knn_indices[:cut_num]
 
-        neighbor_changed_indices = [pre_n_samples]
+        # for batch process
+        new_data_num = new_data.shape[0]
+        neighbor_changed_indices = np.arange(pre_n_samples, pre_n_samples + new_data_num).tolist()
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
@@ -331,7 +333,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.__replaced_raw_weights = []
         # neighbor_changed_indices = self._knn_manager.update_previous_kNN(1, pre_n_samples, dists,
         #                                                                  data_num_list, neighbor_changed_indices)
-        neighbor_changed_indices = self._knn_manager.update_previous_kNN_simple(pre_n_samples, candidate_indices,
+        neighbor_changed_indices = self._knn_manager.update_previous_kNN_simple(new_data.shape[0], pre_n_samples,
+                                                                                candidate_indices,
                                                                                 candidate_dists,
                                                                                 neighbor_changed_indices)
         self.cur_neighbor_changed_indices = neighbor_changed_indices
@@ -361,7 +364,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         # print("concat", self.concat_t)
 
         if not update_similarity:
-            cur_update_indices = [pre_n_samples]
+            cur_update_indices = np.arange(pre_n_samples, pre_n_samples + new_data.shape[0]).tolist()
         else:
             cur_update_indices = neighbor_changed_indices
 
@@ -539,10 +542,10 @@ class KNNManager:
 
         return neighbor_changed_indices
 
-    def update_previous_kNN_simple(self, pre_n_samples, candidate_indices, candidate_dists,
+    def update_previous_kNN_simple(self, new_data_num, pre_n_samples, candidate_indices, candidate_dists,
                                    neighbor_changed_indices=None, symm=True):
         neighbor_changed_indices, self._pre_neighbor_changed_meta, self.knn_indices, self.knn_dists = \
-            _do_update(pre_n_samples, candidate_indices, candidate_dists, self.knn_indices, self.knn_dists,
+            _do_update(new_data_num, pre_n_samples, candidate_indices, candidate_dists, self.knn_indices, self.knn_dists,
                        neighbor_changed_indices, symm)
         self._pre_neighbor_changed_meta = np.array(self._pre_neighbor_changed_meta, dtype=int)
 
@@ -550,33 +553,37 @@ class KNNManager:
 
 
 @jit(nopython=True)
-def _do_update(pre_n_samples, candidate_indices, candidate_dists, knn_indices, knn_dists, neighbor_changed_indices,
-               symm=True):
+def _do_update(new_data_num, pre_n_samples, candidate_indices_list, candidate_dists_list, knn_indices, knn_dists,
+               neighbor_changed_indices, symm=True):
     pre_neighbor_changed_meta = []
 
-    for j, data_idx in enumerate(candidate_indices):
-        if knn_dists[data_idx][-1] <= candidate_dists[j]:
-            continue
-        # data_idx = candidate_indices[j]
-        if data_idx not in neighbor_changed_indices:
-            neighbor_changed_indices.append(data_idx)
-        # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
-        insert_index = knn_dists.shape[1] - 1
-        while insert_index >= 0 and candidate_dists[j] <= knn_dists[data_idx][insert_index]:
-            insert_index -= 1
+    for i in range(new_data_num):
+        candidate_indices = candidate_indices_list[i]
+        candidate_dists = candidate_dists_list[i]
 
-        if symm and knn_indices[data_idx][-1] not in neighbor_changed_indices:
-            neighbor_changed_indices.append(knn_indices[data_idx][-1])
+        for j, data_idx in enumerate(candidate_indices):
+            if knn_dists[data_idx][-1] <= candidate_dists[j]:
+                continue
+            # data_idx = candidate_indices[j]
+            if data_idx not in neighbor_changed_indices:
+                neighbor_changed_indices.append(data_idx)
+            # 为当前元素找到一个插入位置即可，即distances中第一个小于等于dists[i][j]的元素位置，始终保持distances有序，那么最大的也就是最后一个
+            insert_index = knn_dists.shape[1] - 1
+            while insert_index >= 0 and candidate_dists[j] <= knn_dists[data_idx][insert_index]:
+                insert_index -= 1
 
-        pre_neighbor_changed_meta.append(
-            [pre_n_samples, data_idx, insert_index + 1, knn_indices[data_idx][-1]])
-        # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
-        # arr_move_one(knn_dists[data_idx], insert_index + 1, candidate_dists[j])
-        knn_dists[data_idx][insert_index + 2:] = knn_dists[data_idx][insert_index + 1:-1]
-        knn_dists[data_idx][insert_index + 1] = candidate_dists[j]
-        # arr_move_one(knn_indices[data_idx], insert_index + 1, pre_n_samples)
-        knn_indices[data_idx][insert_index + 2:] = knn_indices[data_idx][insert_index + 1:-1]
-        knn_indices[data_idx][insert_index + 1] = pre_n_samples
+            if symm and knn_indices[data_idx][-1] not in neighbor_changed_indices:
+                neighbor_changed_indices.append(knn_indices[data_idx][-1])
+
+            pre_neighbor_changed_meta.append(
+                [pre_n_samples + i, data_idx, insert_index + 1, knn_indices[data_idx][-1]])
+            # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
+            # arr_move_one(knn_dists[data_idx], insert_index + 1, candidate_dists[j])
+            knn_dists[data_idx][insert_index + 2:] = knn_dists[data_idx][insert_index + 1:-1]
+            knn_dists[data_idx][insert_index + 1] = candidate_dists[j]
+            # arr_move_one(knn_indices[data_idx], insert_index + 1, pre_n_samples)
+            knn_indices[data_idx][insert_index + 2:] = knn_indices[data_idx][insert_index + 1:-1]
+            knn_indices[data_idx][insert_index + 1] = pre_n_samples
 
     return neighbor_changed_indices, pre_neighbor_changed_meta, knn_indices, knn_dists
 

@@ -105,8 +105,8 @@ class DataProcessor:
             self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
                                               self.stream_dataset.get_total_data(),
                                               data_embeddings, data, self.current_model_fitted_num, update)
-        knn_indices = knn_indices[np.newaxis, :]
-        knn_dists = knn_dists[np.newaxis, :]
+        # knn_indices = knn_indices[np.newaxis, :]
+        # knn_dists = knn_dists[np.newaxis, :]
 
         # 准确查询
         # knn_indices, knn_dists = query_knn(data, np.concatenate([self.stream_dataset.get_total_data(), data],
@@ -149,7 +149,7 @@ class DataProcessor:
         p_need_optimize, manifold_change, need_replace_model, need_update_model = \
             self.embedding_quality_supervisor.quality_record_simple(knn_indices, knn_dists, fit_data)
 
-        self._is_new_manifold.append(manifold_change)
+        self._is_new_manifold.extend(manifold_change)
         # self._is_embedding_optimized = np.append(self._is_embedding_optimized, p_need_optimize)
         # print(p_need_optimize)
         if self._record_time:
@@ -186,16 +186,21 @@ class DataProcessor:
                 self._need_replace_model = True
                 need_replace_model = False
 
-        if not need_replace_model and p_need_optimize:
+        if not need_replace_model:
             # ====================================1. 只对新数据本身的嵌入进行更新=======================================
             if OPTIMIZE_NEW_DATA_EMBEDDING:
                 self.opt_count += 1
                 # print("opt count", self.opt_count)
                 if self._record_time:
                     sta = time.time()
-                data_embeddings = self.embedding_optimizer.optimize_new_data_embedding(
-                    self.stream_dataset.raw_knn_weights[self.stream_dataset.get_n_samples() - 1],
-                    neighbor_embeddings, pre_embeddings)
+
+                # ===========================================for batch process========================================
+                for i in range(data_embeddings.shape[0]):
+                    if p_need_optimize[i]:
+                        data_embeddings[i] = self.embedding_optimizer.optimize_new_data_embedding(
+                            self.stream_dataset.raw_knn_weights[pre_n_samples+i], neighbor_embeddings, pre_embeddings)
+                # ===========================================for batch process========================================
+
                 if self._record_time:
                     self.embedding_opt_time += time.time() - sta
             # =====================================================================================================
@@ -203,7 +208,7 @@ class DataProcessor:
         if not need_replace_model:
             self.stream_dataset.add_new_data(embeddings=data_embeddings)
         else:
-            self.stream_dataset.get_total_embeddings()[-1] = data_embeddings
+            self.stream_dataset.get_total_embeddings()[pre_n_samples:] = data_embeddings
 
         if OPTIMIZE_NEIGHBORS and not need_replace_model:
             if self._record_time:
