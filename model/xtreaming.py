@@ -9,7 +9,7 @@ from sklearn.neighbors import LocalOutlierFactor
 from model.dr_models.upd import cal_dist, UPDis4Streaming
 
 
-def _sampled_control_points(data):
+def sampled_control_points(data):
     n_samples = data.shape[0]
     km = KMeans(n_clusters=int(np.sqrt(n_samples)))
     km.fit(data)
@@ -73,7 +73,7 @@ class XtreamingModel:
         return self.buffered_data is None
 
     def fit(self):
-        medoids, sampled_indices = _sampled_control_points(self.buffered_data)
+        medoids, sampled_indices = sampled_control_points(self.buffered_data)
         if self.pre_embedding is None:
             self._initial_project(medoids, sampled_indices)
         else:
@@ -146,6 +146,11 @@ class XtreamingModel:
 
         self.pre_control_indices = np.concatenate([self.pre_control_indices, control_indices + pre_data_num])
         return aligned_total_embeddings, total_cntp_points
+
+    def transform(self, data):
+        dists = cdist(data, self.pre_control_points)
+        embeddings = self.pro_model.reuse_project(dists)
+        return embeddings
 
     def ending(self):
         output = "Time Cost: %.4f" % self.time_costs

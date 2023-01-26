@@ -10,6 +10,7 @@ from scipy.spatial.distance import cdist
 
 from model.incrementalLLE import IncrementalLLE
 from model.ine import INEModel
+from model.parallel_xtreaming import ParallelXtreaming
 from model.scdr.scdr_parallel import SCDRParallel, SCDRFullParallel
 from model.stream_isomap import SIsomapPlus
 from utils.constant_pool import METRIC_NAMES, STEADY_METRIC_NAMES
@@ -165,6 +166,11 @@ class StreamingEx:
     def start_parallel_spca(self):
         self.model = ParallelsPCA(Queue(), Queue(), Queue(), Queue(), self.n_components,
                                   self.cfg.method_params.forgetting_factor)
+        self.stream_fitting()
+
+    def start_parallel_xtreaming(self):
+        self.model = ParallelXtreaming(Queue(), Queue(), Queue(), Queue(), self.cfg.method_params.buffer_size,
+                                       self.cfg.method_params.eta)
         self.stream_fitting()
 
     def stream_fitting(self):

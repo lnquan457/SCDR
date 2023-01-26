@@ -1,3 +1,4 @@
+import copy
 import time
 from threading import Thread
 
@@ -68,6 +69,7 @@ class ParallelsPCA:
             self.model_updater.start()
             self.pca_model = self._model_return_queue.get()
             self.pattern_detector.start()
+            self._pattern_data_queue.put([self.total_data, False, self.total_data, ])
             replace_model = True
         else:
             self.total_data = np.concatenate([self.total_data, x], axis=0)
@@ -83,7 +85,7 @@ class ParallelsPCA:
         if not self._model_return_queue.empty():
             self._newest_model = self._model_return_queue.get()
 
-        self._pattern_data_queue.put([x, self.total_data, False])
+        self._pattern_data_queue.put([x, False, self.total_data, ])
 
         if replace_model:
             cur_embeddings = self.pca_model.transform(self.total_data)
@@ -100,7 +102,7 @@ class ParallelsPCA:
         return self.pre_embeddings
 
     def ending(self):
-        self._pattern_data_queue.put([None, self.total_data, True])
+        self._pattern_data_queue.put([None, True, self.total_data])
         output = "Time Cost: %.4f" % self.time_cost
         print(output)
         return output, self._time_cost_records
@@ -120,29 +122,29 @@ class PCAPatternChangeDetector(Thread):
 
     def run(self) -> None:
         while True:
-            data, total_data, stop_flag = self._pattern_data_queue.get()
+            data, stop_flag, total_data = self._pattern_data_queue.get()
 
             if stop_flag:
                 self._model_update_queue.put([True, None])
                 break
 
-            self._cur_unfitted_num += data.shape[0]
-            if self._cur_unfitted_num >= self._update_thresh:
-                self._model_update_queue.put([False, total_data[-self._cur_unfitted_num:]])
-                self._cur_unfitted_num = 0
-
             replace_model = False
             if self._lof is None:
                 self._lof = LocalOutlierFactor(n_neighbors=10, novelty=True, metric="euclidean", contamination=0.1)
-                self._lof.fit(total_data)
+                self._lof.fit(data)
             else:
+                self._cur_unfitted_num += data.shape[0]
+                if self._cur_unfitted_num >= self._update_thresh:
+                    self._model_update_queue.put([stop_flag, total_data[-self._cur_unfitted_num:]])
+                    self._cur_unfitted_num = 0
+
                 labels = self._lof.predict(data)
-                self._cur_change_num -= np.sum(labels)
+                self._cur_change_num += np.count_nonzero(labels-1)
 
                 if self._cur_change_num >= self._change_thresh:
                     replace_model = True
                     self._cur_change_num = 0
-                    self._lof.fit(total_data)
+                    self._lof.fit(data)
 
             self._replace_model_queue.put(replace_model)
 
@@ -167,4 +169,4 @@ class PCAUpdater(Thread):
                 self._model = IncPCA(self._n_components, self._forgetting_factor)
 
             self._model.partial_fit(data)
-            self._model_return_queue.put(self._model)
+            self._model_return_queue.put(copy.copy(self._model))
