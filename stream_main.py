@@ -74,7 +74,10 @@ def start(ex):
         ex.start_ille()
     elif args.method == SIPCA:
         # ==============2. siPCA model=====================
-        ex.start_siPCA()
+        if args.parallel:
+            ex.start_parallel_spca()
+        else:
+            ex.start_siPCA()
     elif args.method == XTREAMING:
         # ==============3. Xtreaming model=====================
         ex.start_xtreaming()
@@ -125,9 +128,10 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=SCDR,
+    parser.add_argument("--method", type=str, default=SIPCA,
                         choices=[ILLE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
+    parser.add_argument("--parallel", type=bool, default=True)
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 

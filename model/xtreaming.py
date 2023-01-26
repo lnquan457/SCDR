@@ -46,7 +46,7 @@ class XtreamingModel:
         self.pre_control_points = None
         self.pre_embedding = None
         self.pre_cntp_embeddings = None
-        self.lof = LocalOutlierFactor(n_neighbors=5, novelty=True, metric="euclidean", contamination=0.1)
+        self.lof = LocalOutlierFactor(n_neighbors=10, novelty=True, metric="euclidean", contamination=0.1)
         self.time_costs = 0
         self._time_cost_records = [0]
 

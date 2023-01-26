@@ -1,6 +1,7 @@
 import os
 import time
 from multiprocessing import Process
+from queue import Queue
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,7 +17,7 @@ from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueue
 from dataset.streaming_data_mock import StreamingDataMock, SimulatedStreamingData, StreamingDataMock2Stage
 from model.scdr.dependencies.experiment import position_vis
 from model.atSNE import atSNEModel
-from model.si_pca import StreamingIPCA
+from model.si_pca import StreamingIPCA, ParallelsPCA
 from model.xtreaming import XtreamingModel
 from utils.common_utils import evaluate_and_log, time_stamp_to_date_time_adjoin
 from utils.logger import InfoLogger
@@ -159,6 +160,11 @@ class StreamingEx:
     def start_ille(self):
         self.model = IncrementalLLE(self.cfg.exp_params.initial_data_num, self.n_components,
                                     self.cfg.method_params.n_neighbors)
+        self.stream_fitting()
+
+    def start_parallel_spca(self):
+        self.model = ParallelsPCA(Queue(), Queue(), Queue(), Queue(), self.n_components,
+                                  self.cfg.method_params.forgetting_factor)
         self.stream_fitting()
 
     def stream_fitting(self):
