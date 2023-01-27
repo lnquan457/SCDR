@@ -10,6 +10,7 @@ from scipy.spatial.distance import cdist
 
 from model.incrementalLLE import IncrementalLLE
 from model.ine import INEModel
+from model.parallel_ine import ParallelINE
 from model.parallel_xtreaming import ParallelXtreaming
 from model.scdr.scdr_parallel import SCDRParallel, SCDRFullParallel
 from model.stream_isomap import SIsomapPlus
@@ -171,6 +172,11 @@ class StreamingEx:
     def start_parallel_xtreaming(self):
         self.model = ParallelXtreaming(Queue(), Queue(), Queue(), Queue(), self.cfg.method_params.buffer_size,
                                        self.cfg.method_params.eta)
+        self.stream_fitting()
+
+    def start_parallel_ine(self):
+        self.model = ParallelINE(Queue(), Queue(), Queue(), Queue(), self.cfg.exp_params.initial_data_num,
+                                 self.n_components, self.cfg.method_params.n_neighbors)
         self.stream_fitting()
 
     def stream_fitting(self):

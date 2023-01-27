@@ -8,6 +8,8 @@ from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.manifold._utils import _binary_search_perplexity
 from sklearn.neighbors import NearestNeighbors
+from sklearn.utils import check_random_state
+
 from model.incrementalLE import kNNBasedIncrementalMethods
 from sklearn.manifold import TSNE
 from model.scdr.dependencies.experiment import position_vis
@@ -28,7 +30,7 @@ def _select_min_loss_one(candidate_embeddings, neighbors_embeddings, high_probab
 
 
 class INEModel(kNNBasedIncrementalMethods, TSNE):
-    def __init__(self, train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=3, init="pca"):
+    def __init__(self, train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=3, init="random"):
         kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, single=True)
         TSNE.__init__(self, n_components, perplexity=n_neighbors)
         self.init = init
@@ -140,7 +142,8 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
             )
             X_embedded = pca.fit_transform(X).astype(np.float32, copy=False)
         elif self.init == "random":
-            X_embedded = 1e-4 * self.random_state.randn(n_samples, self.n_components).astype(
+            random_state = check_random_state(self.random_state)
+            X_embedded = 1e-4 * random_state.randn(n_samples, self.n_components).astype(
                 np.float32
             )
         else:

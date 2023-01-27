@@ -86,7 +86,10 @@ def start(ex):
             ex.start_xtreaming()
     elif args.method == INE:
         # ==============4. INE model=====================
-        ex.start_ine()
+        if args.parallel:
+            ex.start_parallel_ine()
+        else:
+            ex.start_ine()
     elif args.method == SISOMAPPP:
         ex.start_sisomap()
     elif args.method == SCDR:
@@ -131,7 +134,7 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=XTREAMING,
+    parser.add_argument("--method", type=str, default=INE,
                         choices=[ILLE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
     parser.add_argument("--parallel", type=bool, default=True)

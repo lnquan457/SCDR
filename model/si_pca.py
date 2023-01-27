@@ -135,7 +135,7 @@ class PCAPatternChangeDetector(Thread):
             else:
                 self._cur_unfitted_num += data.shape[0]
                 if self._cur_unfitted_num >= self._update_thresh:
-                    self._model_update_queue.put([stop_flag, total_data[-self._cur_unfitted_num:]])
+                    self._send_update_signal(stop_flag, total_data)
                     self._cur_unfitted_num = 0
 
                 labels = self._lof.predict(data)
@@ -144,9 +144,12 @@ class PCAPatternChangeDetector(Thread):
                 if self._cur_change_num >= self._change_thresh:
                     replace_model = True
                     self._cur_change_num = 0
-                    self._lof.fit(data)
+                    self._lof.fit(total_data)
 
             self._replace_model_queue.put(replace_model)
+
+    def _send_update_signal(self, stop_flag, total_data):
+        self._model_update_queue.put([stop_flag, total_data[-self._cur_unfitted_num:]])
 
 
 class PCAUpdater(Thread):
