@@ -86,7 +86,7 @@ class kNNBasedIncrementalMethods:
             for i, item in enumerate(x):
                 self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
                 sta = time.time()
-                self._incremental_embedding(item)
+                self._incremental_embedding(np.reshape(item, (1, -1)))
                 self.time_cost += time.time() - sta
 
         return self.pre_embeddings

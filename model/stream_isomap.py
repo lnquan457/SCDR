@@ -127,17 +127,21 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         self.transformation_info_list = []
         self.cluster_indices = None
         self.global_embedding_mean = []
+        self._data_cluster = []
+        self._geodesic_dists = []
 
         self.cluster_real_cls = []
         self.predict_cls = []
 
     def _first_train(self, train_data):
+        self.initial_train_num = train_data.shape[0]
         knn_indices, knn_dists = compute_knn_graph(train_data, None, self.n_neighbors, None)
         self.knn_manager.add_new_kNN(knn_indices, knn_dists)
         self.cluster_indices = self._find_clusters(train_data, knn_indices)
         local_embeddings_list = self._local_embedding(train_data)
         seq_cluster_indices, seq_labels, seq_local_embeddings = \
             _extract_labels(self.cluster_indices, local_embeddings_list)
+        self._data_cluster = seq_labels.tolist()
 
         # position_vis(self.stream_dataset.total_label, None, seq_local_embeddings, "local embeddings")
 
@@ -159,11 +163,13 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             # TODO: 分类的精度非常低
             idx = self._select_best_manifold(global_embedding_list)
             embeddings = global_embedding_list[idx]
-            self.predict_cls.append(self.cluster_real_cls[idx])
+            # self.predict_cls.append(self.cluster_real_cls[idx])
         else:
             idx = 0
             embeddings = local_embedding_list[0]
 
+        self._data_cluster.append(idx)
+        self._geodesic_dists.append(geodesic_dists_list[idx])
         embeddings = embeddings[np.newaxis, :]
         self.isomap_list[idx].merge_new_data_info(new_data, embeddings, geodesic_dists_list[idx])
         self.pre_embeddings = np.concatenate([self.pre_embeddings, embeddings], axis=0)
@@ -229,11 +235,11 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             cluster_indices[int(closest_indices[i])].append(item)
 
         # print("cluster number:", idx)
-        for item in cluster_indices:
-            labels = self.stream_dataset._total_label[item]
-            cls, counts = np.unique(labels, return_counts=True)
-            idx = np.argmax(counts)
-            self.cluster_real_cls.append(cls[idx])
+        # for item in cluster_indices:
+        #     labels = self.stream_dataset.get_total_label()[item]
+        #     cls, counts = np.unique(labels, return_counts=True)
+        #     idx = np.argmax(counts)
+        #     self.cluster_real_cls.append(cls[idx])
         return cluster_indices
 
     # def _find_clusters_acc(self, data):
@@ -308,6 +314,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         return transformed_embeddings
 
     def _embedding2each_manifold(self, data):
+        # print("pre_cluster_num", self.pre_cluster_num)
         embedding_list = np.zeros((self.pre_cluster_num, self.n_components))
         geodesic_dists_list = []
         for i, m_embedder in enumerate(self.isomap_list):
@@ -318,6 +325,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
 
     def _transform2global_space(self, local_embedding_list):
         global_embedding_list = np.zeros((self.pre_cluster_num, self.n_components))
+        # print(len(local_embedding_list), len(self.transformation_info_list))
         for i, item in enumerate(self.transformation_info_list):
             R_i, t_i = item
             embedding = np.dot(R_i, local_embedding_list[i].T)[:, np.newaxis] + t_i
@@ -334,7 +342,6 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
                                                global_embedding_list[min_idx]) / (manifold_data_num + 1)
         self.cluster_indices[min_idx].append(self.stream_dataset.get_n_samples())
         return min_idx
-
 
 
 class CustomizedLPCA(lPCA):

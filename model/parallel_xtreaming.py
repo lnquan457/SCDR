@@ -23,6 +23,7 @@ class ParallelXtreaming:
         self.total_data = None
         self.pre_embeddings = None
         self._pre_control_indices = None
+        self._get_new_model = False
         self._newest_model = None
         self._newest_cntp_indices = None
         self._pattern_data_queue = pattern_data_queue
@@ -64,11 +65,16 @@ class ParallelXtreaming:
             replace_model = self._replace_model_queue.get()
             if replace_model:
                 print("replace model!")
+
+                if not self._get_new_model:
+                    self._get_new_model_info()
+
                 self._model = self._newest_model
                 self._pre_control_indices = self._newest_cntp_indices
+                self._get_new_model = False
 
         if not self._model_return_queue.empty():
-            self._newest_model, _, self._newest_cntp_indices = self._model_return_queue.get()
+            self._get_new_model_info()
 
         self._pattern_data_queue.put([x, False, self.total_data])
 
@@ -89,6 +95,10 @@ class ParallelXtreaming:
         self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
         self.buffered_data = None
         return self.pre_embeddings
+
+    def _get_new_model_info(self):
+        self._newest_model, _, self._newest_cntp_indices = self._model_return_queue.get()
+        self._get_new_model = True
 
     def _buffering(self, data):
         if self.buffered_data is None:

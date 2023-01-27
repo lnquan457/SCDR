@@ -16,6 +16,7 @@ class ParallelINE(INEModel):
         self.pattern_detector = INEChangeDetector(pattern_data_queue, model_update_queue, replace_model_queue)
         self.model_updater = None
         self._newest_embeddings = None
+        self._get_new_model = False
 
     def _first_train(self, train_data):
         self.pre_embeddings = super()._first_train(train_data)
@@ -27,17 +28,21 @@ class ParallelINE(INEModel):
 
     def _incremental_embedding(self, new_data):
         # 一次只处理一个数据
-        new_data = np.reshape(new_data, (1, -1))
         pre_data_num = self.knn_manager.knn_indices.shape[0]
 
         if not self._replace_model_queue.empty():
             replace_model = self._replace_model_queue.get()
             if replace_model:
                 print("replace model!")
+
+                if not self._get_new_model:
+                    self._get_new_model_info()
+
                 self.pre_embeddings[:self._newest_embeddings.shape[0]] = self._newest_embeddings
+                self._get_new_model = False
 
         if not self._model_return_queue.empty():
-            self._newest_embeddings = self._model_return_queue.get()
+            self._get_new_model_info()
 
         self._pattern_data_queue.put([new_data, False, self.stream_dataset.get_total_data(), ])
 
@@ -51,9 +56,14 @@ class ParallelINE(INEModel):
         # print("after", self.pre_embeddings[-1])
         return self.pre_embeddings
 
+    def _get_new_model_info(self):
+        self._newest_embeddings = self._model_return_queue.get()
+        self._get_new_model = True
+
 
 class INEChangeDetector(PCAPatternChangeDetector):
     def _send_update_signal(self, stop_flag, total_data):
+        self._model_update_queue.queue.clear()
         self._model_update_queue.put([stop_flag, total_data])
 
 

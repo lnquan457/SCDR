@@ -91,7 +91,10 @@ def start(ex):
         else:
             ex.start_ine()
     elif args.method == SISOMAPPP:
-        ex.start_sisomap()
+        if args.parallel:
+            ex.start_parallel_sisomap()
+        else:
+            ex.start_sisomap()
     elif args.method == SCDR:
         assert isinstance(ex, StreamingExProcess)
         cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
@@ -134,7 +137,7 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=INE,
+    parser.add_argument("--method", type=str, default=SISOMAPPP,
                         choices=[ILLE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
     parser.add_argument("--parallel", type=bool, default=True)

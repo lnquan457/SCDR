@@ -47,6 +47,7 @@ class ParallelsPCA:
         self.pca_model = None
         self.total_data = None
         self.pre_embeddings = None
+        self._get_new_model = False
         self._newest_model = None
         self._pattern_data_queue = pattern_data_queue
         self._model_return_queue = model_return_queue
@@ -80,10 +81,15 @@ class ParallelsPCA:
             replace_model = self._replace_model_queue.get()
             if replace_model:
                 print("replace model!")
+
+                if not self._get_new_model:
+                    self._get_new_model_info()
+
                 self.pca_model = self._newest_model
+                self._get_new_model = False
 
         if not self._model_return_queue.empty():
-            self._newest_model = self._model_return_queue.get()
+            self._get_new_model_info()
 
         self._pattern_data_queue.put([x, False, self.total_data, ])
 
@@ -100,6 +106,10 @@ class ParallelsPCA:
         self.time_cost += time.time() - sta
         self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
         return self.pre_embeddings
+
+    def _get_new_model_info(self):
+        self._newest_model = self._model_return_queue.get()
+        self._get_new_model = True
 
     def ending(self):
         self._pattern_data_queue.put([None, True, self.total_data])
