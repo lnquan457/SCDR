@@ -253,6 +253,12 @@ class CLR_Text_Dataset(MyTextDataset):
         if labels is not None:
             self.targets = labels if self.targets is None else np.append(self.targets, labels)
 
+    def slide_window(self, window_size):
+        if self.data.shape[0] <= window_size:
+            return
+        self.data = self.data[-window_size:]
+        self.targets = self.targets[-window_size:]
+
 
 class CLR_Image_Dataset(MyImageDataset):
     def __init__(self, dataset_name, root_dir, train=True, transform=None, data_file_path=None, train_data=None,
@@ -296,8 +302,6 @@ class UMAP_CLR_Text_Dataset(CLR_Text_Dataset):
         # 经过对称化但是没有归一化的
         self.sym_no_norm_weights = None
         self.min_neighbor_num = None
-        self.knn_dist = None
-        self.knn_indices = None
 
     def build_fuzzy_simplicial_set(self, knn_indices, knn_distances, n_neighbors, symmetric):
         InfoLogger.info("开始生成模糊单纯形集...")

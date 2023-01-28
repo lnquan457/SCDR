@@ -1,14 +1,16 @@
 import argparse
+from multiprocessing import Queue
 
 import numpy as np
 import os
 
+from dataset.streaming_data_mock import SimulatedStreamingData
 from model.scdr.model_trainer import SCDRTrainer, SCDRTrainerProcess
 from experiments.streaming_experiment import StreamingEx, StreamingExProcess
 from model.dr_models.ModelSets import MODELS
 from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, INE, SISOMAPPP, ILLE
 from utils.common_utils import get_config
-from utils.queue_set import ModelUpdateQueueSet
+from utils.queue_set import ModelUpdateQueueSet, StreamDataQueueSet
 
 device = "cuda:0"
 log_path = "logs/logs.txt"
@@ -102,8 +104,8 @@ def start(ex):
 
         model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, cfg.exp_params.dataset,
                                            cfg_path, cfg, result_save_dir, device=device, log_path=log_path)
-        ex.start_parallel_scdr(model_update_queue_set, model_trainer)
-        # ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
+        # ex.start_parallel_scdr(model_update_queue_set, model_trainer)
+        ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 
@@ -126,10 +128,12 @@ def custom_indices_training(custom_indices_path):
     # custom_indices_path = os.path.join(ConfigInfo.CUSTOM_INDICES_DIR, "{}.npy".format(args.dataset))
     custom_indices = np.load(custom_indices_path, allow_pickle=True)
 
-    if args.method == SCDR:
-        ex = StreamingExProcess(cfg, custom_indices, result_save_dir)
-    else:
-        ex = StreamingEx(cfg, custom_indices, result_save_dir)
+    stream_data_queue_set = Queue()
+    start_data_queue = Queue()
+    ex = StreamingExProcess(cfg, custom_indices, result_save_dir, stream_data_queue_set, start_data_queue)
+    data_generator = SimulatedStreamingData(cfg.exp_params.dataset, cfg.exp_params.stream_rate,
+                                            stream_data_queue_set, start_data_queue, custom_indices)
+    data_generator.start()
 
     start(ex)
 

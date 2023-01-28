@@ -46,13 +46,23 @@ def build_dataset(data_file_path, dataset_name, is_image, normalize_method, root
 
 class DataRepo:
     # 主要负责记录当前的流数据，以及更新它们的k近邻
-    def __init__(self, n_neighbor):
+    def __init__(self, n_neighbor, window_size=1000):
         self.n_neighbor = n_neighbor
         self._total_n_samples = 0
         self._total_data = None
         self._total_label = None
         self._total_embeddings = None
         self._knn_manager = KNNManager(n_neighbor)
+        self._window_size = window_size
+
+    def slide_window(self):
+        if self.get_n_samples() <= self._window_size:
+            return
+        self._total_n_samples = self._window_size
+        self._total_data = self.get_total_data()[-self._total_n_samples:]
+        self._total_label = self.get_total_label()[-self._total_n_samples:]
+        self._total_embeddings = self.get_total_embeddings()[-self._total_n_samples:]
+        self._knn_manager.slide_window(self._window_size)
 
     def get_n_samples(self):
         return self._total_n_samples
@@ -130,7 +140,7 @@ class DataSetWrapper(DataRepo):
                                                            None, accelerate=False)
             self._knn_manager.add_new_kNN(knn_indices, knn_distances)
 
-        self.distance2prob(ComponentInfo.UMAP_NORMALIZE, train_dataset, symmetric)
+        self.distance2prob(train_dataset, symmetric)
 
         train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
 
@@ -146,8 +156,8 @@ class DataSetWrapper(DataRepo):
         # 更新transform，迭代时对邻居进行采样返回正例对
         train_dataset.update_transform(CDRDataTransform(epoch_num, self.similar_num, train_dataset, is_image,
                                                         data_augment, self.n_neighbor,
-                                                        self.symmetric_nn_indices[:train_dataset.data_num],
-                                                        self.symmetric_nn_weights[:train_dataset.data_num]))
+                                                        self.symmetric_nn_indices[:self.get_n_samples()],
+                                                        self.symmetric_nn_weights[:self.get_n_samples()]))
         train_num = train_dataset.data_num
 
         self.batch_num = math.floor(train_num / self.batch_size)
@@ -241,8 +251,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.__rhos = None
         self._concat_num = 1000
         self._tmp_neighbor_weights = np.ones((1, self.n_neighbor))
-        self._dists2pre = None
-        self._fitted_data_num = 0
+        self._unfitted_data_num = 0
 
         self.dist_t = 0
         self.update_t = 0
@@ -250,8 +259,17 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.fuzzy_t = 0
         self.get_t = 0
 
-    def update_fitted_data_num(self, fitted_num):
-        self._fitted_data_num = fitted_num
+    def slide_window(self):
+        super().slide_window()
+        self.__sigmas = self.__sigmas[-self.get_n_samples():]
+        self.__rhos = self.__rhos[-self.get_n_samples():]
+        self.symmetric_nn_indices = self.symmetric_nn_indices[-self.get_n_samples():]
+        self.symmetric_nn_weights = self.symmetric_nn_weights[-self.get_n_samples():]
+        self.raw_knn_weights = self.raw_knn_weights[-self.get_n_samples():]
+        self.train_dataset.slide_window()
+
+    def update_unfitted_data_num(self, unfitted_num):
+        self._unfitted_data_num = unfitted_num
 
     def distance2prob(self, train_dataset, symmetric):
         # 针对高维空间中的点对距离进行处理，转换为0~1相似度并且进行对称化
@@ -454,14 +472,19 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.raw_knn_weights[:pre_num] = new_self.raw_knn_weights[:pre_num]
 
     def get_data_neighbor_mean_std_dist(self):
-        mean_per_data = np.mean(self._knn_manager.knn_dists[:self._fitted_data_num], axis=1)
+        knn_dists = self._knn_manager.knn_dists[:-self._unfitted_data_num] if self._unfitted_data_num > 0 else self._knn_manager.knn_dists
+        mean_per_data = np.mean(knn_dists, axis=1)
         return np.mean(mean_per_data), np.std(mean_per_data)
 
     def get_embedding_neighbor_mean_std_dist(self):
+        total_embeddings = self._total_embeddings[:-self._unfitted_data_num, np.newaxis, :] \
+            if self._unfitted_data_num > 0 else self._total_embeddings[:, np.newaxis, :]
+        knn_indices = self._knn_manager.knn_indices[:-self._unfitted_data_num] \
+            if self._unfitted_data_num > 0 else self._knn_manager.knn_indices
         pre_low_neighbor_embedding_dists = \
-            np.linalg.norm(self._total_embeddings[:self._fitted_data_num, np.newaxis, :] - np.reshape(
-                self._total_embeddings[np.ravel(self._knn_manager.knn_indices[:self._fitted_data_num])],
-                (self._fitted_data_num, self.n_neighbor, -1)), axis=-1)
+            np.linalg.norm(total_embeddings - np.reshape(
+                self._total_embeddings[np.ravel(knn_indices)],
+                (self.get_n_samples() - self._unfitted_data_num, self.n_neighbor, -1)), axis=-1)
 
         mean_per_data = np.mean(pre_low_neighbor_embedding_dists, axis=1)
 
@@ -477,6 +500,13 @@ class KNNManager:
         # 分别表示新数据在与新数据互为kNN和单向kNN的数据点的kNN中的位置，每个list里面是一个四元组，
         # 分别表示新数据的下标、kNN发生变化的数据下标、新数据插入的位置、以及被替换数据的下标
         self._pre_neighbor_changed_meta = []
+
+    def slide_window(self, window_size):
+        if self.knn_indices is None or self.knn_indices.shape[0] <= window_size:
+            return
+
+        self.knn_indices = self.knn_indices[-window_size:]
+        self.knn_dists = self.knn_dists[-window_size:]
 
     def is_empty(self):
         return self.knn_indices is None

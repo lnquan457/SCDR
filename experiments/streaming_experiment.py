@@ -1,7 +1,7 @@
 import os
+import queue
 import time
-from multiprocessing import Process
-from queue import Queue
+from multiprocessing import Process, Queue
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -72,7 +72,7 @@ class StreamingEx:
         self.vis_iter = cfg.exp_params.vis_iter
         self.save_embedding_iter = cfg.exp_params.save_iter
         # self._eval_nums = None
-        self._eval_nums = 2
+        # self._eval_nums = 2
         self._eval_iter = cfg.exp_params.eval_iter
         self.log_path = log_path
         self.result_save_dir = result_save_dir
@@ -114,8 +114,9 @@ class StreamingEx:
 
     def _prepare_streaming_data(self):
         # self.streaming_mock = StreamingDataMock(self.dataset_name, self.cfg.exp_params.stream_rate, self.seq_indices)
-        self.streaming_mock = StreamingDataMock2Stage(self.dataset_name, None, 0,
-                                                      self.cfg.exp_params.stream_rate, self.seq_indices)
+        # self.streaming_mock = StreamingDataMock2Stage(self.dataset_name, None, 0,
+        #                                               self.cfg.exp_params.stream_rate, self.seq_indices)
+        pass
 
     def _train_begin(self):
         self._prepare_streaming_data()
@@ -123,10 +124,6 @@ class StreamingEx:
                                             time_stamp_to_date_time_adjoin(int(time.time())))
         check_path_exist(self.result_save_dir)
         self.log = open(os.path.join(self.result_save_dir, self.log_path), 'a')
-
-        if self._eval_nums is not None:
-            time_steps = self.streaming_mock.time_step_num
-            self._eval_iter = time_steps // self._eval_nums
 
     def build_metric_tool(self):
         data = self.history_data
@@ -166,7 +163,7 @@ class StreamingEx:
         self.stream_fitting()
 
     def start_parallel_spca(self):
-        self.model = ParallelsPCA(Queue(), Queue(), Queue(), Queue(), self.n_components,
+        self.model = ParallelsPCA(queue.Queue(), queue.Queue(), queue.Queue(), queue.Queue(), self.n_components,
                                   self.cfg.method_params.forgetting_factor)
         self.stream_fitting()
 
@@ -398,9 +395,12 @@ class StreamingEx:
 
 
 class StreamingExProcess(StreamingEx, Process):
-    def __init__(self, cfg, seq_indices, result_save_dir, log_path="log_streaming_process.txt", do_eval=True):
+    def __init__(self, cfg, seq_indices, result_save_dir, stream_data_queue_set, start_data_queue,
+                 log_path="log_streaming_process.txt",
+                 do_eval=True):
         self.name = "数据处理进程"
-        self.stream_data_queue_set = StreamDataQueueSet()
+        self.stream_data_queue_set = stream_data_queue_set
+        self._start_data_queue = start_data_queue
         self.embedding_data_queue = None
         self.cdr_update_queue_set = None
         self.update_num = 0
@@ -409,9 +409,10 @@ class StreamingExProcess(StreamingEx, Process):
         StreamingEx.__init__(self, cfg, seq_indices, result_save_dir, log_path, do_eval)
 
     def _prepare_streaming_data(self):
-        self.streaming_mock = SimulatedStreamingData(self.dataset_name, self.cfg.exp_params.stream_rate,
-                                                     self.stream_data_queue_set, self.seq_indices)
-        self.streaming_mock.start()
+        pass
+        # self.streaming_mock = SimulatedStreamingData(self.dataset_name, self.cfg.exp_params.stream_rate,
+        #                                              self.stream_data_queue_set, self.seq_indices)
+        # self.streaming_mock.start()
         # super()._prepare_streaming_data()
 
     def start_parallel_scdr(self, model_update_queue_set, model_trainer):
@@ -438,22 +439,18 @@ class StreamingExProcess(StreamingEx, Process):
         self.run()
 
     def _get_stream_data(self, accumulate=False):
-        if not self.stream_data_queue_set.stop_flag_queue.empty():
-            return True, None, None
 
-        data_and_labels = self._get_data_accumulate() if accumulate else self._get_data_single()
-        total_data, total_labels = [], []
-        for item in data_and_labels:
-            total_data.append(item[0])
-            if item[1] is not None:
-                total_labels.append(item[1])
-        total_data = np.array(total_data, dtype=float)
-        total_labels = None if len(total_labels) == 0 else np.array(total_labels, dtype=int)
+        # data_and_labels = self._get_data_accumulate() if accumulate else self._get_data_single()
+        data, labels, is_stop = self.stream_data_queue_set.get()
+        self.cur_time_step += 1
 
-        output = "Start processing timestamp {}".format(self.cur_time_step)
+        total_data = np.array(data, dtype=float)
+        total_labels = None if labels[0] is None else np.array(labels, dtype=int)
+
+        output = "Get stream data timestamp {}".format(self.cur_time_step)
         InfoLogger.info(output)
 
-        return False, total_data, total_labels
+        return is_stop, total_data, total_labels
 
     def _get_data_accumulate(self):
         total_data = self.stream_data_queue_set.data_queue.get()
@@ -465,7 +462,7 @@ class StreamingExProcess(StreamingEx, Process):
         return total_data
 
     def _get_data_single(self):
-        data = self.stream_data_queue_set.data_queue.get()
+        data = self.stream_data_queue_set.get()
         self.cur_time_step += 1
         return data
 
@@ -475,7 +472,8 @@ class StreamingExProcess(StreamingEx, Process):
         self.img_dir = os.path.join(self.result_save_dir, "imgs")
         check_path_exist(self.img_dir)
         # 开始产生数据
-        self.stream_data_queue_set.start_flag_queue.put(True)
+        self._start_data_queue.put(True)
+        # self.stream_data_queue_set.put([None, True])
         while True:
 
             # 获取数据

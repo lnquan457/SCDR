@@ -83,7 +83,7 @@ class SCDRParallel:
         # 这里传回来的stream_dataset中，包含了最新的对称kNN信息
         embeddings, model, stream_dataset, cluster_indices = self.model_update_queue_set.embedding_queue.get()
         self.stream_dataset = stream_dataset
-        self.stream_dataset.update_fitted_data_num(embeddings.shape[0])
+        self.stream_dataset.update_unfitted_data_num(0)
         self.stream_dataset.add_new_data(embeddings=embeddings)
         self.nn_embedder.update_model(model)
 

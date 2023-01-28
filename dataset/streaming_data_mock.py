@@ -68,13 +68,14 @@ class RealStreamingData(Process):
 
 
 class SimulatedStreamingData(Process):
-    def __init__(self, dataset_name, stream_rate, queue_set, custom_seq=None):
+    def __init__(self, dataset_name, stream_rate, data_queue, start_data_queue, custom_seq=None, iter_time=0.01):
         self.name = "模仿流数据产生进程"
         Process.__init__(self, name=self.name)
-        self.queue_set = queue_set
+        self._iter_time = iter_time
+        self.data_queue = data_queue
+        self._start_data_queue = start_data_queue
         self.dataset_name = dataset_name
         self.stream_rate = stream_rate
-        self.stop_flag = False
         self.data_index = 0
 
         self.data_file_path = os.path.join(ConfigInfo.DATASET_CACHE_DIR, dataset_name + ".h5")
@@ -114,35 +115,27 @@ class SimulatedStreamingData(Process):
 
     def run(self) -> None:
         idx = 0
-        self.queue_set.start_flag_queue.get(block=True)
+        self._start_data_queue.get(block=True)
         print("start adding data!")
         if self.data_index > 0:
             self.data_index = 0
-        while not self.stop_flag:
+        while True:
 
-            while not self.queue_set.data_queue.empty():
-                pass
-
-            # if self.data_index > 800:
-            #     time.sleep(0.05)
-
-            if idx >= len(self.data_num_list):
-                self.queue_set.stop_flag_queue.put(True)
-                break
-
+            stop = False
             cur_data_num = self.data_num_list[idx]
-
-            # TODO：调试用
-            # if idx > 500:
-            #     break
-            # ================
             cur_data = []
+            cur_label = []
             for j in self.custom_seq[self.data_index:self.data_index + cur_data_num]:
-                cur_data.append([self.data[j], None if self.targets is None else self.targets[j]])
-            self.queue_set.data_queue.put(cur_data)
+                cur_data.append(self.data[j])
+                cur_label.append(None if self.targets is None else self.targets[j])
+
+            time.sleep(self._iter_time)
 
             self.data_index += cur_data_num
             idx += 1
+            if idx >= len(self.data_num_list):
+                stop = True
+            self.data_queue.put([cur_data, cur_label, stop])
 
 
 class StreamingDataMock:

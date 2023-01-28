@@ -1,5 +1,6 @@
 # 需要更新 self.pre_cluster_num， self.isomap_list， self.transformation_info_list， self.global_embedding_mean，self.cluster_indices，self.pre_embeddings
 import copy
+from multiprocessing import Process
 from threading import Thread
 import numpy as np
 
@@ -87,9 +88,9 @@ class ParallelSIsomapP(SIsomapPlus):
         self._get_new_model = True
 
 
-class SIsomapUpdater(Thread, SIsomapPlus):
+class SIsomapUpdater(Process, SIsomapPlus):
     def __init__(self, model_update_queue, model_return_queue, train_num, n_components, n_neighbors, epsilon=0.25):
-        Thread.__init__(self, name="SIsomapUpdater")
+        Process.__init__(self, name="SIsomapUpdater")
         SIsomapPlus.__init__(self, train_num, n_components, n_neighbors, epsilon)
         self._model_update_queue = model_update_queue
         self._model_return_queue = model_return_queue

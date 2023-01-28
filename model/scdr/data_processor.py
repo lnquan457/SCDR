@@ -56,7 +56,7 @@ class DataProcessor:
         self.initial_label_buffer = None
 
         self.fitted_data_num = 0
-        self.current_model_fitted_num = 0
+        self.current_model_unfitted_num = 0
         self._need_replace_model = False
         self._update_after_replace_signal = False
         self.model_just_replaced = False
@@ -83,7 +83,6 @@ class DataProcessor:
         self.stream_dataset = stream_dataset
 
         self.fitted_data_num = self.stream_dataset.get_n_samples()
-        self.current_model_fitted_num = self.fitted_data_num
         self.model_just_replaced = True
         self.initial_embedding_optimizer_and_quality_supervisor()
 
@@ -104,7 +103,7 @@ class DataProcessor:
         knn_indices, knn_dists, candidate_indices, candidate_dists = \
             self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
                                               self.stream_dataset.get_total_data(),
-                                              data_embeddings, data, self.current_model_fitted_num, update)
+                                              data_embeddings, data, self.current_model_unfitted_num, update)
         # knn_indices = knn_indices[np.newaxis, :]
         # knn_dists = knn_dists[np.newaxis, :]
 
@@ -129,7 +128,7 @@ class DataProcessor:
 
         if update:
             fit_data = [self.stream_dataset.get_knn_indices(), self.stream_dataset.get_knn_dists(),
-                        self.current_model_fitted_num]
+                        self.stream_dataset.get_n_samples() - self.current_model_unfitted_num]
         else:
             fit_data = None
 
@@ -240,11 +239,11 @@ class DataProcessor:
         total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)
 
         self.stream_dataset.update_embeddings(total_embeddings)
-        self.stream_dataset.update_fitted_data_num(embeddings.shape[0])
+        self.stream_dataset.update_unfitted_data_num(new_data_embeddings.shape[0])
         self.update_thresholds()
         self._model_embeddings = total_embeddings
         self.model_just_replaced = True
-        self.current_model_fitted_num = embeddings.shape[0]
+        self.current_model_unfitted_num = new_data_embeddings.shape[0]
         self._last_update_meta = None
         self._need_replace_model = False
         self._update_after_replace_signal = False
@@ -375,6 +374,8 @@ class DataProcessorProcess(DataProcessor, Process):
 
             self._embedding_data_queue.processing()
             self._newest_model = None
+            # TODO: 滑动窗口
+            # self.stream_dataset.slide_window()
             sta = time.time()
             total_embeddings, other_time = super().process(data, data_embedding, label)
             self._embedding_data_queue.put_res([total_embeddings, self._newest_model, time.time() - sta - other_time])
@@ -395,10 +396,10 @@ class DataProcessorProcess(DataProcessor, Process):
 
         total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)
         self.stream_dataset.update_embeddings(total_embeddings)
-        self.stream_dataset.update_fitted_data_num(embeddings.shape[0])
+        self.stream_dataset.update_unfitted_data_num(new_data_embeddings.shape[0])
         self.update_thresholds()
         self.model_just_replaced = True
-        self.current_model_fitted_num = embeddings.shape[0]
+        self.current_model_unfitted_num = new_data_embeddings.shape[0]
         self._last_update_meta = None
         self._need_replace_model = False
         self._update_after_replace_signal = False

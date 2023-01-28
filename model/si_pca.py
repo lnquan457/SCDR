@@ -1,5 +1,6 @@
 import copy
 import time
+from multiprocessing import Process
 from threading import Thread
 
 import numpy as np
@@ -182,4 +183,4 @@ class PCAUpdater(Thread):
                 self._model = IncPCA(self._n_components, self._forgetting_factor)
 
             self._model.partial_fit(data)
-            self._model_return_queue.put(copy.copy(self._model))
+            self._model_return_queue.put(self._model)

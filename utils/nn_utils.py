@@ -256,9 +256,9 @@ class StreamingANNSearchAnnoy:
         self._inferred_data = None
         self._automatic_beta = automatic_beta
 
-    def search_2(self, k, pre_embeddings, pre_data, query_embeddings, query_data, fitted_num, update=False):
+    def search_2(self, k, pre_embeddings, pre_data, query_embeddings, query_data, unfitted_num, update=False):
         if update:
-            self._build_annoy_index(pre_embeddings[:fitted_num])
+            self._build_annoy_index(pre_embeddings[-unfitted_num:])
         elif (pre_embeddings.shape[0] - self._fitted_num) >= self._update_iter:
             self._build_annoy_index(pre_embeddings)
 

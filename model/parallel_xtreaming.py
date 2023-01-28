@@ -1,5 +1,6 @@
 import time
 from copy import copy
+from multiprocessing import Process
 from threading import Thread
 
 from scipy.spatial.distance import cdist
@@ -114,11 +115,18 @@ class ParallelXtreaming:
         return embeddings
 
 
-class XtreamingChangeDetector(PCAPatternChangeDetector):
-
-    def __init__(self, pattern_data_queue, model_update_queue, replace_model_queue, update_thresh=50, change_thresh=200):
-        PCAPatternChangeDetector.__init__(self, pattern_data_queue, model_update_queue, replace_model_queue,
-                                          update_thresh, change_thresh)
+class XtreamingChangeDetector(Process):
+    def __init__(self, pattern_data_queue, model_update_queue, replace_model_queue, update_thresh=50,
+                 change_thresh=200):
+        Process.__init__(self, name="PatternChangeDetector")
+        self._pattern_data_queue = pattern_data_queue
+        self._model_update_queue = model_update_queue
+        self._replace_model_queue = replace_model_queue
+        self._lof = None
+        self._cur_change_num = 0
+        self._cur_unfitted_num = 0
+        self._update_thresh = update_thresh
+        self._change_thresh = change_thresh
         self._total_cntp_points = None
 
     def run(self) -> None:
@@ -157,9 +165,9 @@ class XtreamingChangeDetector(PCAPatternChangeDetector):
             self._replace_model_queue.put(replace_model)
 
 
-class XtreamingUpdater(Thread):
+class XtreamingUpdater(Process):
     def __init__(self, model_update_queue, model_return_queue, eta):
-        Thread.__init__(self, name="XtreamingUpdater")
+        Process.__init__(self, name="XtreamingUpdater")
         self._model = None
         self._eta = eta
         self._model_update_queue = model_update_queue
