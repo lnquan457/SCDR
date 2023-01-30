@@ -32,7 +32,7 @@ class EmbeddingOptimizer:
                  skip_opt=False, timeout_thresh=5.0):
         # Todo: 后续应该修改成百分比
         self.nce_opt_update_thresh = 5
-        self.__local_move_thresh_w = 1.5    # 4
+        self.__local_move_thresh_w = 3  # 1.5 for high accuracy, 3 for high speed
         self.__neg_num = neg_num
         self.__temperature = temperature
         self.__a, self.__b = find_ab_params(1.0, min_dist)
@@ -65,19 +65,19 @@ class EmbeddingOptimizer:
         initial_embedding += update_step
         return initial_embedding
 
-    def update_old_data_embedding(self, total_embeddings, update_indices, knn_indices,
+    def update_old_data_embedding(self, new_data_num, total_embeddings, update_indices, knn_indices,
                                   knn_dists, corr_target_sims, anchor_positions, replaced_indices,
                                   replaced_raw_weights):
-        old_embeddings = total_embeddings
+        old_embeddings = total_embeddings[:-new_data_num]
         if self.skip_opt:
             # sta = time.time()
             # 耗时0.3s左右
-            old_embeddings = self._pre_skip_opt(old_embeddings, knn_indices)
+            total_embeddings = self._pre_skip_opt(total_embeddings, knn_indices)
 
         # self.pre_time += time.time() - sta
         # 耗时0.7s左右
         # sta = time.time()
-        local_move_mask, row_indices = self._cal_local_move_mask(old_embeddings, update_indices,
+        local_move_mask, row_indices = self._cal_local_move_mask(total_embeddings, update_indices,
                                                                  anchor_positions, knn_indices)
         # self.pre_time += time.time() - sta
         # print("pre", self.pre_time)
@@ -93,9 +93,9 @@ class EmbeddingOptimizer:
 
         # sta = time.time()
         # 耗时1.5s左右，编译耗时0.4s左右
-        old_embeddings[update_indices] = self._update(update_indices, knn_indices[update_indices], total_embeddings,
-                                                      corr_target_sims, anchor_positions,
-                                                      replaced_indices, replaced_raw_weights, local_move_mask)
+        total_embeddings[update_indices] = self._update(update_indices, knn_indices[update_indices], total_embeddings,
+                                                        corr_target_sims, anchor_positions,
+                                                        replaced_indices, replaced_raw_weights, local_move_mask)
         # self.update_time += time.time() - sta
         # print("update", self.update_time)
 
@@ -106,7 +106,7 @@ class EmbeddingOptimizer:
         # self.end_time += time.time() - sta
         # print("end", self.end_time)
 
-        return old_embeddings
+        return total_embeddings
 
     def _pre_skip_opt(self, embeddings, knn_indices):
         assert self.skip_optimizer is not None
@@ -138,12 +138,13 @@ class EmbeddingOptimizer:
     def _end_skip_opt(self):
         self.skip_optimizer.update_records()
 
-    def _cal_local_move_mask(self, old_embeddings, update_indices, anchor_positions, knn_indices):
+    def _cal_local_move_mask(self, total_embeddings, update_indices, anchor_positions, knn_indices):
         update_num = len(update_indices)
         # Todo: 这一步比较耗时
-        dist2neighbors = np.reshape(np.linalg.norm(np.reshape(old_embeddings[knn_indices[update_indices]] -
-                                                              old_embeddings[update_indices][:, np.newaxis, :],
-                                                              (-1, old_embeddings.shape[1])), axis=-1),
+
+        dist2neighbors = np.reshape(np.linalg.norm(np.reshape(total_embeddings[knn_indices[update_indices]] -
+                                                              total_embeddings[update_indices][:, np.newaxis, :],
+                                                              (-1, total_embeddings.shape[1])), axis=-1),
                                     (update_num, -1))
 
         tmp_indices = np.arange(update_num)
@@ -189,7 +190,7 @@ class EmbeddingOptimizer:
         res = scipy.optimize.minimize(nce_loss_single, optimize_embedding,
                                       method="BFGS", jac=self._nce_grads,
                                       args=(
-                                      positive_embeddings, neg_embeddings, self.__a, self.__b, self.__temperature),
+                                          positive_embeddings, neg_embeddings, self.__a, self.__b, self.__temperature),
                                       options={'gtol': 1e-4, 'disp': False, 'return_all': False, 'eps': 1e-10})
 
         optimized_e = res.x
@@ -212,7 +213,7 @@ class SkipOptimizer:
         self.updated_data_indices = []
         self.skipped_data_indices = []
 
-        self.thresh = 1.5   # 0
+        self.thresh = 1.5  # 0
 
     def get_timeouts_indices(self):
         cur_time = time.time()

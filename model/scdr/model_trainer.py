@@ -14,6 +14,7 @@ from dataset.warppers import StreamingDatasetWrapper
 from model.scdr.dependencies.scdr_utils import ClusterRepDataSampler
 from utils.constant_pool import *
 from utils.metrics_tool import MetricProcess
+from utils.nn_utils import compute_knn_graph
 from utils.queue_set import ModelUpdateQueueSet
 
 
@@ -101,7 +102,6 @@ class SCDRTrainer(CDRsExperiments):
 
     def train(self, launch_time_stamp=None, target_metric_val=-1):
         embeddings = super().train(launch_time_stamp, target_metric_val)
-        self.pre_torch_embeddings = torch.tensor(embeddings, dtype=torch.float).to(self.device)
         return embeddings
 
     def resume_train(self, resume_epoch, *args):
@@ -171,17 +171,22 @@ class SCDRTrainer(CDRsExperiments):
         self._neighbor_steady_weights_list = []
         self._neighbor_nochange_list = []
 
-    def _update_rep_data_info(self, rep_batch_nums, rep_data_indices, cluster_indices, steady_weights=None):
+    def _update_rep_data_info(self, rep_batch_nums, rep_data_indices, cluster_indices, fitted_data_num,
+                              steady_weights=None):
         self._reset_rep_data_info()
         self.rep_batch_nums = rep_batch_nums
         rep_data_indices = np.array(rep_data_indices, dtype=int)
+        with torch.no_grad():
+            pre_torch_embeddings = self.model.acquire_latent_code(torch.tensor(self.stream_dataset.get_total_data(),
+                                                                               dtype=torch.float).to(self.device))
         if steady_weights is not None and not isinstance(steady_weights, torch.Tensor):
             steady_weights = torch.tensor(steady_weights, dtype=torch.float).to(self.device)
 
         for i, item in enumerate(rep_data_indices):
             cur_rep_data = self.stream_dataset.get_total_data()[item]
-            self._rep_data_list.append(torch.tensor(cur_rep_data, dtype=torch.float).to(self.device))
-            cur_pre_rep_embeddings = self.pre_torch_embeddings[item]
+            cur_rep_data_torch = torch.tensor(cur_rep_data, dtype=torch.float).to(self.device)
+            self._rep_data_list.append(cur_rep_data_torch)
+            cur_pre_rep_embeddings = pre_torch_embeddings[item]
             self._pre_rep_embedding_list.append(cur_pre_rep_embeddings)
 
             tmp_pre_rep_neighbor_e_list = []
@@ -192,11 +197,11 @@ class SCDRTrainer(CDRsExperiments):
 
             for j in range(self.n_neighbors):
                 cur_neighbor_indices = self.stream_dataset.get_knn_indices()[item, j]
-                no_change_indices = np.where(cur_neighbor_indices < self.pre_embeddings.shape[0])[0]
+                no_change_indices = np.where(cur_neighbor_indices < fitted_data_num)[0]
                 if len(no_change_indices) > 0:
                     cur_neighbor_indices = cur_neighbor_indices[no_change_indices]
 
-                    pre_rep_neighbor_e = self.pre_torch_embeddings[cur_neighbor_indices]
+                    pre_rep_neighbor_e = pre_torch_embeddings[cur_neighbor_indices]
                     rep_neighbors_data = self.stream_dataset.get_total_data()[cur_neighbor_indices]
                     rep_steady_weights = steady_weights[item[no_change_indices]] if steady_weights is not None else None
                     neighbor_rep_steady_weights = steady_weights[
@@ -301,6 +306,7 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
 
         self.cluster_rep_data_sampler = ClusterRepDataSampler(self.rep_data_sample_rate, self.rep_data_minimum_num,
                                                               self.cover_all)
+        self._last_fit_data_idx = 0
 
         self.clustering_sample_time = 0
         self.model_finetune_time = 0
@@ -325,45 +331,91 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
             if self.update_count == 0:
                 stream_dataset, _, ckpt_path = training_info
                 embeddings = self.first_train(stream_dataset, ckpt_path)
+                self._last_fit_data_idx = stream_dataset.get_n_samples()
+                total_data_idx = embeddings.shape[0]
             else:
-                stream_dataset, _, fitted_data_num, cur_data_num, _is_new_manifold = training_info
+                stream_dataset, _, fitted_data_num, cur_data_num, _is_new_manifold, total_data_idx, out_num = training_info
                 # print("fitted num", fitted_data_num)
                 sta = time.time()
-                pre_num = self.pre_embeddings.shape[0]
-                stream_dataset.update_previous_info(pre_num, self.stream_dataset)
+                # pre_num = self.pre_embeddings.shape[0]
+                # stream_dataset.update_previous_info(fitted_data_num, self.stream_dataset)
+
+                pre_symm_nn_indices = self.stream_dataset.symmetric_nn_indices[out_num:] - out_num
+                pre_symm_nn_weights = self.stream_dataset.symmetric_nn_weights[out_num:]
+                #
+                for i in range(len(pre_symm_nn_indices)):
+                    indices = np.where(pre_symm_nn_indices[i] >= 0)
+                    pre_symm_nn_indices[i] = pre_symm_nn_indices[i][indices]
+                    pre_symm_nn_weights[i] = pre_symm_nn_weights[i][indices]
+                #
+
+                # 一些数据的kNN由于滑动窗口改变了，他们所对应的symmetric_nn_indices也应该改变
                 self.stream_dataset = stream_dataset
+                self.stream_dataset.symmetric_nn_indices = np.concatenate([pre_symm_nn_indices, np.ones(cur_data_num)])
+                self.stream_dataset.symmetric_nn_weights = np.concatenate([pre_symm_nn_weights, np.ones(cur_data_num)])
+
+                knn_indices, knn_dists = compute_knn_graph(stream_dataset.get_total_data(), None, 10, None)
+                cur_knn_indices = stream_dataset.get_knn_indices()
+                acc = np.sum(np.ravel(knn_indices) == np.ravel(cur_knn_indices)) / len(np.ravel(knn_indices))
+                print("acc", acc)
+
+                # acc_list = []
+                # for i, item in enumerate(knn_indices):
+                #     if i >= fitted_data_num:
+                #         break
+                #     num = 0
+                #     for jtem in item:
+                #         if jtem in self.stream_dataset.symmetric_nn_indices[i]:
+                #             num += 1
+                #     acc_list.append(num / 10)
+                # print("before symm acc:", np.mean(acc_list))
+
+                # self.stream_dataset._cached_neighbor_change_indices = np.arange(fitted_data_num + cur_data_num - 1)
                 self.stream_dataset.update_cached_neighbor_similarities()
-                n_samples = self.stream_dataset.get_n_samples()
-                sample_indices = sample_training_data(pre_num, n_samples,
-                                                      _is_new_manifold[pre_num:n_samples],
-                                                      self._min_training_num, self._old_manifold_sample_rate)
+
+                # sample_indices = sample_training_data(pre_num, n_samples,
+                #                                       _is_new_manifold[:n_samples-pre_num],
+                #                                       self._min_training_num, self._old_manifold_sample_rate)
+                sample_indices = np.arange(fitted_data_num, fitted_data_num + cur_data_num)
 
                 self.prepare_resume(fitted_data_num, len(sample_indices), self.finetune_epoch, sample_indices)
                 steady_constraints = self.stream_dataset.cal_old2new_relationship(old_n_samples=fitted_data_num)
-                self.pre_rep_data_info.append(steady_constraints)
+
+                cluster_indices, rep_batch_nums, rep_data_indices = \
+                    self._sample_rep_data(stream_dataset.get_total_embeddings(), fitted_data_num)
+                self.pre_rep_data_info = [rep_batch_nums, rep_data_indices, cluster_indices, fitted_data_num,
+                                          steady_constraints]
+
+                # acc_list = []
+                # for i, item in enumerate(knn_indices):
+                #     num = 0
+                #     for jtem in item:
+                #         if jtem in self.stream_dataset.symmetric_nn_indices[i]:
+                #             num += 1
+                #     acc_list.append(num / 10)
+                # print("after symm acc:", np.mean(acc_list))
+
                 embeddings = self.resume_train(self.finetune_epoch, self.pre_rep_data_info)
                 self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
                 self.model_finetune_time += time.time() - sta
 
-            cluster_indices, rep_batch_nums, rep_data_indices, total_cluster_indices = \
-                self._sample_rep_data(embeddings)
-            self.pre_rep_data_info = [rep_batch_nums, rep_data_indices, cluster_indices]
-
-            ret = [embeddings, self.model.copy_network().cpu(), self.stream_dataset, total_cluster_indices]
+            ret = [embeddings, self.model.copy_network().cpu(), self.stream_dataset, total_data_idx]
             self.model_update_queue_set.embedding_queue.put(ret)
             self.model_update_queue_set.MODEL_UPDATING.value = 0
             self.update_count += 1
 
-    def _sample_rep_data(self, embeddings):
+    def _sample_rep_data(self, total_embeddings, fitted_num):
+        embeddings = total_embeddings[:fitted_num]
         sta = time.time()
-        ravel_1 = np.reshape(np.repeat(embeddings[:, np.newaxis, :], self.n_neighbors // 2, 1), (-1, 2))
-        ravel_2 = embeddings[np.ravel(self.stream_dataset.get_knn_indices()[:, :self.n_neighbors // 2])]
+        ravel_1 = np.reshape(np.repeat(total_embeddings[:, np.newaxis, :], self.n_neighbors // 2, 1), (-1, 2))
+        ravel_2 = total_embeddings[np.ravel(self.stream_dataset.get_knn_indices()[:, :self.n_neighbors // 2])]
+
         embedding_nn_dist = np.mean(np.linalg.norm(ravel_1 - ravel_2, axis=-1))
-        rep_batch_nums, rep_data_indices, cluster_indices, _, total_cluster_indices = \
+        rep_batch_nums, rep_data_indices, cluster_indices, _, _ = \
             self.cluster_rep_data_sampler.sample(embeddings, eps=embedding_nn_dist, min_samples=self.n_neighbors,
-                                                 labels=self.stream_dataset.get_total_label())
+                                                 labels=self.stream_dataset.get_total_label()[:fitted_num])
         self.clustering_sample_time += time.time() - sta
-        return cluster_indices, rep_batch_nums, rep_data_indices, total_cluster_indices
+        return cluster_indices, rep_batch_nums, rep_data_indices
 
     def ending(self):
         print("Cluster Sample: %.4f Model Finetune: %.4f" % (self.clustering_sample_time, self.model_finetune_time))

@@ -256,15 +256,15 @@ def incremental_cdr_pipeline():
             if need_optimize:
                 cur_neighbor_embeddings = experimenter.pre_embeddings[knn_indices.squeeze()]
                 # ====================================1. 只对新数据本身的嵌入进行更新=======================================
-                if OPTIMIZE_NEW_DATA_EMBEDDING:
-                    sta = time.time()
-
-                    final_embedding = embedding_optimizer.optimize_new_data_embedding(
-                        stream_dataset.raw_knn_weights[stream_dataset.get_n_samples()-1],
-                        cur_neighbor_embeddings, experimenter.pre_embeddings)
-                    final_embedding = final_embedding[np.newaxis, :]
-
-                    self_optimize_time += time.time() - sta
+                # if OPTIMIZE_NEW_DATA_EMBEDDING:
+                #     sta = time.time()
+                #
+                #     final_embedding = embedding_optimizer.optimize_new_data_embedding(
+                #         stream_dataset.raw_knn_weights[stream_dataset.get_n_samples()-1],
+                #         cur_neighbor_embeddings, experimenter.pre_embeddings)
+                #     final_embedding = final_embedding[np.newaxis, :]
+                #
+                #     self_optimize_time += time.time() - sta
                 # =====================================================================================================
 
             # ====================================2. 对新数据及其邻居点的嵌入进行更新====================================

@@ -396,6 +396,9 @@ class EmbeddingQualitySupervisor:
         return manifold_change_list, manifold_change_list, self._judge_model_replace(), \
             self._judge_model_update(manifold_change_list)
 
+    def slide_window(self, out_num):
+        self._lof.n_samples_fit_ -= out_num
+
 
 class MyLocalOutlierFactor(LocalOutlierFactor):
     def __init__(

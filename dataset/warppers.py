@@ -46,7 +46,7 @@ def build_dataset(data_file_path, dataset_name, is_image, normalize_method, root
 
 class DataRepo:
     # 主要负责记录当前的流数据，以及更新它们的k近邻
-    def __init__(self, n_neighbor, window_size=1000):
+    def __init__(self, n_neighbor, window_size=2000):
         self.n_neighbor = n_neighbor
         self._total_n_samples = 0
         self._total_data = None
@@ -56,13 +56,19 @@ class DataRepo:
         self._window_size = window_size
 
     def slide_window(self):
-        if self.get_n_samples() <= self._window_size:
-            return
+        out_num = self.get_n_samples() - self._window_size
+        if out_num <= 0:
+            return out_num
         self._total_n_samples = self._window_size
-        self._total_data = self.get_total_data()[-self._total_n_samples:]
-        self._total_label = self.get_total_label()[-self._total_n_samples:]
-        self._total_embeddings = self.get_total_embeddings()[-self._total_n_samples:]
-        self._knn_manager.slide_window(self._window_size)
+        self._total_data = self.get_total_data()[out_num:]
+        self._total_label = self.get_total_label()[out_num:]
+        self._total_embeddings = self.get_total_embeddings()[out_num:]
+        self._knn_manager.slide_window(out_num)
+
+        return out_num
+
+    def post_slide(self, out_num):
+        self._total_embeddings = self.get_total_embeddings()[out_num:]
 
     def get_n_samples(self):
         return self._total_n_samples
@@ -244,7 +250,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
     def __init__(self, batch_size, n_neighbor, device=None):
         DataSetWrapper.__init__(self, 1, batch_size, n_neighbor)
         # 没有重新计算邻居点相似点的数据下标
-        self.__cached_neighbor_change_indices = set()
+        self._cached_neighbor_change_indices = []
         self.cur_neighbor_changed_indices = None
         self.__replaced_raw_weights = []
         self.__sigmas = None
@@ -260,13 +266,40 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.get_t = 0
 
     def slide_window(self):
-        super().slide_window()
-        self.__sigmas = self.__sigmas[-self.get_n_samples():]
-        self.__rhos = self.__rhos[-self.get_n_samples():]
-        self.symmetric_nn_indices = self.symmetric_nn_indices[-self.get_n_samples():]
-        self.symmetric_nn_weights = self.symmetric_nn_weights[-self.get_n_samples():]
-        self.raw_knn_weights = self.raw_knn_weights[-self.get_n_samples():]
-        self.train_dataset.slide_window()
+        out_num = super().slide_window()
+
+        # TODO：下面五个暂时不需要更新
+        if out_num > 0:
+            # TODO: 需要更新kNN
+            knn_indices = self.get_knn_indices()
+            knn_dists = self.get_knn_dists()
+            knn_indices -= out_num
+            out_indices = np.argwhere(self.get_knn_indices() < 0)
+            changed_data_idx = out_indices[:, 0]
+            # print("change data idx", changed_data_idx)
+            dists = cdist(self.get_total_data()[changed_data_idx], self.get_total_data())
+            sorted_indices = np.argsort(dists, axis=1)
+            knn_indices[changed_data_idx] = sorted_indices[:, 1:1 + self.n_neighbor]
+            for i, item in enumerate(changed_data_idx):
+                knn_dists[item] = dists[i][knn_indices[item]]
+            self._knn_manager.update_knn_graph(knn_indices, knn_dists)
+
+            self.__sigmas = self.__sigmas[out_num:]
+            self.__rhos = self.__rhos[out_num:]
+            # self.symmetric_nn_indices = self.symmetric_nn_indices[out_num:] - out_num
+
+            # self.symmetric_nn_weights = self.symmetric_nn_weights[out_num:]
+            self.raw_knn_weights = self.raw_knn_weights[out_num:]     # 是应该更新的，但是影响很小
+
+            self.train_dataset.slide_window(out_num)
+
+            if len(self._cached_neighbor_change_indices) > 0 :
+                self._cached_neighbor_change_indices -= out_num
+                valid_indices = np.where(self._cached_neighbor_change_indices >= 0)[0]
+                self._cached_neighbor_change_indices = self._cached_neighbor_change_indices[valid_indices]
+
+            self._cached_neighbor_change_indices = np.union1d(self._cached_neighbor_change_indices, changed_data_idx)
+        return out_num
 
     def update_unfitted_data_num(self, unfitted_num):
         self._unfitted_data_num = unfitted_num
@@ -343,7 +376,10 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         # for batch process
         new_data_num = new_data.shape[0]
-        neighbor_changed_indices = np.arange(pre_n_samples, pre_n_samples + new_data_num).tolist()
+        # if pre_n_samples >= self._window_size:
+        #     neighbor_changed_indices = np.arange(self._window_size - new_data.shape[0], self._window_size).tolist()
+        # else:
+        neighbor_changed_indices = np.arange(pre_n_samples, pre_n_samples + new_data.shape[0]).tolist()
 
         # acc_knn_indices, acc_knn_dists = compute_knn_graph(self.total_data, None, self.n_neighbor, None)
         # pre_acc_list, pre_a_acc_list = eval_knn_acc(acc_knn_indices, self.knn_indices, new_n_samples, pre_n_samples)
@@ -355,7 +391,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
                                                                                 candidate_indices,
                                                                                 candidate_dists,
                                                                                 neighbor_changed_indices)
-        self.cur_neighbor_changed_indices = neighbor_changed_indices
+        # self.cur_neighbor_changed_indices = neighbor_changed_indices
         if self.concat_t > 0:
             self.update_t += time.time() - sta
         # print("update", self.update_t)
@@ -371,18 +407,28 @@ class StreamingDatasetWrapper(DataSetWrapper):
         sta = time.time()
         # self.raw_knn_weights = np.concatenate([self.raw_knn_weights, self._tmp_neighbor_weights], axis=0)
         # TODO: 这里的拼接也较为耗时，需要减少拼接次数
-        if pre_n_samples >= self.__sigmas.shape[0]:
-            self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((self._concat_num, self.n_neighbor))],
-                                                  axis=0)
-            self.__sigmas = np.concatenate([self.__sigmas, np.ones(self._concat_num)])
-            self.__rhos = np.concatenate([self.__rhos, np.ones(self._concat_num)])
-            self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(self._concat_num)])
-            self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(self._concat_num)])
+        # if pre_n_samples >= self.__sigmas.shape[0]:
+        #     self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((self._concat_num, self.n_neighbor))],
+        #                                           axis=0)
+        #     self.__sigmas = np.concatenate([self.__sigmas, np.ones(self._concat_num)])
+        #     self.__rhos = np.concatenate([self.__rhos, np.ones(self._concat_num)])
+        #     self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(self._concat_num)])
+        #     self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(self._concat_num)])
+
+        self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((new_data_num, self.n_neighbor))],
+                                              axis=0)
+        self.__sigmas = np.concatenate([self.__sigmas, np.ones(new_data_num)])
+        self.__rhos = np.concatenate([self.__rhos, np.ones(new_data_num)])
+        # self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(new_data_num)])
+        # self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(new_data_num)])
         self.concat_t += time.time() - sta
         # print("concat", self.concat_t)
 
         if not update_similarity:
-            cur_update_indices = np.arange(pre_n_samples, pre_n_samples + new_data.shape[0]).tolist()
+            if pre_n_samples >= self._window_size:
+                cur_update_indices = np.arange(self._window_size - new_data.shape[0], self._window_size).tolist()
+            else:
+                cur_update_indices = np.arange(pre_n_samples, pre_n_samples + new_data.shape[0]).tolist()
         else:
             cur_update_indices = neighbor_changed_indices
 
@@ -392,14 +438,14 @@ class StreamingDatasetWrapper(DataSetWrapper):
                 simple_fuzzy(knn_indices[cur_update_indices], knn_distances[cur_update_indices])
             self.raw_knn_weights[cur_update_indices] = updated_raw_knn_weights
         else:
-            umap_graph, cur_sigmas, cur_rhos, self.raw_knn_weights[:self.get_n_samples()] = \
-                fuzzy_simplicial_set_partial(knn_indices, knn_distances, self.raw_knn_weights[:self.get_n_samples()],
+            umap_graph, cur_sigmas, cur_rhos, self.raw_knn_weights = \
+                fuzzy_simplicial_set_partial(knn_indices, knn_distances, self.raw_knn_weights,
                                              cur_update_indices, apply_set_operations=symmetric,
                                              return_coo_results=symmetric)
-            updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, cur_update_indices)
+            # updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, cur_update_indices)
 
-            self.symmetric_nn_weights[cur_update_indices] = updated_symm_nn_weights
-            self.symmetric_nn_indices[cur_update_indices] = updated_sym_nn_indices
+            # self.symmetric_nn_weights[cur_update_indices] = updated_symm_nn_weights
+            # self.symmetric_nn_indices[cur_update_indices] = updated_sym_nn_indices
 
         if self.update_t > 0:
             self.fuzzy_t += time.time() - sta
@@ -409,25 +455,27 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.__rhos[cur_update_indices] = cur_rhos
 
         if not update_similarity:
-            self.__cached_neighbor_change_indices = \
-                self.__cached_neighbor_change_indices.union(set(neighbor_changed_indices))
+            self._cached_neighbor_change_indices = np.union1d(self._cached_neighbor_change_indices, neighbor_changed_indices)
+            # self.__cached_neighbor_change_indices = \
+            #     self.__cached_neighbor_change_indices.union(set(neighbor_changed_indices))
 
         return None
 
     def update_cached_neighbor_similarities(self):
-        self.__cached_neighbor_change_indices = list(self.__cached_neighbor_change_indices)
-        umap_graph, sigmas, rhos, self.raw_knn_weights[:self.get_n_samples()] = \
+        print("cached neighbor change num", len(self._cached_neighbor_change_indices))
+        self._cached_neighbor_change_indices = self._cached_neighbor_change_indices.astype(int)
+        umap_graph, sigmas, rhos, self.raw_knn_weights = \
             fuzzy_simplicial_set_partial(self._knn_manager.knn_indices, self._knn_manager.knn_dists,
-                                         self.raw_knn_weights[:self.get_n_samples()],
-                                         self.__cached_neighbor_change_indices)
+                                         self.raw_knn_weights,
+                                         self._cached_neighbor_change_indices)
 
-        updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, self.__cached_neighbor_change_indices)
+        updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, self._cached_neighbor_change_indices)
 
-        self.__sigmas[self.__cached_neighbor_change_indices] = sigmas
-        self.__rhos[self.__cached_neighbor_change_indices] = rhos
-        self.symmetric_nn_weights[self.__cached_neighbor_change_indices] = updated_symm_nn_weights
-        self.symmetric_nn_indices[self.__cached_neighbor_change_indices] = updated_sym_nn_indices
-        self.__cached_neighbor_change_indices = set()
+        self.__sigmas[self._cached_neighbor_change_indices] = sigmas
+        self.__rhos[self._cached_neighbor_change_indices] = rhos
+        self.symmetric_nn_weights[self._cached_neighbor_change_indices] = updated_symm_nn_weights
+        self.symmetric_nn_indices[self._cached_neighbor_change_indices] = updated_sym_nn_indices
+        self._cached_neighbor_change_indices = []
 
     def get_pre_neighbor_changed_info(self):
         pre_changed_neighbor_meta = self._knn_manager.get_pre_neighbor_changed_positions()
@@ -462,14 +510,14 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         return 1 - relationships
 
-    def update_previous_info(self, pre_num, new_self):
-        self.symmetric_nn_indices[:pre_num] = new_self.symmetric_nn_indices[:pre_num]
-        self.symmetric_nn_weights[:pre_num] = new_self.symmetric_nn_weights[:pre_num]
-        self.__sigmas[:pre_num] = new_self.__sigmas[:pre_num]
-        self.__rhos[:pre_num] = new_self.__rhos[:pre_num]
+    def update_previous_info(self, pre_num, new_self, out_during_update, skipped_slide_num):
+        # self.symmetric_nn_indices[:pre_num-out_during_update] = new_self.symmetric_nn_indices[out_during_update:pre_num] - skipped_slide_num
+        # self.symmetric_nn_weights[:pre_num-out_during_update] = new_self.symmetric_nn_weights[out_during_update:pre_num]
+        self.__sigmas[:pre_num-out_during_update] = new_self.__sigmas[out_during_update:pre_num]
+        self.__rhos[:pre_num-out_during_update] = new_self.__rhos[out_during_update:pre_num]
         # self._knn_manager.knn_indices[:pre_num] = new_self._knn_manager.knn_indices[:pre_num]
         # self._knn_manager.knn_dists[:pre_num] = new_self._knn_manager.knn_dists[:pre_num]
-        self.raw_knn_weights[:pre_num] = new_self.raw_knn_weights[:pre_num]
+        self.raw_knn_weights[:pre_num-out_during_update] = new_self.raw_knn_weights[out_during_update:pre_num]
 
     def get_data_neighbor_mean_std_dist(self):
         knn_dists = self._knn_manager.knn_dists[:-self._unfitted_data_num] if self._unfitted_data_num > 0 else self._knn_manager.knn_dists
@@ -501,12 +549,16 @@ class KNNManager:
         # 分别表示新数据的下标、kNN发生变化的数据下标、新数据插入的位置、以及被替换数据的下标
         self._pre_neighbor_changed_meta = []
 
-    def slide_window(self, window_size):
-        if self.knn_indices is None or self.knn_indices.shape[0] <= window_size:
+    def update_knn_graph(self, knn_indices, knn_dists):
+        self.knn_indices = knn_indices
+        self.knn_dists = knn_dists
+
+    def slide_window(self, out_num):
+        if self.knn_indices is None or out_num <= 0:
             return
 
-        self.knn_indices = self.knn_indices[-window_size:]
-        self.knn_dists = self.knn_dists[-window_size:]
+        self.knn_indices = self.knn_indices[out_num:]
+        self.knn_dists = self.knn_dists[out_num:]
 
     def is_empty(self):
         return self.knn_indices is None

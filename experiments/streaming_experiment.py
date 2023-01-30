@@ -64,9 +64,10 @@ def cal_kNN_change(new_data, new_knn_indices, new_knn_dists, pre_data, pre_knn_i
 
 
 class StreamingEx:
-    def __init__(self, cfg, seq_indices, result_save_dir, log_path="log_streaming_con.txt", do_eval=True):
+    def __init__(self, cfg, seq_indices, result_save_dir, data_generator, log_path="log_streaming_con.txt", do_eval=True):
         self.cfg = cfg
         self.seq_indices = seq_indices
+        self._data_generator = data_generator
         self.dataset_name = cfg.exp_params.dataset
         self.streaming_mock = None
         self.vis_iter = cfg.exp_params.vis_iter
@@ -224,9 +225,10 @@ class StreamingEx:
             # if self.cur_time_step > 1 and (isinstance(self.model, SCDRParallel)):
             #     self.model.stream_dataset.add_new_data(data=stream_data)
             sta = time.time()
-            ret_embeddings = self.model.fit_new_data(stream_data, stream_labels)
+            ret_embeddings, add_data_time = self.model.fit_new_data(stream_data, stream_labels)
             if self.cur_time_step > 2:
-                self._key_time += time.time() - sta
+                self._key_time += time.time() - sta - add_data_time
+                # print("_key_time", self._key_time)
 
             if ret_embeddings is not None:
                 cur_x_min, cur_y_min = np.min(ret_embeddings, axis=0)
@@ -235,8 +237,9 @@ class StreamingEx:
                 self._x_max = max(self._x_max, cur_x_max)
                 self._y_min = min(self._y_min, cur_y_min)
                 self._y_max = max(self._y_max, cur_y_max)
-                self._embeddings_histories.append(ret_embeddings)
-                self.evaluate(self.pre_embedding, ret_embeddings, pre_labels)
+                self._embeddings_histories.append([len(self.history_label) - ret_embeddings.shape[0], ret_embeddings])
+                if self.pre_embedding is not None:
+                    self.evaluate(self.pre_embedding, ret_embeddings, pre_labels[-self.pre_embedding.shape[0]:])
                 self.cur_embedding = ret_embeddings
                 self.save_embeddings_info(self.cur_embedding)
 
@@ -263,13 +266,19 @@ class StreamingEx:
 
         if self.cur_time_step % self.vis_iter == 0 or train_end:
             img_save_path = os.path.join(self.img_dir, "t_{}.jpg".format(custom_id)) if self.save_img else None
-            position_vis(self.history_label[:cur_embeddings.shape[0]], img_save_path, cur_embeddings, None)
+            position_vis(self.history_label[-cur_embeddings.shape[0]:], img_save_path, cur_embeddings, "T_{}".format(len(self._embeddings_histories)))
 
     def evaluate(self, pre_embeddings, cur_embeddings, pre_labels, train_end=False):
         if self.cur_time_step % self._eval_iter > 0 and not train_end:
             return
 
-        self.build_metric_tool()
+        cur_data_num = cur_embeddings.shape[0]
+        data = self.history_data[-cur_data_num:]
+        targets = self.history_label[-cur_data_num:]
+        knn_indices, knn_dists = compute_knn_graph(data, None, self.eval_k, None, accelerate=False)
+        pairwise_distance = get_pairwise_distance(data, pairwise_distance_cache_path=None, preload=False)
+        self.metric_tool = Metric(self.dataset_name, data, targets, knn_indices, knn_dists, pairwise_distance,
+                                  k=self.eval_k)
 
         faithful_results = self.metric_tool.cal_all_metrics(self.eval_k, cur_embeddings, knn_k=self.eval_k)
         faith_metric_output = ""
@@ -359,7 +368,7 @@ class StreamingEx:
             self._make_embedding_video(save_dir)
 
     def _make_embedding_video(self, save_dir):
-        self._embeddings_histories = np.array(self._embeddings_histories)
+        # self._embeddings_histories = np.array(self._embeddings_histories)
 
         def _loose(d_min, d_max, rate=0.05):
             scale = d_max - d_min
@@ -381,21 +390,22 @@ class StreamingEx:
             if idx % 100 == 0:
                 print("frame", idx)
 
-            cur_embeddings = self._embeddings_histories[idx]
+            start_idx, cur_embeddings = self._embeddings_histories[idx]
+
             ax.cla()
             ax.set(xlim=(l_x_min, l_x_max), ylim=(l_y_min, l_y_max))
             ax.set_aspect('equal')
             ax.axis('equal')
             ax.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1],
-                       c=list(self.streaming_mock.seq_color[:cur_embeddings.shape[0]]), s=2)
+                       c=list(self._data_generator.seq_color[start_idx:start_idx+cur_embeddings.shape[0]]), s=2)
             ax.set_title("Timestep: {}".format(int(idx)))
 
-        ani = FuncAnimation(fig, update, frames=self._embeddings_histories.shape[0], interval=15, blit=False)
+        ani = FuncAnimation(fig, update, frames=len(self._embeddings_histories), interval=15, blit=False)
         ani.save(os.path.join(save_dir, "embedding.mp4"), writer='ffmpeg', dpi=300)
 
 
 class StreamingExProcess(StreamingEx, Process):
-    def __init__(self, cfg, seq_indices, result_save_dir, stream_data_queue_set, start_data_queue,
+    def __init__(self, cfg, seq_indices, result_save_dir, stream_data_queue_set, start_data_queue, data_generator,
                  log_path="log_streaming_process.txt",
                  do_eval=True):
         self.name = "数据处理进程"
@@ -406,7 +416,7 @@ class StreamingExProcess(StreamingEx, Process):
         self.update_num = 0
 
         Process.__init__(self, name=self.name)
-        StreamingEx.__init__(self, cfg, seq_indices, result_save_dir, log_path, do_eval)
+        StreamingEx.__init__(self, cfg, seq_indices, result_save_dir, data_generator, log_path, do_eval)
 
     def _prepare_streaming_data(self):
         pass
@@ -485,10 +495,7 @@ class StreamingExProcess(StreamingEx, Process):
             self._project_pipeline(stream_data, stream_labels)
 
     def train_end(self):
-        # 结束流数据产生进程
-        self.streaming_mock.stop_flag = True
-        self.streaming_mock.kill()
-        self.stream_data_queue_set.clear()
+        self.stream_data_queue_set.close()
 
         # 结束模型更新进程
         self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)

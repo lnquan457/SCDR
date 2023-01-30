@@ -264,6 +264,7 @@ class StreamingANNSearchAnnoy:
 
         if not self._automatic_beta:
             new_k = self._beta * k
+            # new_k = pre_data.shape[0] - 1
         else:
             new_k = int(0.15 * np.sqrt(pre_data.shape[0]) * k)
 

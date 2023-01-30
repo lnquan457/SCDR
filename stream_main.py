@@ -130,9 +130,10 @@ def custom_indices_training(custom_indices_path):
 
     stream_data_queue_set = Queue()
     start_data_queue = Queue()
-    ex = StreamingExProcess(cfg, custom_indices, result_save_dir, stream_data_queue_set, start_data_queue)
     data_generator = SimulatedStreamingData(cfg.exp_params.dataset, cfg.exp_params.stream_rate,
                                             stream_data_queue_set, start_data_queue, custom_indices)
+    ex = StreamingExProcess(cfg, custom_indices, result_save_dir, stream_data_queue_set, start_data_queue, data_generator)
+
     data_generator.start()
 
     start(ex)
@@ -141,7 +142,7 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=SISOMAPPP,
+    parser.add_argument("--method", type=str, default=SCDR,
                         choices=[ILLE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
     parser.add_argument("--parallel", type=bool, default=True)

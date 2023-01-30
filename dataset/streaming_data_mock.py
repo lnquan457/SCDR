@@ -119,8 +119,10 @@ class SimulatedStreamingData(Process):
         print("start adding data!")
         if self.data_index > 0:
             self.data_index = 0
+        stop = False
         while True:
-
+            if stop:
+                break
             stop = False
             cur_data_num = self.data_num_list[idx]
             cur_data = []

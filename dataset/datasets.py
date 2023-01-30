@@ -253,11 +253,11 @@ class CLR_Text_Dataset(MyTextDataset):
         if labels is not None:
             self.targets = labels if self.targets is None else np.append(self.targets, labels)
 
-    def slide_window(self, window_size):
-        if self.data.shape[0] <= window_size:
+    def slide_window(self, out_num):
+        if out_num <= 0:
             return
-        self.data = self.data[-window_size:]
-        self.targets = self.targets[-window_size:]
+        self.data = self.data[out_num:]
+        self.targets = self.targets[out_num:]
 
 
 class CLR_Image_Dataset(MyImageDataset):
@@ -300,7 +300,6 @@ class UMAP_CLR_Text_Dataset(CLR_Text_Dataset):
         # 没有经过归一化和对称话的
         self.raw_knn_weights = None
         # 经过对称化但是没有归一化的
-        self.sym_no_norm_weights = None
         self.min_neighbor_num = None
 
     def build_fuzzy_simplicial_set(self, knn_indices, knn_distances, n_neighbors, symmetric):
@@ -355,7 +354,6 @@ class UMAP_CLR_Text_Dataset(CLR_Text_Dataset):
         self.symmetry_knn_indices = np.array(nn_indices, dtype=object)
         self.symmetry_knn_weights = np.array(nn_weights, dtype=object)
         self.symmetry_knn_dists = np.array(nn_dists, dtype=object)
-        self.sym_no_norm_weights = np.array(raw_weights, dtype=object)
 
         if return_meta:
             return None, None, sigmas, rhos

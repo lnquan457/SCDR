@@ -58,8 +58,8 @@ class SCDRParallel:
 
     def _listen_model_update(self):
         if not self.model_update_queue_set.embedding_queue.empty():
-            embeddings, infer_model, stream_dataset, cluster_indices = self.model_update_queue_set.embedding_queue.get()
-            self.update_scdr(infer_model, embeddings, stream_dataset)
+            embeddings, infer_model, stream_dataset, total_data_idx = self.model_update_queue_set.embedding_queue.get()
+            self.update_scdr(infer_model, embeddings, stream_dataset, total_data_idx)
 
     def get_final_embeddings(self):
         return self.data_processor.get_final_embeddings()
@@ -81,7 +81,7 @@ class SCDRParallel:
         self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.UPDATE)
         self.model_update_queue_set.INITIALIZING.value = True
         # 这里传回来的stream_dataset中，包含了最新的对称kNN信息
-        embeddings, model, stream_dataset, cluster_indices = self.model_update_queue_set.embedding_queue.get()
+        embeddings, model, stream_dataset, _ = self.model_update_queue_set.embedding_queue.get()
         self.stream_dataset = stream_dataset
         self.stream_dataset.update_unfitted_data_num(0)
         self.stream_dataset.add_new_data(embeddings=embeddings)
@@ -95,8 +95,8 @@ class SCDRParallel:
     def save_model(self):
         self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.SAVE)
 
-    def update_scdr(self, newest_model, embeddings, stream_dataset):
-        return self.data_processor.update_scdr(newest_model, embeddings, stream_dataset)
+    def update_scdr(self, newest_model, embeddings, stream_dataset, total_data_idx):
+        return self.data_processor.update_scdr(newest_model, embeddings, stream_dataset, total_data_idx)
 
     def ending(self):
         print("Model Infer: %.4f " % self.model_infer_time)
@@ -125,7 +125,8 @@ class SCDRFullParallel(SCDRParallel):
 
             self.data_processor.daemon = True
             self.data_processor.start()
-            self._embedding_data_queue.put_res([total_embeddings, None, 0])
+            self._embedding_data_queue.put_res([total_embeddings, None, 0, 0])
+            add_data_time = 0
         else:
             if data is None:
                 self._embedding_data_queue.put([data, None, labels, end])
@@ -133,7 +134,7 @@ class SCDRFullParallel(SCDRParallel):
 
             data_embeddings = self.nn_embedder.embed(data)
 
-            total_embeddings, newest_model, cost_time = self._embedding_data_queue.get_res()
+            total_embeddings, newest_model, cost_time, add_data_time = self._embedding_data_queue.get_res()
             sta = time.time()
             total_embeddings = np.concatenate([total_embeddings, data_embeddings], axis=0)
 
@@ -142,7 +143,7 @@ class SCDRFullParallel(SCDRParallel):
             self._embedding_data_queue.put([data, data_embeddings, labels, end])
             self._time_cost_records.append(time.time() - sta + cost_time + self._time_cost_records[-1])
 
-        return total_embeddings
+        return total_embeddings, add_data_time
 
 
 def query_knn(query_data, data_set, k, return_indices=False):
