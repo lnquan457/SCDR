@@ -46,20 +46,19 @@ def build_dataset(data_file_path, dataset_name, is_image, normalize_method, root
 
 class DataRepo:
     # 主要负责记录当前的流数据，以及更新它们的k近邻
-    def __init__(self, n_neighbor, window_size=2000):
+    def __init__(self, n_neighbor):
         self.n_neighbor = n_neighbor
         self._total_n_samples = 0
         self._total_data = None
         self._total_label = None
         self._total_embeddings = None
         self._knn_manager = KNNManager(n_neighbor)
-        self._window_size = window_size
 
-    def slide_window(self):
-        out_num = self.get_n_samples() - self._window_size
+    def slide_window(self, window_size=2000):
+        out_num = self.get_n_samples() - window_size
         if out_num <= 0:
             return out_num
-        self._total_n_samples = self._window_size
+        self._total_n_samples = window_size
         self._total_data = self.get_total_data()[out_num:]
         self._total_label = self.get_total_label()[out_num:]
         self._total_embeddings = self.get_total_embeddings()[out_num:]
@@ -265,7 +264,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.fuzzy_t = 0
         self.get_t = 0
 
-    def slide_window(self):
+    def slide_window(self, window_size=2000):
         out_num = super().slide_window()
 
         # TODO：下面五个暂时不需要更新

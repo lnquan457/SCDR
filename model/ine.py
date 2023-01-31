@@ -30,8 +30,9 @@ def _select_min_loss_one(candidate_embeddings, neighbors_embeddings, high_probab
 
 
 class INEModel(kNNBasedIncrementalMethods, TSNE):
-    def __init__(self, train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=3, init="random"):
-        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, single=True)
+    def __init__(self, train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=3,
+                 init="random", window_size=2000):
+        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, True, window_size)
         TSNE.__init__(self, n_components, perplexity=n_neighbors)
         self.init = init
         self.desired_perplexity = desired_perplexity
@@ -41,6 +42,7 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
         self._learning_rate = 200.0
         self._update_thresh = 10
         self._k = 0
+        self._window_size = window_size
 
     def _first_train(self, train_data):
         self.pre_embeddings = self.fit_transform(train_data)
@@ -50,6 +52,7 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
 
     def _incremental_embedding(self, new_data):
         # 一次只处理一个数据
+        self.pre_embeddings = self.pre_embeddings[-self._window_size:]
         new_data = np.reshape(new_data, (1, -1))
         pre_data_num = self.pre_embeddings.shape[0]
 

@@ -14,7 +14,7 @@ from utils.nn_utils import compute_knn_graph
 
 
 class kNNBasedIncrementalMethods:
-    def __init__(self, train_num, n_components, n_neighbors, single=False):
+    def __init__(self, train_num, n_components, n_neighbors, single=False, window_size=2000):
         self.single = single
         self.initial_train_num = train_num
         self.n_components = n_components
@@ -25,6 +25,7 @@ class kNNBasedIncrementalMethods:
         self.trained = False
         self.time_cost = 0
         self._time_cost_records = [0]
+        self._window_size = window_size
 
     def _update_kNN(self, new_data):
         # 1. 计算新数据的kNN
@@ -47,7 +48,9 @@ class kNNBasedIncrementalMethods:
         else:
             knn_indices = np.argsort(dists, axis=1)[:, 1:self.n_neighbors + 1]
         knn_dists = np.zeros(shape=(new_data_num, self.n_neighbors))
+        # print("new_data_num", new_data_num)
         for i in range(new_data_num):
+            # print(dists[i], knn_indices[i])
             knn_dists[i] = dists[i][knn_indices[i]]
         return knn_indices, knn_dists, dists
 
@@ -78,18 +81,29 @@ class kNNBasedIncrementalMethods:
 
     def _fit_new_data_single(self, x, labels=None):
         if not self.trained:
+            sta = time.time()
             self.stream_dataset.add_new_data(x, None, labels)
             if self.stream_dataset.get_n_samples() >= self.initial_train_num:
                 self.trained = True
                 self._first_train(self.stream_dataset.get_total_data())
+            add_data_time = time.time() - sta
         else:
+            add_data_time = 0
             for i, item in enumerate(x):
-                self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
                 sta = time.time()
+
+                out_num = self.stream_dataset.get_total_data().shape[0] - self._window_size
+                if out_num > 0:
+                    self.stream_dataset._total_data = self.stream_dataset._total_data[out_num:]
+                    self.stream_dataset._total_label = self.stream_dataset._total_label[out_num:]
+
+                t_sta = time.time()
+                self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
+                add_data_time += time.time() - t_sta
                 self._incremental_embedding(np.reshape(item, (1, -1)))
                 self.time_cost += time.time() - sta
 
-        return self.pre_embeddings
+        return self.pre_embeddings, add_data_time
 
     def _incremental_embedding(self, new_data):
         pass

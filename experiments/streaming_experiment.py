@@ -174,7 +174,7 @@ class StreamingEx:
         self.stream_fitting()
 
     def start_parallel_ine(self):
-        self.model = ParallelINE(Queue(), Queue(), Queue(), Queue(), self.cfg.exp_params.initial_data_num,
+        self.model = ParallelINE(Queue(), Queue(), Queue(), Queue(), Queue(), self.cfg.exp_params.initial_data_num,
                                  self.n_components, self.cfg.method_params.n_neighbors)
         self.stream_fitting()
 
