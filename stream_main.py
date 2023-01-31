@@ -142,7 +142,7 @@ def custom_indices_training(custom_indices_path):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=INE,
+    parser.add_argument("--method", type=str, default=XTREAMING,
                         choices=[ILLE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
     parser.add_argument("--parallel", type=bool, default=True)

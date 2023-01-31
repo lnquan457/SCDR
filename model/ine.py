@@ -52,7 +52,7 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
 
     def _incremental_embedding(self, new_data):
         # 一次只处理一个数据
-        self.pre_embeddings = self.pre_embeddings[-self._window_size:]
+
         new_data = np.reshape(new_data, (1, -1))
         pre_data_num = self.pre_embeddings.shape[0]
 

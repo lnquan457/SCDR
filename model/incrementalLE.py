@@ -96,6 +96,7 @@ class kNNBasedIncrementalMethods:
                 if out_num > 0:
                     self.stream_dataset._total_data = self.stream_dataset._total_data[out_num:]
                     self.stream_dataset._total_label = self.stream_dataset._total_label[out_num:]
+                    self.pre_embeddings = self.pre_embeddings[out_num:]
 
                 t_sta = time.time()
                 self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)

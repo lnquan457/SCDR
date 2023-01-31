@@ -37,8 +37,9 @@ def procrustes_analysis(pre_data, cur_data, all_data, align=True, scale=True, tr
 
 
 class XtreamingModel:
-    def __init__(self, buffer_size=100, eta=0.99):
+    def __init__(self, buffer_size=100, eta=0.99, window_size=1000):
         self.buffer_size = buffer_size
+        self._eta = eta
         self.pro_model = UPDis4Streaming(eta)
         self.buffered_data = None
         self.time_step = 0
@@ -49,6 +50,8 @@ class XtreamingModel:
         self.lof = LocalOutlierFactor(n_neighbors=10, novelty=True, metric="euclidean", contamination=0.1)
         self.time_costs = 0
         self._time_cost_records = [0]
+        self._window_size = window_size
+        self._total_n_samples = 0
 
     def _buffering(self, data):
         if self.buffered_data is None:
@@ -64,10 +67,29 @@ class XtreamingModel:
         if not self._buffering(data):
             return None
 
+        self._total_n_samples += self.buffered_data.shape[0]
+        self._slide_window()
+
         ret = self.fit()
         self.time_costs += time.time() - sta
         self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
-        return ret
+        return ret, 0
+
+    def _slide_window(self):
+        out_num = self._total_n_samples - self._window_size
+        if out_num > 0:
+            self._total_n_samples -= out_num
+            self.pre_embedding = self.pre_embedding[out_num:]
+            self.pre_control_indices -= out_num
+            valid_indices = np.argwhere(self.pre_control_indices >= 0).squeeze()
+            self.pre_control_indices = self.pre_control_indices[valid_indices].squeeze()
+            self.pre_control_points = self.pre_control_points[valid_indices].squeeze()
+            self.pre_cntp_embeddings = self.pre_cntp_embeddings[valid_indices].squeeze()
+
+            self.pro_model.control_points = self.pro_model.control_points[valid_indices]
+            self.pro_model.ctp2ctp_dists = self.pro_model.ctp2ctp_dists[valid_indices][:, valid_indices]
+            self.pro_model.control_embeddings = self.pro_model.control_embeddings[valid_indices]
+            self.pro_model.normed_eigen_vector = self.pro_model.normed_eigen_vector[:, valid_indices]
 
     def buffer_empty(self):
         return self.buffered_data is None
@@ -95,6 +117,7 @@ class XtreamingModel:
                 self.pre_embedding = aligned_total_embeddings
 
             self.buffered_data = None
+
         return self.pre_embedding
 
     def _initial_project(self, medoids, sampled_indices):
