@@ -489,7 +489,8 @@ class StreamingExProcess(StreamingEx, Process):
             # 获取数据
             stream_end_flag, stream_data, stream_labels = self._get_stream_data(accumulate=False)
             if stream_end_flag:
-                self.model.fit_new_data(None, end=True)
+                if isinstance(self.model, SCDRParallel):
+                    self.model.fit_new_data(None, end=True)
                 break
 
             self._project_pipeline(stream_data, stream_labels)
@@ -498,6 +499,7 @@ class StreamingExProcess(StreamingEx, Process):
         self.stream_data_queue_set.close()
 
         # 结束模型更新进程
-        self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
+        if self.cdr_update_queue_set is not None:
+            self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
 
         super().train_end()

@@ -9,19 +9,23 @@ from sklearn.neighbors import LocalOutlierFactor
 
 
 class StreamingIPCA:
-    def __init__(self, n_components, forgetting_factor=1.0):
+    def __init__(self, n_components, forgetting_factor=1.0, window_size=2000):
         self.n_components = n_components
         self.pca_model = IncPCA(n_components, forgetting_factor)
         self.total_data = None
         self.pre_embeddings = None
         self.time_cost = 0
         self._time_cost_records = [0]
+        self._window_size = window_size
 
     def fit_new_data(self, x, labels=None):
+        sta = time.time()
         if self.total_data is None:
             self.total_data = x
         else:
-            self.total_data = np.concatenate([self.total_data, x], axis=0)
+            self.total_data = np.concatenate([self.total_data, x], axis=0)[-self._window_size:]
+        add_data_time = time.time() - sta
+
         sta = time.time()
         self.pca_model.partial_fit(x)
         cur_embeddings = self.pca_model.transform(self.total_data)
@@ -32,7 +36,7 @@ class StreamingIPCA:
             self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings, cur_embeddings)
         self.time_cost += time.time() - sta
         self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
-        return self.pre_embeddings
+        return self.pre_embeddings, add_data_time
 
     def ending(self):
         output = "Time Cost: %.4f" % self.time_cost
@@ -42,7 +46,7 @@ class StreamingIPCA:
 
 class ParallelsPCA:
     def __init__(self, pattern_data_queue, model_update_queue, model_return_queue, replace_model_queue, n_components,
-                 forgetting_factor=1.0):
+                 forgetting_factor=1.0, window_size=2000):
         self.n_components = n_components
         self._forgetting_factor = forgetting_factor
         self.pca_model = None
@@ -54,6 +58,7 @@ class ParallelsPCA:
         self._model_return_queue = model_return_queue
         self._replace_model_queue = replace_model_queue
         self._model_update_queue = model_update_queue
+        self._window_size = window_size
 
         self.pattern_detector = PCAPatternChangeDetector(pattern_data_queue, model_update_queue, replace_model_queue)
         self.model_updater = None
@@ -73,8 +78,11 @@ class ParallelsPCA:
             self.pattern_detector.start()
             self._pattern_data_queue.put([self.total_data, False, self.total_data, ])
             replace_model = True
+            add_data_time = 0
         else:
-            self.total_data = np.concatenate([self.total_data, x], axis=0)
+            sta = time.time()
+            self.total_data = np.concatenate([self.total_data, x], axis=0)[-self._window_size:]
+            add_data_time = time.time() - sta
 
         sta = time.time()
 
@@ -102,11 +110,11 @@ class ParallelsPCA:
                 self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings, cur_embeddings)
         else:
             cur_embeddings = self.pca_model.transform(x)
-            self.pre_embeddings = np.concatenate([self.pre_embeddings, cur_embeddings], axis=0)
+            self.pre_embeddings = np.concatenate([self.pre_embeddings, cur_embeddings], axis=0)[-self._window_size:]
 
         self.time_cost += time.time() - sta
-        self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
-        return self.pre_embeddings
+        self._time_cost_records.append(time.time() - sta - add_data_time + self._time_cost_records[-1])
+        return self.pre_embeddings, add_data_time
 
     def _get_new_model_info(self):
         self._newest_model = self._model_return_queue.get()
