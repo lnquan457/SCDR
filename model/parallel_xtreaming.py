@@ -13,6 +13,8 @@ from model.xtreaming import sampled_control_points, procrustes_analysis, Xtreami
 import numpy as np
 
 
+# WARN: xtreaming中随着滑动窗口变化，代表点也会发生变化，会逐渐减少，因此新的数据点会更倾向于被投影到新的代表点附近，也就聚合在附近了。就会导致新数据和旧数据的投影分割开。
+# 解决方案是及时的更新模型，更新代表点。或者是保留控制点相关信息，在更新模型时才进行替换。
 class ParallelXtreaming:
     def __init__(self, pattern_data_queue, model_return_queue, replace_model_queue, model_update_queue,
                  buffer_size=1000, eta=0.99, window_size=1000):
@@ -53,8 +55,25 @@ class ParallelXtreaming:
 
     def fit_new_data(self, x, labels=None):
 
+        sta = time.time()
         if not self._buffering(x):
-            return None
+            return None, 0
+
+        if not self._replace_model_queue.empty():
+            replace_model = self._replace_model_queue.get()
+            if replace_model:
+                print("replace model!")
+
+                if not self._get_new_model:
+                    self._get_new_model_info()
+
+                self.pro_model = self._newest_model
+                self._pre_control_indices = self._newest_cntp_indices
+                self._pre_control_points = self._newest_cntp_points
+                self._get_new_model = False
+
+        if not self._model_return_queue.empty():
+            self._get_new_model_info()
 
         self._total_n_samples += self.buffered_data.shape[0]
         out_num = self._total_n_samples - self._window_size
@@ -62,15 +81,16 @@ class ParallelXtreaming:
             self.pre_embeddings = self.pre_embeddings[out_num:]
             self.total_data = self.total_data[out_num:]
             self._total_n_samples = self.pre_embeddings.shape[0]
-            self._pre_control_indices -= out_num
-            valid_indices = np.argwhere(self._pre_control_indices >= 0).squeeze()
-            self._pre_control_indices = self._pre_control_indices[valid_indices].squeeze()
-            self._pre_control_points = self._pre_control_points[valid_indices].squeeze()
 
-            self.pro_model.control_points = self.pro_model.control_points[valid_indices]
-            self.pro_model.ctp2ctp_dists = self.pro_model.ctp2ctp_dists[valid_indices, :][:, valid_indices]
-            self.pro_model.control_embeddings = self.pro_model.control_embeddings[valid_indices]
-            self.pro_model.normed_eigen_vector = self.pro_model.normed_eigen_vector[:, valid_indices]
+            # self._pre_control_indices -= out_num
+            # valid_indices = np.argwhere(self._pre_control_indices >= 0).squeeze()
+            # self._pre_control_indices = self._pre_control_indices[valid_indices].squeeze()
+            # self._pre_control_points = self._pre_control_points[valid_indices].squeeze()
+            #
+            # self.pro_model.control_points = self.pro_model.control_points[valid_indices]
+            # self.pro_model.ctp2ctp_dists = self.pro_model.ctp2ctp_dists[valid_indices, :][:, valid_indices]
+            # self.pro_model.control_embeddings = self.pro_model.control_embeddings[valid_indices]
+            # self.pro_model.normed_eigen_vector = self.pro_model.normed_eigen_vector[:, valid_indices]
 
         centroids, sampled_indices = sampled_control_points(self.buffered_data)
         replace_model = False
@@ -89,27 +109,9 @@ class ParallelXtreaming:
             self.buffered_data = None
             return self.pre_embeddings, 0
 
-        sta = time.time()
+        t_sta = time.time()
         self.total_data = np.concatenate([self.total_data, self.buffered_data], axis=0)
-        add_data_time = time.time() - sta
-
-        sta = time.time()
-
-        if not self._replace_model_queue.empty():
-            replace_model = self._replace_model_queue.get()
-            if replace_model:
-                print("replace model!")
-
-                if not self._get_new_model:
-                    self._get_new_model_info()
-
-                self.pro_model = self._newest_model
-                self._pre_control_indices = self._newest_cntp_indices
-                self._pre_control_points = self._newest_cntp_points
-                self._get_new_model = False
-
-        if not self._model_return_queue.empty():
-            self._get_new_model_info()
+        add_data_time = time.time() - t_sta
 
         self._pattern_data_queue.put([x, False, self.total_data, self._pre_control_indices, out_num])
 
@@ -229,20 +231,6 @@ class XtreamingUpdater(Process):
                 self._pre_embedding = self._model.fit_transform(dists2cntp, cntp2cntp_dists)
                 self._pre_cntp_embeddings = self._pre_embedding[cntp_indices]
             else:
-
-                if total_out_num > 0:
-                    self._pre_embedding = self._pre_embedding[total_out_num:]
-                    self._pre_control_indices -= total_out_num
-                    valid_indices = np.argwhere(self._pre_control_indices >= 0).squeeze()
-                    self._pre_control_indices = self._pre_control_indices[valid_indices]
-                    self._pre_control_points = self._pre_control_points[valid_indices]
-                    self._pre_cntp_embeddings = self._pre_cntp_embeddings[valid_indices]
-
-                    self._model.control_points = self._model.control_points[valid_indices]
-                    self._model.ctp2ctp_dists = self._model.ctp2ctp_dists[valid_indices][:, valid_indices]
-                    self._model.control_embeddings = self._model.control_embeddings[valid_indices]
-                    self._model.normed_eigen_vector = self._model.normed_eigen_vector[:, valid_indices]
-
                 pre_data_num = self._pre_embedding.shape[0]
                 dists2cntp = cdist(data, self._pre_control_points)
                 total_cntp_points = np.concatenate([self._pre_control_points, cntp_points], axis=0)
@@ -273,6 +261,20 @@ class XtreamingUpdater(Process):
                 self._pre_control_points = total_cntp_points
                 self._pre_cntp_embeddings = aligned_total_embeddings[self._pre_control_indices]
                 self._pre_embedding = aligned_total_embeddings
+
+                if total_out_num > 0:
+                    self._pre_embedding = self._pre_embedding[total_out_num:]
+                    self._pre_control_indices -= total_out_num
+
+                    valid_indices = np.argwhere(self._pre_control_indices >= 0).squeeze()
+                    self._pre_control_indices = self._pre_control_indices[valid_indices]
+                    self._pre_control_points = self._pre_control_points[valid_indices]
+                    self._pre_cntp_embeddings = self._pre_cntp_embeddings[valid_indices]
+
+                    self._model.control_points = self._model.control_points[valid_indices]
+                    self._model.ctp2ctp_dists = self._model.ctp2ctp_dists[valid_indices][:, valid_indices]
+                    self._model.control_embeddings = self._model.control_embeddings[valid_indices]
+                    self._model.normed_eigen_vector = self._model.normed_eigen_vector[:, valid_indices]
 
             self._model_return_queue.put([copy(self._model), self._pre_embedding, self._pre_control_indices,
                                           self._pre_control_points])
