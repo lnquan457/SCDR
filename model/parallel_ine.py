@@ -102,6 +102,7 @@ class INEChangeDetector(Process):
                 self._is_updating = False
 
             data, stop_flag, total_data, cur_data_idx = self._pattern_data_queue.get()
+            # print("cur_data_idx", cur_data_idx)
 
             if stop_flag:
                 self._model_update_queue.put([True, None])
@@ -119,6 +120,7 @@ class INEChangeDetector(Process):
 
                 labels = self._lof.predict(data)
                 self._cur_change_num += np.count_nonzero(labels-1)
+                # print("self._cur_change_num", self._cur_change_num)
 
                 if self._cur_change_num >= self._change_thresh and self._update_sent:
                     replace_model = True
@@ -132,7 +134,7 @@ class INEChangeDetector(Process):
         if self._is_updating:
             # print("update delayed")
             return
-
+        print("update model")
         while not self._model_update_queue.empty():
             self._model_update_queue.get()
         self._model_update_queue.put([stop_flag, total_data, cur_data_idx])

@@ -92,11 +92,7 @@ class kNNBasedIncrementalMethods:
             for i, item in enumerate(x):
                 sta = time.time()
 
-                out_num = self.stream_dataset.get_total_data().shape[0] - self._window_size
-                if out_num > 0:
-                    self.stream_dataset._total_data = self.stream_dataset._total_data[out_num:]
-                    self.stream_dataset._total_label = self.stream_dataset._total_label[out_num:]
-                    self.pre_embeddings = self.pre_embeddings[out_num:]
+                self._slide_window()
 
                 t_sta = time.time()
                 self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
@@ -105,6 +101,14 @@ class kNNBasedIncrementalMethods:
                 self.time_cost += time.time() - sta
 
         return self.pre_embeddings, add_data_time
+
+    def _slide_window(self):
+        out_num = self.stream_dataset.get_total_data().shape[0] - self._window_size
+        if out_num > 0:
+            self.stream_dataset._total_data = self.stream_dataset._total_data[out_num:]
+            self.stream_dataset._total_label = self.stream_dataset._total_label[out_num:]
+            self.pre_embeddings = self.pre_embeddings[out_num:]
+        return out_num
 
     def _incremental_embedding(self, new_data):
         pass

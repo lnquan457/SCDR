@@ -15,11 +15,12 @@ OPTIMIZE_NEIGHBORS = True
 
 
 class DataProcessor:
-    def __init__(self, n_neighbors, batch_size, model_update_queue_set, device="cuda:0"):
+    def __init__(self, n_neighbors, batch_size, model_update_queue_set, device="cuda:0", window_size=2000):
         self.n_neighbors = n_neighbors
         self.batch_size = batch_size
         self.model_update_queue_set = model_update_queue_set
         self.device = device
+        self._window_size = window_size
         self.nn_embedder = None
 
         self.data_num_when_update = 0
@@ -449,16 +450,18 @@ class DataProcessorProcess(DataProcessor, Process):
         self._update_after_replace_signal = False
 
     def slide_window(self):
-        out_num = self.stream_dataset.slide_window()
+        out_num = self.stream_dataset.get_n_samples() - self._window_size
+        if out_num <= 0:
+            return
+        self.stream_dataset.slide_window(out_num)
 
-        if out_num > 0:
-            self.embedding_quality_supervisor.slide_window(out_num)
-            self._is_new_manifold = self._is_new_manifold[out_num:]
-            self.fitted_data_num = max(0, self.fitted_data_num - out_num)
-            self._out_since_last_send_update += out_num
+        self.embedding_quality_supervisor.slide_window(out_num)
+        self._is_new_manifold = self._is_new_manifold[out_num:]
+        self.fitted_data_num = max(0, self.fitted_data_num - out_num)
+        self._out_since_last_send_update += out_num
 
-            if self._model_is_updating and len(self._skipped_slide_num) == 0:
-                self._skipped_slide_num.append(out_num)
+        if self._model_is_updating and len(self._skipped_slide_num) == 0:
+            self._skipped_slide_num.append(out_num)
 
         return out_num
 

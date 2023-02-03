@@ -179,7 +179,7 @@ class StreamingEx:
         self.stream_fitting()
 
     def start_parallel_sisomap(self):
-        self.model = ParallelSIsomapP(Queue(), Queue(), Queue(), Queue(), self.cfg.exp_params.initial_data_num,
+        self.model = ParallelSIsomapP(Queue(), Queue(), Queue(), Queue(), Queue(), self.cfg.exp_params.initial_data_num,
                                       self.n_components, self.cfg.method_params.n_neighbors)
         self.stream_fitting()
 

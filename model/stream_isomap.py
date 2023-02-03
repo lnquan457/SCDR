@@ -79,6 +79,18 @@ class SIsomap(kNNBasedIncrementalMethods, Isomap):
         embedding = p - np.mean(y_star, axis=0)[:, np.newaxis]
         return embedding.T
 
+    def slide_window(self, out_num):
+        if out_num <= 0:
+            return True
+        if out_num >= self.stream_dataset.get_n_samples() - self.n_neighbors:
+            return False
+        self.knn_manager.slide_window(out_num)
+        self.stream_dataset._total_data = self.stream_dataset._total_data[out_num:]
+        self.stream_dataset._total_n_samples = self.stream_dataset._total_data.shape[0]
+        self.pre_embeddings = self.pre_embeddings[out_num:]
+        self.G = self.G[out_num:, :][:, out_num:]
+        return True
+
 
 def _sim(components_1, components_2):
     n_1 = components_1.shape[0]
@@ -119,19 +131,62 @@ def _extract_labels(cluster_indices, local_embeddings_list):
 
 
 class SIsomapPlus(kNNBasedIncrementalMethods):
-    def __init__(self, train_num, n_components, n_neighbors, epsilon=0.25):
-        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, single=True)
+    def __init__(self, train_num, n_components, n_neighbors, epsilon=0.25, window_size=1000):
+        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, True, window_size)
         self.epsilon = epsilon
         self.pre_cluster_num = 0
-        self.isomap_list = []
+        self.isomap_list = []   # 1
         self.transformation_info_list = []
-        self.cluster_indices = None
-        self.global_embedding_mean = []
-        self._data_cluster = []
-        self._geodesic_dists = []
+        self.cluster_indices = None     # 1
+        self.global_embedding_mean = None # 1
+        self._data_cluster = None # 1
 
-        self.cluster_real_cls = []
-        self.predict_cls = []
+    def _slide_window(self):
+        out_num = self.stream_dataset.get_total_data().shape[0] - self._window_size
+        if out_num <= 0:
+            return
+
+        self.stream_dataset._total_data = self.stream_dataset._total_data[out_num:]
+        self.stream_dataset._total_label = self.stream_dataset._total_label[out_num:]
+
+        self.check_embedding_validity(out_num)
+
+        self.cluster_indices -= out_num
+        self._data_cluster = self._data_cluster[out_num:]
+        self.pre_embeddings = self.pre_embeddings[out_num:]
+
+    def check_embedding_validity(self, out_num):
+        valid_embedder_indices = np.ones(len(self.cluster_indices)).astype(bool)
+        valid_embedder = []
+        valid_transformation_info = []
+        delete_cluster_id = []
+        for i in range(out_num):
+            c_id = self._data_cluster[i]
+            if c_id < 0 or c_id >= len(self.cluster_indices):
+                continue
+            pre_num = len(self.cluster_indices[c_id])
+            self.cluster_indices[c_id] = np.setdiff1d(self.cluster_indices[c_id], i)
+            self.global_embedding_mean[c_id] = (self.global_embedding_mean[c_id] * pre_num - self.pre_embeddings[i]) / (
+                        pre_num - 1)
+            exist_flag = self.isomap_list[c_id].slide_window(1)
+            valid_embedder_indices[c_id] = exist_flag
+            if not exist_flag and c_id not in delete_cluster_id:
+                self.pre_cluster_num -= 1
+                delete_cluster_id.append(c_id)
+
+            # valid_embedder_indices[c_id] = True
+        for i in range(len(self.cluster_indices)):
+            if valid_embedder_indices[i]:
+                valid_embedder.append(self.isomap_list[i])
+                valid_transformation_info.append(self.transformation_info_list[i])
+            else:
+                self._data_cluster[self._data_cluster == i] = -1
+                self._data_cluster[self._data_cluster > i] -= 1
+
+        self.isomap_list = valid_embedder
+        self.global_embedding_mean = self.global_embedding_mean[valid_embedder_indices]
+        self.cluster_indices = self.cluster_indices[valid_embedder_indices]
+        self.transformation_info_list = valid_transformation_info
 
     def _first_train(self, train_data):
         self.initial_train_num = train_data.shape[0]
@@ -141,7 +196,8 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         local_embeddings_list = self._local_embedding(train_data)
         seq_cluster_indices, seq_labels, seq_local_embeddings = \
             _extract_labels(self.cluster_indices, local_embeddings_list)
-        self._data_cluster = seq_labels.tolist()
+        self.cluster_indices = np.array(self.cluster_indices)
+        self._data_cluster = np.array(seq_labels, dtype=int)
 
         # position_vis(self.stream_dataset.total_label, None, seq_local_embeddings, "local embeddings")
 
@@ -168,8 +224,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             idx = 0
             embeddings = local_embedding_list[0]
 
-        self._data_cluster.append(idx)
-        self._geodesic_dists.append(geodesic_dists_list[idx])
+        self._data_cluster = np.append(self._data_cluster, idx)
         embeddings = embeddings[np.newaxis, :]
         self.isomap_list[idx].merge_new_data_info(new_data, embeddings, geodesic_dists_list[idx])
         self.pre_embeddings = np.concatenate([self.pre_embeddings, embeddings], axis=0)
@@ -222,7 +277,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
                 labels[cur_cls_data_indices] = -2
                 unsigned_indices.extend(cur_cls_data_indices)
             else:
-                cluster_indices.append(cur_cls_data_indices)
+                cluster_indices.append(np.array(cur_cls_data_indices, dtype=int))
                 idx += 1
 
         unsigned_indices.extend(np.where(labels == -1)[0])
@@ -232,7 +287,8 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         closest_indices = np.argmin(dists, axis=1)
         for i, item in enumerate(unsigned_indices):
             labels[item] = closest_indices[i] + 1
-            cluster_indices[int(closest_indices[i])].append(item)
+            cluster_indices[int(closest_indices[i])] = np.append(cluster_indices[int(closest_indices[i])], np.array(item, dtype=int))
+            # cluster_indices[int(closest_indices[i])].append(np.array(item, dtype=int))
 
         # print("cluster number:", idx)
         # for item in cluster_indices:
@@ -255,7 +311,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         cluster_embedding_list = []
         for item in self.cluster_indices:
             isomap_embedder = SIsomap(len(item), self.n_components, self.n_neighbors)
-            embeddings = isomap_embedder.fit_new_data(data[item])
+            embeddings = isomap_embedder.fit_new_data(data[item])[0]
             cluster_embedding_list.append(embeddings)
             self.isomap_list.append(isomap_embedder)
 
@@ -273,13 +329,13 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
 
                 farest_indices = sort_indices[-self.n_neighbors:]
                 farest = [farest_indices // cols, farest_indices % cols]
-                real_farest_indices = [np.array(self.cluster_indices[i])[farest[0]],
-                                       np.array(self.cluster_indices[j])[farest[1]]]
+                real_farest_indices = [self.cluster_indices[i][farest[0]],
+                                       self.cluster_indices[j][farest[1]]]
 
                 nearest_indices = sort_indices[:self.n_neighbors]
                 nearest = [nearest_indices // cols, nearest_indices % cols]
-                real_nearest_indices = [np.array(self.cluster_indices[i])[nearest[0]],
-                                        np.array(self.cluster_indices[j])[nearest[1]]]
+                real_nearest_indices = [self.cluster_indices[i][nearest[0]],
+                                        self.cluster_indices[j][nearest[1]]]
 
                 cur_support_set = np.concatenate([real_nearest_indices, real_farest_indices], axis=1)
 
@@ -294,6 +350,8 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         cluster_num = len(self.cluster_indices)
         n_samples = local_embeddings.shape[0]
         transformed_embeddings = np.zeros((n_samples, self.n_components))
+        global_embedding_mean = []
+
         for i in range(cluster_num):
             current_support_indices, indices_1, _ = np.intersect1d(support_indices, self.cluster_indices[i],
                                                                    return_indices=True)
@@ -309,7 +367,9 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             self.transformation_info_list.append([R_i, t_i])
             cur_embeddings = np.dot(R_i, local_embeddings[self.cluster_indices[i]].T) + t_i
             transformed_embeddings[self.cluster_indices[i]] = cur_embeddings.T
-            self.global_embedding_mean.append(np.mean(cur_embeddings.T, axis=0))
+            global_embedding_mean.append(np.mean(cur_embeddings.T, axis=0))
+
+        self.global_embedding_mean = np.array(global_embedding_mean, )
 
         return transformed_embeddings
 
@@ -334,13 +394,13 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         return global_embedding_list
 
     def _select_best_manifold(self, global_embedding_list):
-        dists = np.linalg.norm(global_embedding_list - np.array(self.global_embedding_mean), axis=1)
+        dists = np.linalg.norm(global_embedding_list - self.global_embedding_mean, axis=1)
         min_idx = np.argmin(dists, axis=None)
 
         manifold_data_num = len(self.cluster_indices[min_idx])
         self.global_embedding_mean[min_idx] = (manifold_data_num * self.global_embedding_mean[min_idx] +
                                                global_embedding_list[min_idx]) / (manifold_data_num + 1)
-        self.cluster_indices[min_idx].append(self.stream_dataset.get_n_samples())
+        self.cluster_indices[min_idx] = np.append(self.cluster_indices[min_idx], self.stream_dataset.get_n_samples())
         return min_idx
 
 

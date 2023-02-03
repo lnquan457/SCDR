@@ -54,15 +54,15 @@ class DataRepo:
         self._total_embeddings = None
         self._knn_manager = KNNManager(n_neighbor)
 
-    def slide_window(self, window_size=2000):
-        out_num = self.get_n_samples() - window_size
+    def slide_window(self, out_num):
         if out_num <= 0:
             return out_num
-        self._total_n_samples = window_size
+
         self._total_data = self.get_total_data()[out_num:]
         self._total_label = self.get_total_label()[out_num:]
         self._total_embeddings = self.get_total_embeddings()[out_num:]
         self._knn_manager.slide_window(out_num)
+        self._total_n_samples = self._total_data.shape[0]
 
         return out_num
 
@@ -264,40 +264,41 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.fuzzy_t = 0
         self.get_t = 0
 
-    def slide_window(self, window_size=2000):
-        out_num = super().slide_window()
+    def slide_window(self, out_num):
+        if out_num <= 0:
+            return
+        super().slide_window(out_num)
 
         # TODO：下面五个暂时不需要更新
-        if out_num > 0:
-            # TODO: 需要更新kNN
-            knn_indices = self.get_knn_indices()
-            knn_dists = self.get_knn_dists()
-            knn_indices -= out_num
-            out_indices = np.argwhere(self.get_knn_indices() < 0)
-            changed_data_idx = out_indices[:, 0]
-            # print("change data idx", changed_data_idx)
-            dists = cdist(self.get_total_data()[changed_data_idx], self.get_total_data())
-            sorted_indices = np.argsort(dists, axis=1)
-            knn_indices[changed_data_idx] = sorted_indices[:, 1:1 + self.n_neighbor]
-            for i, item in enumerate(changed_data_idx):
-                knn_dists[item] = dists[i][knn_indices[item]]
-            self._knn_manager.update_knn_graph(knn_indices, knn_dists)
+        # TODO: 需要更新kNN
+        knn_indices = self.get_knn_indices()
+        knn_dists = self.get_knn_dists()
+        knn_indices -= out_num
+        out_indices = np.argwhere(self.get_knn_indices() < 0)
+        changed_data_idx = out_indices[:, 0]
+        # print("change data idx", changed_data_idx)
+        dists = cdist(self.get_total_data()[changed_data_idx], self.get_total_data())
+        sorted_indices = np.argsort(dists, axis=1)
+        knn_indices[changed_data_idx] = sorted_indices[:, 1:1 + self.n_neighbor]
+        for i, item in enumerate(changed_data_idx):
+            knn_dists[item] = dists[i][knn_indices[item]]
+        self._knn_manager.update_knn_graph(knn_indices, knn_dists)
 
-            self.__sigmas = self.__sigmas[out_num:]
-            self.__rhos = self.__rhos[out_num:]
-            # self.symmetric_nn_indices = self.symmetric_nn_indices[out_num:] - out_num
+        self.__sigmas = self.__sigmas[out_num:]
+        self.__rhos = self.__rhos[out_num:]
+        # self.symmetric_nn_indices = self.symmetric_nn_indices[out_num:] - out_num
 
-            # self.symmetric_nn_weights = self.symmetric_nn_weights[out_num:]
-            self.raw_knn_weights = self.raw_knn_weights[out_num:]     # 是应该更新的，但是影响很小
+        # self.symmetric_nn_weights = self.symmetric_nn_weights[out_num:]
+        self.raw_knn_weights = self.raw_knn_weights[out_num:]     # 是应该更新的，但是影响很小
 
-            self.train_dataset.slide_window(out_num)
+        self.train_dataset.slide_window(out_num)
 
-            if len(self._cached_neighbor_change_indices) > 0 :
-                self._cached_neighbor_change_indices -= out_num
-                valid_indices = np.where(self._cached_neighbor_change_indices >= 0)[0]
-                self._cached_neighbor_change_indices = self._cached_neighbor_change_indices[valid_indices]
+        if len(self._cached_neighbor_change_indices) > 0 :
+            self._cached_neighbor_change_indices -= out_num
+            valid_indices = np.where(self._cached_neighbor_change_indices >= 0)[0]
+            self._cached_neighbor_change_indices = self._cached_neighbor_change_indices[valid_indices]
 
-            self._cached_neighbor_change_indices = np.union1d(self._cached_neighbor_change_indices, changed_data_idx)
+        self._cached_neighbor_change_indices = np.union1d(self._cached_neighbor_change_indices, changed_data_idx)
         return out_num
 
     def update_unfitted_data_num(self, unfitted_num):
