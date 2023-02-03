@@ -8,149 +8,90 @@ def check_path_exists(t_path):
     if not os.path.exists(t_path):
         os.makedirs(t_path)
 
+"""
+    三种情况的数据：
+    1）所有新数据均来自与初始数据相同的流形，且不同流形的数据乱序产生；
+    2）所有新数据均来自与初始数据不同的流形，且不同新流形的数据乱序产生；
+    3）部分新数据来自与初始数据相同的流形，部分来自新的流形，且不同流形的数据乱序产生；
+"""
 
-def make_initial_and_after():
-    save_dir = "../../../Data/indices"
-    initial_cls_ratio = 0.6
-    initial_ratio = 0.8
-    for ds in ds_list:
-        with h5py.File(os.path.join(data_dir, "{}.h5".format(ds)), "r") as hf:
-            x = np.array(hf['x'], dtype=float)
-            y = np.array(hf['y'], dtype=int)
+def no_drift(cls, cls_counts, labels, init_data_rate=0.3):
+    init_data_indices = []
+    stream_data_indices = []
 
-            unique_cls = np.unique(y)
-            np.random.shuffle(unique_cls)
-            cls_num = int(initial_cls_ratio * len(unique_cls))
-            initial_cls = unique_cls[:cls_num]
-            initial_indices = []
-
-            for item in initial_cls:
-                cur_indices = np.argwhere(y == item).squeeze()
-                np.random.shuffle(cur_indices)
-                cur_num = int(math.ceil(initial_ratio * len(cur_indices)))
-                initial_indices.extend(cur_indices[:cur_num])
-
-            after_indices = np.setdiff1d(np.arange(0, len(y), 1), initial_indices)
-
-            save_path = os.path.join(save_dir, "{}_c{}_r{}.npy".format(ds, cls_num, initial_ratio))
-            np.save(save_path, [initial_indices, after_indices])
-
-
-def make_single_cluster_data(ds_name):
-    save_dir = "../../../Data/indices/single_cluster"
-    unique_cls, y = read_labels(ds_name)
-    np.random.shuffle(unique_cls)
-    indices = []
-    for item in unique_cls:
-        cur_indices = np.argwhere(y == item).squeeze()
+    for i in range(len(cls)):
+        cur_indices = np.where(labels == cls[i])[0]
         np.random.shuffle(cur_indices)
-        indices.extend(cur_indices)
+        cur_num = int(cls_counts[i] * init_data_rate)
+        init_data_indices.extend(cur_indices[:cur_num])
+        stream_data_indices.extend(cur_indices[cur_num:])
 
-    check_path_exists(save_dir)
-    save_path = os.path.join(save_dir, "{}.npy".format(ds_name))
-    np.save(save_path, indices)
-
-
-def make_recurring_single_cluster_data(ds_name):
-    save_dir = "../../../Data/indices/single_cluster_recur"
-    unique_cls, y = read_labels(ds_name)
-    np.random.shuffle(unique_cls)
-    recurring_time = 2
-    cls_indices = {}
-
-    for item in unique_cls:
-        cur_indices = np.argwhere(y == item).squeeze()
-        np.random.shuffle(cur_indices)
-        cls_indices[item] = np.array(cur_indices, dtype=int)
-
-    indices = []
-    for i in range(recurring_time):
-        for item in unique_cls:
-            num = math.ceil(len(cls_indices[item]) / recurring_time)
-            indices.extend(cls_indices[item][i*num:min((i+1)*num, len(cls_indices[item]))])
-
-    check_path_exists(save_dir)
-    save_path = os.path.join(save_dir, "{}_recur{}.npy".format(ds_name, recurring_time))
-    np.save(save_path, indices)
+    np.random.shuffle(init_data_indices)
+    np.random.shuffle(stream_data_indices)
+    return init_data_indices, stream_data_indices, len(cls), 0
 
 
-def make_multi_cluster_data(ds_name, composite_nums):
-    save_dir = "../../../Data/indices/multi_cluster"
-    unique_cls, y = read_labels(ds_name)
-    np.random.shuffle(unique_cls)
-    if isinstance(composite_nums, int):
-        composite_num_tmp = [composite_nums for i in range(len(unique_cls) // composite_nums)]
-        composite_nums = composite_num_tmp
+def partial_drift(cls, cls_counts, labels, init_manifold_rate=0.5, init_data_rate=0.5):
+    init_manifold_num = int(len(cls) * init_manifold_rate)
+    init_data_indices, stream_data_indices = no_drift(cls[:init_manifold_num], cls_counts[:init_manifold_num], labels,
+                                                      init_data_rate=init_data_rate)[:2]
 
-    indices = []
-    idx = 0
-    for i in range(len(composite_nums)):
-        cur_indices = []
-        for j in range(composite_nums[i]):
-            cur_indices.extend(np.argwhere(y == unique_cls[idx]).squeeze())
-            idx += 1
-        cur_indices = np.array(cur_indices, dtype=int)
-        np.random.shuffle(cur_indices)
-        indices.extend(cur_indices)
+    for i in range(init_manifold_num, len(cls)):
+        cur_indices = np.where(labels == cls[i])[0]
+        stream_data_indices.extend(cur_indices)
 
-    composite_nums_str = [str(item) for item in composite_nums]
-    suffix = "_".join(composite_nums_str)
-    check_path_exists(save_dir)
-    save_path = os.path.join(save_dir, "{}_{}.npy".format(ds_name, suffix))
-    np.save(save_path, indices)
+    np.random.shuffle(stream_data_indices)
+    return init_data_indices, stream_data_indices, init_manifold_num, len(cls) - init_manifold_num
 
+def full_drift(cls, cls_counts, labels, init_manifold_rate=0.3):
+    init_data_indices = []
+    stream_data_indices = []
+    init_manifold_num = int(len(cls) * init_manifold_rate)
+    ttt_indices = np.arange(len(cls))
+    np.random.shuffle(ttt_indices)
+    cls = cls[ttt_indices]
+    cls_counts = cls_counts[ttt_indices]
 
-def make_recurring_multi_cluster_data(ds_name, composite_nums, recurring_time):
-    save_dir = "../../../Data/indices/multi_cluster_recur"
-    unique_cls, y = read_labels(ds_name)
-    np.random.shuffle(unique_cls)
-    if isinstance(composite_nums, int):
-        composite_num_tmp = [composite_nums for i in range(len(unique_cls) // composite_nums)]
-        composite_nums = composite_num_tmp
+    for i in range(init_manifold_num):
+        cur_indices = np.where(labels == cls[i])[0]
+        init_data_indices.extend(cur_indices)
 
-    idx = 0
-    group_indices = {}
-    for i in range(len(composite_nums)):
-        cur_indices = []
-        for j in range(composite_nums[i]):
-            cur_indices.extend(np.argwhere(y == unique_cls[idx]).squeeze())
-            idx += 1
+    for i in range(init_manifold_num, len(cls)):
+        cur_indices = np.where(labels == cls[i])[0]
+        stream_data_indices.extend(cur_indices)
 
-        cur_indices = np.array(cur_indices, dtype=int)
-        np.random.shuffle(cur_indices)
-        group_indices[i] = cur_indices
-
-    indices = []
-    for i in range(recurring_time):
-        for item in group_indices:
-            num = math.ceil(len(group_indices[item]) / recurring_time)
-            indices.extend(group_indices[item][i*num:min((i+1)*num, len(group_indices[item]))])
-
-    composite_nums_str = [str(item) for item in composite_nums]
-    suffix = "_".join(composite_nums_str)
-    check_path_exists(save_dir)
-    save_path = os.path.join(save_dir, "{}_{}_recur{}.npy".format(ds_name, suffix, recurring_time))
-    np.save(save_path, indices)
+    np.random.shuffle(init_data_indices)
+    np.random.shuffle(stream_data_indices)
+    return init_data_indices, stream_data_indices, init_manifold_num, len(cls) - init_manifold_num
 
 
-def read_labels(ds_name):
-    hf = h5py.File(os.path.join(data_dir, "{}.h5".format(ds_name)), "r")
-    y = np.array(hf['y'], dtype=int)
-    unique_cls = np.unique(y)
-    return unique_cls, y
+func_dict = {
+    "ND": no_drift,
+    "PD": partial_drift,
+    "FD": full_drift
+}
 
 
 if __name__ == '__main__':
-    data_dir = "../../../Data/H5 Data"
-    ds_list = ["isolet_subset", "stanford dogs_subset", "wifi", "wethers", "food", "texture", "usps_clear", "satimage",
-               "animals_clear", "mnist_r_10000", "cifar10_ex_10000", "pendigits"]
-    composite_num_list = [3, [3, 4], 2, 2, [3, 3, 3, 2], [3, 3, 3, 2], [3, 3, 4], 3, [3, 3, 4], [3, 3, 4], [3, 3, 4],
-                          [3, 3, 4]]
-    # make_initial_and_after()
-    # for i, ds in enumerate(ds_list):
-        # make_single_cluster_data(ds)
-        # make_recurring_single_cluster_data(ds)
-        # make_multi_cluster_data(ds, composite_num_list[i])
-        # make_recurring_multi_cluster_data(ds, composite_num_list[i], 2)
+    dataset_dir = r"D:\Projects\流数据\Data\new"
+    save_dir = os.path.join(dataset_dir, "indices_seq")
+    check_path_exists(save_dir)
+    situation_list = ["ND", "PD", "FD"]
+    for item in os.listdir(dataset_dir):
+        if not str(item).endswith(".h5") or item != "shuttle.h5":
+            continue
+        data_name = item.split(".")[0]
 
-    make_recurring_multi_cluster_data("food", [11], 5)
+        with h5py.File(os.path.join(dataset_dir, item), "r") as hf:
+            x = np.array(hf['x'])
+            y = np.array(hf['y'], dtype=int)
+            unique_cls, cls_nums = np.unique(y, return_counts=True)
+
+            for situation in situation_list:
+                init_indices, stream_indices, init_cls_num, stream_new_cls_num = func_dict[situation](unique_cls, cls_nums, y)
+                save_path = os.path.join(save_dir, "{}_{}.npy".format(data_name, situation))
+                np.save(save_path, [init_indices, stream_indices])
+                print("{}_{} -> Init Num: {} Stream Num: {} Init Cls: {} Stream New Cls: {}".format(
+                    data_name, situation, len(init_indices), len(stream_indices), init_cls_num, stream_new_cls_num))
+
+
