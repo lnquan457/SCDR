@@ -11,7 +11,7 @@ from utils.nn_utils import compute_knn_graph
 
 class ParallelSIsomapP(SIsomapPlus):
     def __init__(self, pattern_data_queue, model_update_queue, model_return_queue, replace_model_queue,
-                 update_finish_queue, train_num, n_components, n_neighbors, epsilon=0.25, window_size=1000):
+                 update_finish_queue, train_num, n_components, n_neighbors, epsilon=0.25, window_size=2000):
         SIsomapPlus.__init__(self, train_num, n_components, n_neighbors, epsilon, window_size)
         self._pattern_data_queue = pattern_data_queue
         self._model_return_queue = model_return_queue
@@ -51,7 +51,7 @@ class ParallelSIsomapP(SIsomapPlus):
                 if not self._get_new_model:
                     self._get_new_model_info()
 
-                out_num = self._replace_model()
+                out_num = self._replace_model(new_data.shape[0])
 
                 self._get_new_model = False
                 if out_num > 0:
@@ -64,8 +64,8 @@ class ParallelSIsomapP(SIsomapPlus):
 
         return super()._incremental_embedding(new_data)
 
-    def _replace_model(self):
-        min_valid_idx = max(0, self._total_data_idx - self._window_size)
+    def _replace_model(self, new_data_num):
+        min_valid_idx = max(0, self._total_data_idx - self._window_size - new_data_num)
         valid_num = self._newest_model_data_idx - min_valid_idx
         out_num = max(0, self._new_embeddings.shape[0] - valid_num)
         if valid_num <= 0:

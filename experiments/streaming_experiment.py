@@ -8,7 +8,6 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 from scipy.spatial.distance import cdist
 
-from model.incrementalLLE import IncrementalLLE
 from model.ine import INEModel
 from model.parallel_ine import ParallelINE
 from model.parallel_sisomap import ParallelSIsomapP
@@ -19,7 +18,6 @@ from utils.constant_pool import METRIC_NAMES, STEADY_METRIC_NAMES
 from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueue
 from dataset.streaming_data_mock import StreamingDataMock, SimulatedStreamingData, StreamingDataMock2Stage
 from model.scdr.dependencies.experiment import position_vis
-from model.atSNE import atSNEModel
 from model.si_pca import StreamingIPCA, ParallelsPCA
 from model.xtreaming import XtreamingModel
 from utils.common_utils import evaluate_and_log, time_stamp_to_date_time_adjoin
@@ -64,7 +62,8 @@ def cal_kNN_change(new_data, new_knn_indices, new_knn_dists, pre_data, pre_knn_i
 
 
 class StreamingEx:
-    def __init__(self, cfg, seq_indices, result_save_dir, data_generator, log_path="log_streaming_con.txt", do_eval=True):
+    def __init__(self, cfg, seq_indices, result_save_dir, data_generator, log_path="log_streaming_con.txt",
+                 do_eval=True):
         self.cfg = cfg
         self.seq_indices = seq_indices
         self._data_generator = data_generator
@@ -109,9 +108,12 @@ class StreamingEx:
         self._x_max = 1e-7
         self._y_min = 1e7
         self._y_max = 1e-7
+        self.process_time_records = []
         self._embeddings_histories = []
         self._faith_metric_records = [[] for item in METRIC_NAMES]
         self._steady_metric_records = [[] for item in STEADY_METRIC_NAMES]
+        self._data_arrival_time = []
+        self._data_present_time = []
 
     def _prepare_streaming_data(self):
         # self.streaming_mock = StreamingDataMock(self.dataset_name, self.cfg.exp_params.stream_rate, self.seq_indices)
@@ -138,12 +140,6 @@ class StreamingEx:
         self.model = StreamingIPCA(self.n_components, self.cfg.method_params.forgetting_factor)
         self.stream_fitting()
 
-    def start_atSNE(self):
-        self.model = atSNEModel(self.cfg.method_params.finetune_iter, n_components=self.n_components,
-                                perplexity=self.cfg.method_params.perplexity,
-                                init="pca", n_iter=self.cfg.method_params.initial_train_iter, verbose=0)
-        self.stream_fitting()
-
     def start_xtreaming(self):
         self.model = XtreamingModel(self.cfg.method_params.buffer_size, self.cfg.method_params.eta)
         self.stream_fitting()
@@ -156,11 +152,6 @@ class StreamingEx:
     def start_sisomap(self):
         self.model = SIsomapPlus(self.cfg.exp_params.initial_data_num, self.n_components,
                                  self.cfg.method_params.n_neighbors)
-        self.stream_fitting()
-
-    def start_ille(self):
-        self.model = IncrementalLLE(self.cfg.exp_params.initial_data_num, self.n_components,
-                                    self.cfg.method_params.n_neighbors)
         self.stream_fitting()
 
     def start_parallel_spca(self):
@@ -222,12 +213,20 @@ class StreamingEx:
         cache_flag, stream_data, stream_labels = self._cache_initial(stream_data, stream_labels)
         if cache_flag:
             self.pre_embedding = self.cur_embedding
-            # if self.cur_time_step > 1 and (isinstance(self.model, SCDRParallel)):
-            #     self.model.stream_dataset.add_new_data(data=stream_data)
+            if self.cur_time_step > 1:
+                self._data_arrival_time.extend([time.time()] * stream_data.shape[0])
+
             sta = time.time()
-            ret_embeddings, add_data_time = self.model.fit_new_data(stream_data, stream_labels)
+            ret_embeddings, add_data_time, embedding_updated = self.model.fit_new_data(stream_data, stream_labels)
+            end_time = time.time()
+            if self.cur_time_step > 1 and embedding_updated:
+                self._data_present_time.extend([end_time] * (len(self._data_arrival_time) -
+                                                             len(self._data_present_time)))
+
             if self.cur_time_step > 2:
-                self._key_time += time.time() - sta - add_data_time
+                single_process_time = end_time - sta - add_data_time
+                self.process_time_records.append(single_process_time)
+                self._key_time += single_process_time
                 # print("_key_time", self._key_time)
 
             if ret_embeddings is not None:
@@ -266,7 +265,8 @@ class StreamingEx:
 
         if self.cur_time_step % self.vis_iter == 0 or train_end:
             img_save_path = os.path.join(self.img_dir, "t_{}.jpg".format(custom_id)) if self.save_img else None
-            position_vis(self.history_label[-cur_embeddings.shape[0]:], img_save_path, cur_embeddings, "T_{}".format(len(self._embeddings_histories)))
+            position_vis(self.history_label[-cur_embeddings.shape[0]:], img_save_path, cur_embeddings,
+                         "T_{}".format(len(self._embeddings_histories)))
 
     def evaluate(self, pre_embeddings, cur_embeddings, pre_labels, train_end=False):
         if self.cur_time_step % self._eval_iter > 0 and not train_end:
@@ -314,12 +314,25 @@ class StreamingEx:
 
         ret, time_cost_records = self.model.ending()
 
-        x_indices = np.arange(len(time_cost_records))
+        x_indices = np.arange(len(self.process_time_records))
         plt.figure()
-        plt.plot(x_indices, time_cost_records)
-        plt.title("Time Costs")
-        plt.savefig(os.path.join(self.result_save_dir, "time costs.jpg"), dpi=400, bbox_inches='tight')
+        plt.title("Time Costs Per Data - %.3f" % np.mean(self.process_time_records))
+        plt.plot(x_indices, self.process_time_records)
+        plt.savefig(os.path.join(self.result_save_dir, "time costs per data.jpg"), dpi=400, bbox_inches="tight")
         plt.show()
+
+        acc_time_records = [self.process_time_records[0]]
+        for i in range(1, len(self.process_time_records)):
+            acc_time_records.append(self.process_time_records[i] + acc_time_records[-1])
+
+        x_indices = np.arange(len(acc_time_records))
+        plt.figure()
+        plt.plot(x_indices, acc_time_records)
+        plt.title("Accumulation Time Costs")
+        plt.savefig(os.path.join(self.result_save_dir, "acc time costs.jpg"), dpi=400, bbox_inches='tight')
+        plt.show()
+
+        np.save(os.path.join(self.result_save_dir, "time cost.npy"), self.process_time_records)
 
         if self.log is not None:
             self.log.write(ret + "\n")
@@ -327,12 +340,21 @@ class StreamingEx:
         output = "Key Cost Time: %.4f" % self._key_time
         InfoLogger.info(output)
         self.log.write(output + "\n")
+
+        avg_data_delay_time = np.mean(np.array(self._data_present_time) - np.array(self._data_arrival_time))
+        output = "Average Data show up time delay: %.2f s" % avg_data_delay_time
+        InfoLogger.info(output)
+        self.log.write(output + "\n")
+
         if self.do_eval:
             self.build_metric_tool()
 
         # self.evaluate(self.pre_embedding, self.cur_embedding, self.history_label[:self.pre_embedding.shape[0]], True)
 
         self._metric_conclusion()
+
+        if self._make_animation:
+            self._make_embedding_video(self.result_save_dir)
 
     def _metric_conclusion(self):
 
@@ -350,8 +372,9 @@ class StreamingEx:
         check_path_exist(save_dir)
         x = np.arange(len(self._faith_metric_records[0]))
         for i, item in enumerate(METRIC_NAMES):
-            faith_metric_output += " Avg %s: %.4f" % (item, float(np.mean(self._faith_metric_records[i])))
-            _draw(self._faith_metric_records[i], item)
+            avg_res = float(np.mean(self._faith_metric_records[i]))
+            faith_metric_output += " Avg %s: %.3f" % (item, avg_res)
+            _draw(self._faith_metric_records[i], "%s - %.3f" % (item, avg_res))
         InfoLogger.info(faith_metric_output)
 
         steady_metric_output = ""
@@ -360,12 +383,17 @@ class StreamingEx:
             _draw(self._steady_metric_records[i], item)
         InfoLogger.info(steady_metric_output)
 
+        metric_names = METRIC_NAMES
+        metric_names.extend(STEADY_METRIC_NAMES)
+        metric_names = np.array(metric_names)[:, np.newaxis]
+        total_metric_res = np.concatenate([np.array(self._faith_metric_records), np.array(self._steady_metric_records)],
+                                          axis=0)
+        save_data = np.concatenate([metric_names, total_metric_res], axis=1)
+        np.save(os.path.join(self.result_save_dir, "metrics.npy"), save_data)
+
         if self.log is not None:
             self.log.write(faith_metric_output + "\n")
             self.log.write(steady_metric_output + "\n")
-
-        if self._make_animation:
-            self._make_embedding_video(save_dir)
 
     def _make_embedding_video(self, save_dir):
         # self._embeddings_histories = np.array(self._embeddings_histories)
@@ -381,10 +409,10 @@ class StreamingEx:
 
         fig, ax = plt.subplots()
 
-        if len(np.unique(self.history_label)) > 10:
-            color_list = "tab20"
-        else:
-            color_list = "tab10"
+        # if len(np.unique(self.history_label)) > 10:
+        #     color_list = "tab20"
+        # else:
+        #     color_list = "tab10"
 
         def update(idx):
             if idx % 100 == 0:
@@ -394,10 +422,10 @@ class StreamingEx:
 
             ax.cla()
             ax.set(xlim=(l_x_min, l_x_max), ylim=(l_y_min, l_y_max))
-            ax.set_aspect('equal')
+            # ax.set_aspect('equal')
             ax.axis('equal')
             ax.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1],
-                       c=list(self._data_generator.seq_color[start_idx:start_idx+cur_embeddings.shape[0]]), s=2)
+                       c=list(self._data_generator.seq_color[start_idx:start_idx + cur_embeddings.shape[0]]), s=2)
             ax.set_title("Timestep: {}".format(int(idx)))
 
         ani = FuncAnimation(fig, update, frames=len(self._embeddings_histories), interval=15, blit=False)
@@ -497,6 +525,10 @@ class StreamingExProcess(StreamingEx, Process):
 
     def train_end(self):
         self.stream_data_queue_set.close()
+
+        diff = len(self._data_arrival_time) - len(self._data_present_time)
+        if diff > 0:
+            self._data_present_time.extend([time.time()] * diff)
 
         # 结束模型更新进程
         if self.cdr_update_queue_set is not None:

@@ -8,9 +8,9 @@ exp_params:
   initial_data_num: 300
   vis_iter: 100
   save_iter: 500000
-  eval_iter: 1000
+  eval_iter: 100
   make_animation: True
 
 method_params:
-  buffer_size: 1
+  buffer_size: 200
   eta: 0.99

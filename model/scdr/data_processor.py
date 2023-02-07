@@ -15,7 +15,7 @@ OPTIMIZE_NEIGHBORS = True
 
 
 class DataProcessor:
-    def __init__(self, n_neighbors, batch_size, model_update_queue_set, device="cuda:0", window_size=2000):
+    def __init__(self, n_neighbors, batch_size, model_update_queue_set, window_size, device="cuda:0"):
         self.n_neighbors = n_neighbors
         self.batch_size = batch_size
         self.model_update_queue_set = model_update_queue_set
@@ -394,9 +394,9 @@ class DataProcessor:
 
 class DataProcessorProcess(DataProcessor, Process):
     def __init__(self, embedding_data_queue, n_neighbors, batch_size,
-                 model_update_queue_set, device="cuda:0"):
+                 model_update_queue_set, window_size, device="cuda:0"):
         self.name = "data update process"
-        DataProcessor.__init__(self, n_neighbors, batch_size, model_update_queue_set, device)
+        DataProcessor.__init__(self, n_neighbors, batch_size, model_update_queue_set, window_size, device)
         Process.__init__(self, name=self.name)
         self._embedding_data_queue: DataProcessorQueue = embedding_data_queue
         self._newest_model = None

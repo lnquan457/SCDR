@@ -7,49 +7,41 @@ import numpy as np
 
 
 if __name__ == '__main__':
-    data_path = r"D:\Projects\流数据\Data\new\datasets\1 Online News Popularity\OnlineNewsPopularity.csv"
+    data_dir = r"D:\Projects\流数据\Data\new\datasets\1 AReM"
     save_dir = r"D:\Projects\流数据\Data\new"
 
-    # with hp.File(data_path, "r") as hf:
-    #     data = np.array(hf['x'])
-    #     labels = np.array(hf['y'])
-    #     cls_names = np.unique(labels)
-    #     int_labels = []
-    #     for item in labels:
-    #         # int_labels.append(list(cls_names).index(item))
-    #         int_labels.append(int(item))
+    total_data = None
+    total_labels = None
+
+    cls_idx = 0
+    for item in os.listdir(data_dir):
+        if str(item).endswith(".pdf"):
+            continue
+        cls_num = 0
+        print("==============", item)
+        for subitem in os.listdir(os.path.join(data_dir, item)):
+            print("****", subitem)
+            data_path = os.path.join(data_dir, item, subitem)
+
+            df = pd.read_csv(data_path, header=None, sep=",", skiprows=5)
+            # df = pd.read_csv(data_path)
+
+            data = np.array(df, dtype=float)[:, 1:]
+            cls_num += data.shape[0]
+            if total_data is None:
+                total_data = data
+            else:
+                total_data = np.concatenate([total_data, data], axis=0)
+
+        cls_labels = [cls_idx] * cls_num
+        cls_labels = np.array(cls_labels, dtype=int)
+        cls_idx += 1
+
+        if total_labels is None:
+            total_labels = cls_labels
+        else:
+            total_labels = np.concatenate([total_labels, cls_labels])
     #
-    # with hp.File(os.path.join(save_dir, "shuttle.h5"), "w") as hf2:
-    #     hf2['x'] = data
-    #     hf2['y'] = np.array(int_labels, dtype=int)
-
-    df = pd.read_csv(data_path, header=None, sep=',')
-    df = pd.read_csv(data_path)
-
-    data = np.array(df)
-    #
-    labels = data[:, -1].astype(int)
-    data = data[:, 1:-1].astype(float)
-
-    items = [10000000, 10000, 5000, 2000, 1000]
-    indices = []
-    for i, item in enumerate(items):
-        indices.append(np.where(labels < item)[0])
-
-    for i, item in enumerate(indices):
-        labels[item] = i
-
-    # for i, item in enumerate(data):
-    #     for j in [0, 2, 4]:
-    #         data[i, j] = ord(data[i, j]) - ord('a')
-
-    # data = data[:, :-1]
-    # labels = data[:, -1]
-    # cls_names = np.unique(labels)
-    # int_labels = []
-    # for item in labels:
-    #     int_labels.append(list(cls_names).index(item))
-    #
-    with h5py.File(os.path.join(save_dir, "news_popularity.h5"), "w") as hf:
-        hf['x'] = data.astype(float)
-        hf['y'] = np.array(labels, dtype=int)
+    with h5py.File(os.path.join(save_dir, "arem.h5"), "w") as hf:
+        hf['x'] = total_data.astype(float)
+        hf['y'] = total_labels.astype(int)

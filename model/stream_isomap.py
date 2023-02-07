@@ -131,14 +131,14 @@ def _extract_labels(cluster_indices, local_embeddings_list):
 
 
 class SIsomapPlus(kNNBasedIncrementalMethods):
-    def __init__(self, train_num, n_components, n_neighbors, epsilon=0.25, window_size=1000):
+    def __init__(self, train_num, n_components, n_neighbors, epsilon=0.25, window_size=2000):
         kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, True, window_size)
         self.epsilon = epsilon
         self.pre_cluster_num = 0
-        self.isomap_list = []   # 1
+        self.isomap_list = []
         self.transformation_info_list = []
-        self.cluster_indices = None     # 1
-        self.global_embedding_mean = None # 1
+        self.cluster_indices = None
+        self.global_embedding_mean = None
         self._data_cluster = None # 1
 
     def _slide_window(self):

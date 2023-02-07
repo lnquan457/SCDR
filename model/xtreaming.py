@@ -37,7 +37,7 @@ def procrustes_analysis(pre_data, cur_data, all_data, align=True, scale=True, tr
 
 
 class XtreamingModel:
-    def __init__(self, buffer_size=100, eta=0.99, window_size=1000):
+    def __init__(self, buffer_size=100, eta=0.99, window_size=2000):
         self.buffer_size = buffer_size
         self._eta = eta
         self.pro_model = UPDis4Streaming(eta)
@@ -69,17 +69,18 @@ class XtreamingModel:
     def fit_new_data(self, data, labels=None):
         sta = time.time()
         if not self._buffering(data):
-            return None, 0
+            return self.pre_embedding, 0, False
 
         self.total_data = self.buffered_data if self.total_data is None else np.concatenate([self.total_data,
                                                                                              self.buffered_data], axis=0)
+        add_data_time = time.time() - sta
         self._total_n_samples += self.buffered_data.shape[0]
-        self._slide_window()
 
         ret = self.fit()
+        self._slide_window()
         self.time_costs += time.time() - sta
         self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
-        return ret, 0
+        return ret, add_data_time, True
 
     def _slide_window(self):
         out_num = self._total_n_samples - self._window_size
@@ -132,11 +133,11 @@ class XtreamingModel:
                 self.pre_control_points = total_cntp_points
                 self.pre_cntp_embeddings = aligned_total_embeddings[self.pre_control_indices]
                 self.pre_embedding = aligned_total_embeddings
-                print(self.pre_control_indices)
+                # print(self.pre_control_indices)
                 self.model_slide(self._total_out_num)
                 self._total_out_num = 0
 
-            self.buffered_data = None
+        self.buffered_data = None
 
         return self.pre_embedding
 

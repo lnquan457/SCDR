@@ -16,88 +16,36 @@ device = "cuda:0"
 log_path = "logs/logs.txt"
 
 
-def stream_rate_ex():
-    buffer_size = 100
-    # rate_list = [2, int(buffer_size * 0.5), buffer_size, buffer_size * 2]
-    rate_list = [2]
-    # rate_list = [100]
-    # rate_list = [buffer_size * 2]
-    # rate_list = [int(buffer_size * 0.5)]
-
-    global result_save_dir, cfg
-
-    for i, item in enumerate(rate_list):
-        for j, m in enumerate(STREAM_METHOD_LIST):
-            print("正在处理 r = {} m = {}".format(item, m))
-            cfg = get_config()
-            cfg.merge_from_file(ConfigInfo.MODEL_CONFIG_PATH.format(m))
-            cfg.exp_params.stream_rate = item
-            if item != 2:
-                cfg.exp_params.vis_iter = 1
-            args.method = m
-            if m == SCDR:
-                m = m + "_r1.0"
-            result_save_dir = "results/初步实验/stream_rate/single cluster/r{}/{}".format(item, m)
-            # result_save_dir = "results/初步实验/stream_rate/multi cluster/r{}/{}".format(item, m)
-
-            custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster\{}.npy".format(cfg.exp_params.stream_dataset)
-            # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster\{}_3_3_3_2.npy".format(
-            #     cfg.exp_params.dataset)
-            custom_indices_training(custom_indices_path)
-
-
-def cluster_composite_ex():
-    global cfg, result_save_dir
-    stream_rate = 2
-    for i, m in enumerate(STREAM_METHOD_LIST):
-        cfg = get_config()
-        cfg.merge_from_file(ConfigInfo.MODEL_CONFIG_PATH.format(m))
-        cfg.exp_params.stream_rate = stream_rate
-        args.method = m
-        if m == SCDR:
-            m = m + "_r1.0"
-        result_save_dir = "results/初步实验/cluster composite/single cluster/recurring/{}".format(m)
-        # result_save_dir = "results/初步实验/cluster composite/multi cluster/recurring/{}".format(m)
-        # result_save_dir = "results/初步实验/cluster composite/identical distribution/{}".format(m)
-        custom_indices_path = r"H:\Projects\流数据\Data\indices\single_cluster_recur\{}_recur2.npy".format(
-            cfg.exp_params.stream_dataset)
-        # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_3_3_3_2_recur2.npy".format(
-        #     cfg.exp_params.dataset)
-        # custom_indices_path = r"H:\Projects\流数据\Data\indices\multi_cluster_recur\{}_11_recur5.npy".format(
-        #     cfg.exp_params.dataset)
-        custom_indices_training(custom_indices_path)
-
-
-def start(ex):
-    if args.method == ATSNE:
+def start(ex, recv_args):
+    if recv_args.method == ATSNE:
         # ==============1. at-SNE model=====================
         ex.start_atSNE()
-    elif args.method == ILLE:
+    elif recv_args.method == ILLE:
         ex.start_ille()
-    elif args.method == SIPCA:
+    elif recv_args.method == SIPCA:
         # ==============2. siPCA model=====================
-        if args.parallel:
+        if recv_args.parallel:
             ex.start_parallel_spca()
         else:
             ex.start_siPCA()
-    elif args.method == XTREAMING:
+    elif recv_args.method == XTREAMING:
         # ==============3. Xtreaming model=====================
-        if args.parallel:
+        if recv_args.parallel:
             ex.start_parallel_xtreaming()
         else:
             ex.start_xtreaming()
-    elif args.method == INE:
+    elif recv_args.method == INE:
         # ==============4. INE model=====================
-        if args.parallel:
+        if recv_args.parallel:
             ex.start_parallel_ine()
         else:
             ex.start_ine()
-    elif args.method == SISOMAPPP:
-        if args.parallel:
+    elif recv_args.method == SISOMAPPP:
+        if recv_args.parallel:
             ex.start_parallel_sisomap()
         else:
             ex.start_sisomap()
-    elif args.method == SCDR:
+    elif recv_args.method == SCDR:
         assert isinstance(ex, StreamingExProcess)
         cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
         model_update_queue_set = ModelUpdateQueueSet()
@@ -124,7 +72,7 @@ def random_training():
     start(ex)
 
 
-def custom_indices_training(custom_indices_path):
+def custom_indices_training(custom_indices_path, recv_args):
     # custom_indices_path = os.path.join(ConfigInfo.CUSTOM_INDICES_DIR, "{}.npy".format(args.dataset))
     custom_indices = np.load(custom_indices_path, allow_pickle=True)
 
@@ -136,16 +84,16 @@ def custom_indices_training(custom_indices_path):
 
     data_generator.start()
 
-    start(ex)
+    start(ex, recv_args)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=SISOMAPPP,
-                        choices=[ILLE, SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
-    parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
-    parser.add_argument("--parallel", type=bool, default=True)
+    parser.add_argument("--method", type=str, default=SCDR,
+                        choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
+    parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
+    parser.add_argument("--parallel", type=bool, default=False)
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 
@@ -157,8 +105,8 @@ if __name__ == '__main__':
     cfg.merge_from_file(cfg_path)
     result_save_dir = "results/{}/".format(args.method)
 
-    custom_indices_path = os.path.join(args.indices_dir, "{}_TV.npy".format(cfg.exp_params.dataset))
-    custom_indices_training(custom_indices_path)
+    custom_indices_path = os.path.join(args.indices_dir, "{}_FD.npy".format(cfg.exp_params.dataset))
+    custom_indices_training(custom_indices_path, args)
 
     # suffix_list = ["TI", "FV", "TV"]
     # suffix_list = ["TI", "TV"]

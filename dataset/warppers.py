@@ -122,7 +122,7 @@ class DataRepo:
 
 class DataSetWrapper(DataRepo):
 
-    def __init__(self, similar_num, batch_size, n_neighbor):
+    def __init__(self, similar_num, batch_size, n_neighbor, window_size):
         DataRepo.__init__(self, n_neighbor)
         self.similar_num = similar_num
         self.batch_size = batch_size
@@ -130,6 +130,7 @@ class DataSetWrapper(DataRepo):
         self.test_batch_num = 0
         self.train_dataset = None
         self.n_neighbor = n_neighbor
+        self._window_size = window_size
         self.symmetric_nn_indices = None
         self.symmetric_nn_weights = None
         self.raw_knn_weights = None
@@ -246,8 +247,8 @@ def eval_knn_acc(acc_knn_indices, pre_knn_indices):
 
 
 class StreamingDatasetWrapper(DataSetWrapper):
-    def __init__(self, batch_size, n_neighbor, device=None):
-        DataSetWrapper.__init__(self, 1, batch_size, n_neighbor)
+    def __init__(self, batch_size, n_neighbor, window_size, device=None):
+        DataSetWrapper.__init__(self, 1, batch_size, n_neighbor, window_size)
         # 没有重新计算邻居点相似点的数据下标
         self._cached_neighbor_change_indices = []
         self.cur_neighbor_changed_indices = None

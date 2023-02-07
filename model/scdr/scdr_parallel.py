@@ -12,7 +12,7 @@ from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueue
 
 
 class SCDRParallel:
-    def __init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, ckpt_path=None,
+    def __init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, window_size, ckpt_path=None,
                  device="cuda:0"):
         self.model_update_queue_set = model_update_queue_set
         self.device = device
@@ -22,7 +22,7 @@ class SCDRParallel:
         self.initial_train_num = initial_train_num
 
         # 进行初次训练后，初始化以下对象
-        self.stream_dataset = StreamingDatasetWrapper(batch_size, n_neighbors, self.device)
+        self.stream_dataset = StreamingDatasetWrapper(batch_size, n_neighbors, window_size, self.device)
 
         self.initial_data_buffer = None
         self.initial_label_buffer = None
@@ -35,9 +35,10 @@ class SCDRParallel:
     # scdr本身属于嵌入进程，负责数据的处理和嵌入
     def fit_new_data(self, data, labels=None, end=False):
         # w_sta = time.time()
+        other_time = 0
         if not self.model_trained:
             if not self._caching_initial_data(data, labels):
-                return None
+                return None, 0, False
 
             self.stream_dataset.add_new_data(data=self.initial_data_buffer, labels=self.initial_label_buffer)
             total_embeddings = self._initial_project_model()
@@ -45,7 +46,7 @@ class SCDRParallel:
             self.data_processor.nn_embedder = self.nn_embedder
         else:
             if data is None:
-                return None
+                return None, 0, False
             self._listen_model_update()
 
             sta = time.time()
@@ -54,7 +55,7 @@ class SCDRParallel:
             total_embeddings, other_time = self.data_processor.process(data, data_embeddings, labels)
             self._time_cost_records.append(time.time() - sta - other_time + self._time_cost_records[-1])
 
-        return total_embeddings
+        return total_embeddings, other_time, True
 
     def _listen_model_update(self):
         if not self.model_update_queue_set.embedding_queue.empty():
@@ -106,18 +107,18 @@ class SCDRParallel:
 
 class SCDRFullParallel(SCDRParallel):
     def __init__(self, embedding_data_queue, n_neighbors, batch_size, model_update_queue_set, initial_train_num,
-                 ckpt_path=None, device="cuda:0"):
-        SCDRParallel.__init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, ckpt_path
-                              , device)
+                 ckpt_path=None, device="cuda:0", window_size=2000):
+        SCDRParallel.__init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, window_size,
+                              ckpt_path, device)
         self.data_processor = DataProcessorProcess(embedding_data_queue, n_neighbors, batch_size, model_update_queue_set
-                                                   , device)
+                                                   , window_size, device)
         self._embedding_data_queue: DataProcessorQueue = embedding_data_queue
 
     def fit_new_data(self, data, labels=None, end=False):
         if not self.model_trained:
 
             if not self._caching_initial_data(data, labels):
-                return None
+                return None, 0, False
 
             self.stream_dataset.add_new_data(data=self.initial_data_buffer, labels=self.initial_label_buffer)
             total_embeddings = self._initial_project_model()
@@ -130,7 +131,7 @@ class SCDRFullParallel(SCDRParallel):
         else:
             if data is None:
                 self._embedding_data_queue.put([data, None, labels, end])
-                return
+                return None, 0, False
 
             data_embeddings = self.nn_embedder.embed(data)
 
@@ -143,7 +144,7 @@ class SCDRFullParallel(SCDRParallel):
             self._embedding_data_queue.put([data, data_embeddings, labels, end])
             self._time_cost_records.append(time.time() - sta + cost_time + self._time_cost_records[-1])
 
-        return total_embeddings, add_data_time
+        return total_embeddings, add_data_time, True
 
 
 def query_knn(query_data, data_set, k, return_indices=False):

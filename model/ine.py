@@ -23,9 +23,10 @@ def _select_min_loss_one(candidate_embeddings, neighbors_embeddings, high_probab
     dists = cdist(candidate_embeddings, neighbors_embeddings)
     tmp_prob = 1 / (1 + dists ** 2) ** (0.5 + k/10)
     q = tmp_prob / np.expand_dims(np.sum(tmp_prob, axis=1), axis=1)
-    high_prob_matrix = np.repeat(np.expand_dims(high_probabilities, axis=0), candidate_embeddings.shape[0], axis=0)
+    high_prob_matrix = np.repeat(high_probabilities, candidate_embeddings.shape[0], axis=0)
     # [G*G]
-    loss_list = -np.sum(np.multiply(np.log(q), high_prob_matrix), axis=1)
+    loss_list = -np.sum(high_prob_matrix * np.log(q), axis=1)
+    # print("prev min loss:", np.min(loss_list))
     return candidate_embeddings[np.argmin(loss_list)]
 
 
@@ -40,9 +41,15 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
         self.grid_num = grid_num
         self.condition_P = None
         self._learning_rate = 200.0
-        self._update_thresh = 10
-        self._k = 0
+        self._update_thresh = 5
+        self._k = 5
         self._window_size = window_size
+
+    def _slide_window(self):
+        out_num = super()._slide_window()
+        if out_num <= 0:
+            return
+        self.condition_P = self.condition_P[out_num:, :]
 
     def _first_train(self, train_data):
         self.pre_embeddings = self.fit_transform(train_data)
@@ -54,13 +61,13 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
         # 一次只处理一个数据
 
         new_data = np.reshape(new_data, (1, -1))
-        pre_data_num = self.pre_embeddings.shape[0]
 
         knn_indices, knn_dists, dists = self._cal_new_data_kNN(new_data, include_self=False)
+        knn_indices = knn_indices.squeeze()
 
         new_data_prob = self._cal_new_data_probability(knn_dists.astype(np.float32, copy=False))
 
-        initial_embedding = self._initialize_new_data_embedding(pre_data_num, knn_indices)
+        initial_embedding = self._initialize_new_data_embedding(new_data_prob, knn_indices)
         # print("initial", initial_embedding)
         self.pre_embeddings = self._optimize_new_data_embedding(knn_indices, initial_embedding, new_data_prob)
         # print("after", self.pre_embeddings[-1])
@@ -72,10 +79,10 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
         self.condition_P = np.concatenate([self.condition_P, conditional_P], axis=0)
         return conditional_P
 
-    def _initialize_new_data_embedding(self, pre_data_num, new_knn_indices):
+    def _initialize_new_data_embedding(self, high_prob, new_knn_indices):
         candidate_embeddings = self._generate_candidate_embeddings()
-        initial_embeddings = _select_min_loss_one(candidate_embeddings, self.pre_embeddings[new_knn_indices.squeeze()],
-                                                  self.condition_P[pre_data_num], self._k)
+        initial_embeddings = _select_min_loss_one(candidate_embeddings, self.pre_embeddings[new_knn_indices],
+                                                  high_prob, self._k)
 
         return initial_embeddings
 
@@ -86,7 +93,7 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
             return -np.sum(high_prob * np.log(normed_similarities))
 
         res = scipy.optimize.minimize(loss_func, initial_embedding, method="BFGS", jac=tsne_grad,
-                                      args=(new_data_prob, self.pre_embeddings[new_data_knn_indices.squeeze()], self._k),
+                                      args=(new_data_prob, self.pre_embeddings[new_data_knn_indices], self._k),
                                       options={'gtol': 1e-6, 'disp': False})
         # print("opt x:", res.x)
         if np.abs(res.x[0] - initial_embedding[0]) > self._update_thresh \

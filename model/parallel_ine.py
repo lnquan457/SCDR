@@ -11,7 +11,7 @@ import numpy as np
 class ParallelINE(INEModel):
     def __init__(self, pattern_data_queue, model_update_queue, model_return_queue, replace_model_queue, update_finish_queue,
                  train_num, n_components, n_neighbors, iter_num=100, grid_num=27, desired_perplexity=3, init="random",
-                 window_size=2000):
+                 window_size=4000):
         INEModel.__init__(self, train_num, n_components, n_neighbors, iter_num, grid_num, desired_perplexity, init,
                           window_size)
         self._pattern_data_queue = pattern_data_queue
@@ -51,7 +51,8 @@ class ParallelINE(INEModel):
                 if not self._get_new_model:
                     self._get_new_model_info()
 
-                min_valid_idx = max(0, self._total_data_idx - self._window_size)
+                # TODO: 还存在数据不一致的问题
+                min_valid_idx = max(0, self._total_data_idx - self._window_size - new_data.shape[0])
                 valid_num = self._newest_model_data_idx - min_valid_idx
                 if valid_num <= 0:
                     print("model update is too slow, newest model is out of data!")
