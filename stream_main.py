@@ -19,32 +19,32 @@ log_path = "logs/logs.txt"
 def start(ex, recv_args):
     if recv_args.method == ATSNE:
         # ==============1. at-SNE model=====================
-        ex.start_atSNE()
+        return ex.start_atSNE()
     elif recv_args.method == ILLE:
-        ex.start_ille()
+        return ex.start_ille()
     elif recv_args.method == SIPCA:
         # ==============2. siPCA model=====================
         if recv_args.parallel:
-            ex.start_parallel_spca()
+            return ex.start_parallel_spca()
         else:
-            ex.start_siPCA()
+            return ex.start_siPCA()
     elif recv_args.method == XTREAMING:
         # ==============3. Xtreaming model=====================
         if recv_args.parallel:
-            ex.start_parallel_xtreaming()
+            return ex.start_parallel_xtreaming()
         else:
-            ex.start_xtreaming()
+            return ex.start_xtreaming()
     elif recv_args.method == INE:
         # ==============4. INE model=====================
         if recv_args.parallel:
-            ex.start_parallel_ine()
+            return ex.start_parallel_ine()
         else:
-            ex.start_ine()
+            return ex.start_ine()
     elif recv_args.method == SISOMAPPP:
         if recv_args.parallel:
-            ex.start_parallel_sisomap()
+            return ex.start_parallel_sisomap()
         else:
-            ex.start_sisomap()
+            return ex.start_sisomap()
     elif recv_args.method == SCDR:
         assert isinstance(ex, StreamingExProcess)
         cdr_model = MODELS["LwF_CDR"](cfg, device=device)
@@ -52,8 +52,8 @@ def start(ex, recv_args):
 
         model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, cfg.exp_params.dataset,
                                            cfg_path, cfg, result_save_dir, device=device, log_path=log_path)
-        # ex.start_parallel_scdr(model_update_queue_set, model_trainer)
-        ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
+        # return ex.start_parallel_scdr(model_update_queue_set, model_trainer)
+        return ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 
@@ -72,19 +72,19 @@ def random_training():
     start(ex)
 
 
-def custom_indices_training(custom_indices_path, recv_args):
+def custom_indices_training(configs, custom_indices_path, recv_args, res_save_dir):
     # custom_indices_path = os.path.join(ConfigInfo.CUSTOM_INDICES_DIR, "{}.npy".format(args.dataset))
     custom_indices = np.load(custom_indices_path, allow_pickle=True)
 
     stream_data_queue_set = Queue()
     start_data_queue = Queue()
-    data_generator = SimulatedStreamingData(cfg.exp_params.dataset, cfg.exp_params.stream_rate,
+    data_generator = SimulatedStreamingData(configs.exp_params.dataset, configs.exp_params.stream_rate,
                                             stream_data_queue_set, start_data_queue, custom_indices)
-    ex = StreamingExProcess(cfg, custom_indices, result_save_dir, stream_data_queue_set, start_data_queue, data_generator)
+    ex = StreamingExProcess(configs, custom_indices, res_save_dir, stream_data_queue_set, start_data_queue, data_generator)
 
     data_generator.start()
 
-    start(ex, recv_args)
+    return start(ex, recv_args)
 
 
 def parse_args():
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     result_save_dir = "results/{}/".format(args.method)
 
     custom_indices_path = os.path.join(args.indices_dir, "{}_FD.npy".format(cfg.exp_params.dataset))
-    custom_indices_training(custom_indices_path, args)
+    custom_indices_training(custom_indices_path, args, result_save_dir)
 
     # suffix_list = ["TI", "FV", "TV"]
     # suffix_list = ["TI", "TV"]

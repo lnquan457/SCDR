@@ -1,6 +1,7 @@
 import os
 import queue
 import time
+from copy import copy
 from multiprocessing import Process, Queue
 
 import matplotlib.pyplot as plt
@@ -138,47 +139,47 @@ class StreamingEx:
 
     def start_siPCA(self):
         self.model = StreamingIPCA(self.n_components, self.cfg.method_params.forgetting_factor)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_xtreaming(self):
         self.model = XtreamingModel(self.cfg.method_params.buffer_size, self.cfg.method_params.eta,
                                     window_size=self.cfg.exp_params.window_size)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_ine(self):
         self.model = INEModel(self.cfg.exp_params.initial_data_num, self.n_components,
                               self.cfg.method_params.n_neighbors, window_size=self.cfg.exp_params.window_size)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_sisomap(self):
         self.model = SIsomapPlus(self.cfg.exp_params.initial_data_num, self.n_components,
                                  self.cfg.method_params.n_neighbors, window_size=self.cfg.exp_params.window_size)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_parallel_spca(self):
         self.model = ParallelsPCA(queue.Queue(), queue.Queue(), queue.Queue(), queue.Queue(), self.n_components,
                                   self.cfg.method_params.forgetting_factor)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_parallel_xtreaming(self):
         self.model = ParallelXtreaming(Queue(), Queue(), Queue(), Queue(), self.cfg.method_params.buffer_size,
                                        self.cfg.method_params.eta)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_parallel_ine(self):
         self.model = ParallelINE(Queue(), Queue(), Queue(), Queue(), Queue(), self.cfg.exp_params.initial_data_num,
                                  self.n_components, self.cfg.method_params.n_neighbors)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_parallel_sisomap(self):
         self.model = ParallelSIsomapP(Queue(), Queue(), Queue(), Queue(), Queue(), self.cfg.exp_params.initial_data_num,
                                       self.n_components, self.cfg.method_params.n_neighbors)
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def stream_fitting(self):
         self._train_begin()
         self.processing()
-        self.train_end()
+        return self.train_end()
 
     def _cache_initial(self, stream_data, stream_labels):
         self.history_data = stream_data if self.history_data is None else np.concatenate(
@@ -306,6 +307,10 @@ class StreamingEx:
 
     def train_end(self):
 
+        diff = len(self._data_arrival_time) - len(self._data_present_time)
+        if diff > 0:
+            self._data_present_time.extend([time.time()] * diff)
+
         if isinstance(self.model, XtreamingModel) and not self.model.buffer_empty():
             self.cur_embedding = self.model.fit()
             self.save_embeddings_info(self.cur_embedding, train_end=True)
@@ -316,8 +321,9 @@ class StreamingEx:
         ret, time_cost_records = self.model.ending()
 
         x_indices = np.arange(len(self.process_time_records))
+        single_process_avg_time = np.mean(self.process_time_records)
         plt.figure()
-        plt.title("Time Costs Per Data - %.3f" % np.mean(self.process_time_records))
+        plt.title("Time Costs Per Data - %.3f" % single_process_avg_time)
         plt.plot(x_indices, self.process_time_records)
         plt.savefig(os.path.join(self.result_save_dir, "time costs per data.jpg"), dpi=400, bbox_inches="tight")
         plt.show()
@@ -352,10 +358,12 @@ class StreamingEx:
 
         # self.evaluate(self.pre_embedding, self.cur_embedding, self.history_label[:self.pre_embedding.shape[0]], True)
 
-        self._metric_conclusion()
+        metrics_avg_res_list = self._metric_conclusion()
 
         if self._make_animation:
             self._make_embedding_video(self.result_save_dir)
+
+        return metrics_avg_res_list, single_process_avg_time, self._key_time, avg_data_delay_time
 
     def _metric_conclusion(self):
 
@@ -372,19 +380,23 @@ class StreamingEx:
         save_dir = os.path.join(self.img_dir, "metrics")
         check_path_exist(save_dir)
         x = np.arange(len(self._faith_metric_records[0]))
+        avg_metric_res = []
         for i, item in enumerate(METRIC_NAMES):
             avg_res = float(np.mean(self._faith_metric_records[i]))
+            avg_metric_res.append(avg_res)
             faith_metric_output += " Avg %s: %.3f" % (item, avg_res)
             _draw(self._faith_metric_records[i], "%s - %.3f" % (item, avg_res))
         InfoLogger.info(faith_metric_output)
 
         steady_metric_output = ""
         for i, item in enumerate(STEADY_METRIC_NAMES):
-            steady_metric_output += " Avg %s: %.4f" % (item, float(np.mean(self._steady_metric_records[i])))
+            avg_res = float(np.mean(self._steady_metric_records[i]))
+            avg_metric_res.append(avg_res)
+            steady_metric_output += " Avg %s: %.4f" % (item, avg_res)
             _draw(self._steady_metric_records[i], item)
         InfoLogger.info(steady_metric_output)
 
-        metric_names = METRIC_NAMES
+        metric_names = copy(METRIC_NAMES)
         metric_names.extend(STEADY_METRIC_NAMES)
         metric_names = np.array(metric_names)[:, np.newaxis]
         total_metric_res = np.concatenate([np.array(self._faith_metric_records), np.array(self._steady_metric_records)],
@@ -395,6 +407,8 @@ class StreamingEx:
         if self.log is not None:
             self.log.write(faith_metric_output + "\n")
             self.log.write(steady_metric_output + "\n")
+
+        return avg_metric_res
 
     def _make_embedding_video(self, save_dir):
         # self._embeddings_histories = np.array(self._embeddings_histories)
@@ -461,7 +475,7 @@ class StreamingExProcess(StreamingEx, Process):
                                   window_size=self.cfg.exp_params.window_size, device=model_trainer.device)
         model_trainer.daemon = True
         model_trainer.start()
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def start_full_parallel_scdr(self, model_update_queue_set, model_trainer):
         self.cdr_update_queue_set = model_update_queue_set
@@ -472,7 +486,7 @@ class StreamingExProcess(StreamingEx, Process):
                                       device=model_trainer.device, window_size=self.cfg.exp_params.window_size)
         model_trainer.daemon = True
         model_trainer.start()
-        self.stream_fitting()
+        return self.stream_fitting()
 
     def processing(self):
         self.run()
@@ -527,12 +541,8 @@ class StreamingExProcess(StreamingEx, Process):
     def train_end(self):
         self.stream_data_queue_set.close()
 
-        diff = len(self._data_arrival_time) - len(self._data_present_time)
-        if diff > 0:
-            self._data_present_time.extend([time.time()] * diff)
-
         # 结束模型更新进程
         if self.cdr_update_queue_set is not None:
             self.cdr_update_queue_set.flag_queue.put(ModelUpdateQueueSet.STOP)
 
-        super().train_end()
+        return super().train_end()
