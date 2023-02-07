@@ -103,8 +103,8 @@ class Experiment:
         self.batch_size = configs.method_params.batch_size
         self.lr = configs.method_params.LR
         self.ckp_save_dir = None
-        self.test_inter = int(configs.debug_params.eval_inter * self.epoch_num)
-        self.print_iter = int(configs.debug_params.epoch_print_inter * self.epoch_num)
+        self.test_inter = int(configs.exp_params.eval_iter * self.epoch_num)
+        self.print_iter = 10
         self.launch_date_time = None
         self.optimizer = None
         self.scheduler = None
@@ -167,16 +167,6 @@ class Experiment:
         if not self.multi or self.device_id == 0:
             InfoLogger.info("Start Training for {} Epochs".format(self.epoch_num))
 
-            param_template = "Experiment Configurations: \nMethods: %s Dataset: %s Epochs: %d Batch Size: %d \n" \
-                             "Learning rate: %4f Optimizer: %s\n"
-
-            param_str = param_template % (
-                self.configs.method_params.method, self.dataset_name, self.epoch_num, self.batch_size,
-                self.lr, self.configs.method_params.optimizer)
-
-            InfoLogger.info(param_str)
-            self.message_queue.put(param_str)
-
         self.initial_result_save_dir(launch_time_stamp)
         self.log_path = os.path.join(self.result_save_dir, "logs.txt")
         self.ckp_save_dir = self.result_save_dir
@@ -186,8 +176,8 @@ class Experiment:
             self.init_scheduler(cur_epochs=self.epoch_num)
 
         batch_print_inter = 0
-        vis_inter = math.ceil(self.epoch_num * self.configs.debug_params.vis_inter)
-        ckp_save_inter = math.ceil(self.epoch_num * self.configs.debug_params.model_save_inter)
+        vis_inter = math.ceil(self.epoch_num * self.configs.exp_params.vis_iter)
+        ckp_save_inter = math.ceil(self.epoch_num * self.configs.exp_params.save_iter)
 
         # self.symmetry_knn_indices = self.train_loader.dataset.symmetry_knn_indices
 
@@ -212,6 +202,7 @@ class Experiment:
             self.result_save_dir_modified = True
 
     def init_optimizer(self):
+        self.configs.method_params.optimizer = "adam"
         if self.configs.method_params.optimizer == "adam":
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=0.0001)
         elif self.configs.method_params.optimizer == "sgd":
@@ -219,6 +210,7 @@ class Experiment:
                                              weight_decay=0.0001)
 
     def init_scheduler(self, cur_epochs, base=0, gamma=0.1, milestones=None):
+        self.configs.method_params.scheduler = "multi_step"
         if milestones is None:
             milestones = [0.8, 0.9]
         if self.configs.method_params.scheduler == "multi_step":
@@ -369,8 +361,8 @@ class Experiment:
             prefix_name = epoch
         if not os.path.exists(self.ckp_save_dir):
             os.mkdir(self.ckp_save_dir)
-        weight_save_path = os.path.join(self.ckp_save_dir, "{}_{}.pth.tar".
-                                        format(self.configs.method_params.method, prefix_name))
+        weight_save_path = os.path.join(self.ckp_save_dir, "{}.pth.tar".
+                                        format(prefix_name))
         torch.save({'epoch': epoch, 'state_dict': self.model.state_dict(),
                     'optimizer': self.optimizer.state_dict(),
                     'lr': self.lr, 'launch_time': self.launch_date_time}, weight_save_path)

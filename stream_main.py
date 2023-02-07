@@ -47,7 +47,7 @@ def start(ex, recv_args):
             ex.start_sisomap()
     elif recv_args.method == SCDR:
         assert isinstance(ex, StreamingExProcess)
-        cdr_model = MODELS[cfg.method_params.method](cfg, device=device)
+        cdr_model = MODELS["LwF_CDR"](cfg, device=device)
         model_update_queue_set = ModelUpdateQueueSet()
 
         model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, cfg.exp_params.dataset,

@@ -22,7 +22,7 @@ class CDRsExperiments(Experiment):
         self.model.to(self.device)
         self.steps = 0
         self.init_epoch = self.resume_epochs if self.resume_epochs > 0 else self.epoch_num
-        self.mixture_optimize = configs.method_params.method == "CDR"
+        self.mixture_optimize = True
         self.warmup_epochs = 0
         self.separation_epochs = 0
         self.accelerate = False

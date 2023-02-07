@@ -141,17 +141,18 @@ class StreamingEx:
         self.stream_fitting()
 
     def start_xtreaming(self):
-        self.model = XtreamingModel(self.cfg.method_params.buffer_size, self.cfg.method_params.eta)
+        self.model = XtreamingModel(self.cfg.method_params.buffer_size, self.cfg.method_params.eta,
+                                    window_size=self.cfg.exp_params.window_size)
         self.stream_fitting()
 
     def start_ine(self):
         self.model = INEModel(self.cfg.exp_params.initial_data_num, self.n_components,
-                              self.cfg.method_params.n_neighbors)
+                              self.cfg.method_params.n_neighbors, window_size=self.cfg.exp_params.window_size)
         self.stream_fitting()
 
     def start_sisomap(self):
         self.model = SIsomapPlus(self.cfg.exp_params.initial_data_num, self.n_components,
-                                 self.cfg.method_params.n_neighbors)
+                                 self.cfg.method_params.n_neighbors, window_size=self.cfg.exp_params.window_size)
         self.stream_fitting()
 
     def start_parallel_spca(self):
@@ -457,7 +458,7 @@ class StreamingExProcess(StreamingEx, Process):
         self.cdr_update_queue_set = model_update_queue_set
         self.model = SCDRParallel(self.cfg.method_params.n_neighbors, self.cfg.method_params.batch_size,
                                   model_update_queue_set, self.cfg.exp_params.initial_data_num,
-                                  ckpt_path=self.cfg.method_params.ckpt_path, device=model_trainer.device)
+                                  window_size=self.cfg.exp_params.window_size, device=model_trainer.device)
         model_trainer.daemon = True
         model_trainer.start()
         self.stream_fitting()
@@ -468,7 +469,7 @@ class StreamingExProcess(StreamingEx, Process):
         self.model = SCDRFullParallel(self.embedding_data_queue, self.cfg.method_params.n_neighbors,
                                       self.cfg.method_params.batch_size, model_update_queue_set,
                                       self.cfg.exp_params.initial_data_num,
-                                      ckpt_path=self.cfg.method_params.ckpt_path, device=model_trainer.device)
+                                      device=model_trainer.device, window_size=self.cfg.exp_params.window_size)
         model_trainer.daemon = True
         model_trainer.start()
         self.stream_fitting()

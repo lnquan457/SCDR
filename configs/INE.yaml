@@ -4,8 +4,8 @@ exp_params:
   input_dims: 512   # x for vectors or (h, w, c) for images
   latent_dim: 2
   stream_rate: 1
-  indices_file_path: -1
   initial_data_num: 300
+  window_size: 2000
   vis_iter: 100
   save_iter: 100000
   eval_iter: 200
@@ -13,9 +13,3 @@ exp_params:
 
 method_params:
   n_neighbors: 10
-
-debug_params:
-  epoch_print_inter: 0.1
-  vis_inter: 0.5
-  model_save_inter: 1.0
-  eval_inter: 1.0 # 0 indicates that no test during training process
