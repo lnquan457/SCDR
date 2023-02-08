@@ -16,9 +16,9 @@ from utils.nn_utils import compute_knn_graph
 
 
 class SIsomap(kNNBasedIncrementalMethods, Isomap):
-    def __init__(self, train_num, n_components, n_neighbors):
+    def __init__(self, train_num, n_components, n_neighbors, self_slide=False):
         Isomap.__init__(self, n_neighbors=n_neighbors, n_components=n_components)
-        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, single=True)
+        kNNBasedIncrementalMethods.__init__(self, train_num, n_components, n_neighbors, single=True, self_slide=self_slide)
         self.G = None
         self.newest_embeddings = None
 
@@ -165,7 +165,13 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             if c_id < 0 or c_id >= len(self.cluster_indices):
                 continue
             pre_num = len(self.cluster_indices[c_id])
-            self.cluster_indices[c_id] = np.setdiff1d(self.cluster_indices[c_id], i)
+            if len(self.cluster_indices) == 1:
+                tmp = self.cluster_indices[c_id]
+                self.cluster_indices = None
+                self.cluster_indices = np.setdiff1d(tmp, i)[np.newaxis, :]
+            else:
+                self.cluster_indices[c_id] = np.setdiff1d(self.cluster_indices[c_id], i)
+
             self.global_embedding_mean[c_id] = (self.global_embedding_mean[c_id] * pre_num - self.pre_embeddings[i]) / (
                         pre_num - 1)
             exist_flag = self.isomap_list[c_id].slide_window(1)
@@ -209,6 +215,8 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
             self.pre_embeddings = transformed_embeddings
         else:
             self.pre_embeddings = seq_local_embeddings
+            self.global_embedding_mean = np.mean(seq_local_embeddings, axis=0)[np.newaxis, :]
+            self.transformation_info_list.append([1, 1])
 
         return self.pre_embeddings
 
@@ -288,6 +296,7 @@ class SIsomapPlus(kNNBasedIncrementalMethods):
         for i, item in enumerate(unsigned_indices):
             labels[item] = closest_indices[i] + 1
             cluster_indices[int(closest_indices[i])] = np.append(cluster_indices[int(closest_indices[i])], np.array(item, dtype=int))
+            cluster_indices[int(closest_indices[i])] = cluster_indices[int(closest_indices[i])].astype(int)
             # cluster_indices[int(closest_indices[i])].append(np.array(item, dtype=int))
 
         # print("cluster number:", idx)

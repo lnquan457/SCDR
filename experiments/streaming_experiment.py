@@ -353,8 +353,8 @@ class StreamingEx:
         InfoLogger.info(output)
         self.log.write(output + "\n")
 
-        if self.do_eval:
-            self.build_metric_tool()
+        # if self.do_eval:
+        #     self.build_metric_tool()
 
         # self.evaluate(self.pre_embedding, self.cur_embedding, self.history_label[:self.pre_embedding.shape[0]], True)
 

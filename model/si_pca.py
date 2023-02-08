@@ -44,6 +44,7 @@ class StreamingIPCA:
         else:
             self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings, cur_embeddings)
         self._buffered_data = None
+        self.pre_embeddings = self.pre_embeddings[-self._window_size:]
         # self.time_cost += time.time() - sta
         # self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
         return self.pre_embeddings, add_data_time, True

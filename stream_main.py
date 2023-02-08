@@ -106,7 +106,7 @@ if __name__ == '__main__':
     result_save_dir = "results/{}/".format(args.method)
 
     custom_indices_path = os.path.join(args.indices_dir, "{}_FD.npy".format(cfg.exp_params.dataset))
-    custom_indices_training(custom_indices_path, args, result_save_dir)
+    custom_indices_training(cfg, custom_indices_path, args, result_save_dir)
 
     # suffix_list = ["TI", "FV", "TV"]
     # suffix_list = ["TI", "TV"]

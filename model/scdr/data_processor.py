@@ -91,7 +91,7 @@ class DataProcessor:
         self.stream_dataset = stream_dataset
         self._total_processed_data_num = self.stream_dataset.get_n_samples()
         self.fitted_data_num = self.stream_dataset.get_n_samples()
-        self.model_just_replaced = True
+        # self._model_just_replaced = True
         self._is_new_manifold = [False] * self.fitted_data_num
         self.initial_embedding_optimizer_and_quality_supervisor()
 
@@ -106,9 +106,9 @@ class DataProcessor:
         if self._record_time:
             sta = time.time()
         update = False
-        if self.model_just_replaced:
+        if self._model_just_replaced:
             update = True
-            self.model_just_replaced = False
+            self._model_just_replaced = False
 
         knn_indices, knn_dists, candidate_indices, candidate_dists = \
             self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
@@ -269,9 +269,9 @@ class DataProcessor:
 
         self.stream_dataset.update_embeddings(total_embeddings)
         self.stream_dataset.update_unfitted_data_num(new_data_embeddings.shape[0])
-        self.update_thresholds()
+        # self.update_thresholds()
         self._model_embeddings = total_embeddings
-        self.model_just_replaced = True
+        self._model_just_replaced = True
         self.current_model_unfitted_num = new_data_embeddings.shape[0]
         self._last_update_meta = None
         self._need_replace_model = False
@@ -337,6 +337,9 @@ class DataProcessor:
                                                                        self.bad_embedding_num_thresh,
                                                                        self.model_update_num_thresh,
                                                                        e_thresh)
+        self.embedding_quality_supervisor._lof.my_fit(self.stream_dataset.get_knn_indices(),
+                                                      self.stream_dataset.get_knn_dists(),
+                                                      self.stream_dataset.get_n_samples())
         self.embedding_quality_supervisor.update_model_update_time(time.time())
         # ==========================================================================================================
 
@@ -373,6 +376,7 @@ class DataProcessor:
         # 只在替换模型时，才更新这些阈值，导致滞后性比较严重。
         pre_neighbor_embedding_m_dist, pre_neighbor_embedding_s_dist = \
             self.stream_dataset.get_embedding_neighbor_mean_std_dist()
+
         if self.embedding_quality_supervisor is not None:
             e_thresh = pre_neighbor_embedding_m_dist + 3 * pre_neighbor_embedding_s_dist
             self.embedding_quality_supervisor.update_threshes(e_thresh)
@@ -442,8 +446,8 @@ class DataProcessorProcess(DataProcessor, Process):
         total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)[-self.stream_dataset.get_n_samples():]
         self.stream_dataset.update_embeddings(total_embeddings)
         self.stream_dataset.update_unfitted_data_num(new_data_embeddings.shape[0])
-        self.update_thresholds()
-        self.model_just_replaced = True
+        # self.update_thresholds()
+        self._model_just_replaced = True
         self.current_model_unfitted_num = new_data_embeddings.shape[0]
         self._last_update_meta = None
         self._need_replace_model = False

@@ -25,14 +25,13 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    # method_list = [SIPCA, XTREAMING, INE, SISOMAPPP, SCDR]
-    method_list = [SIPCA]
-    test_time = 2
+    method_list = [XTREAMING, INE, SISOMAPPP, SCDR]
+    # method_list = [SIPCA]
+    test_time = 3
     # situation_list = ["ND", "FD", "PD"]
     situation = "FD"
-    # dataset_list = ["usps", "chess", "cifar10", "dry_bean", "fashion_mnist", "har", "mnist", "news_popularity",
-    #                 "retina", "sat", "shuttle"]
-    dataset_list = ["food"]
+    dataset_list = ["usps", "chess", "dry_bean", "mnist", "news_popularity", "shuttle", "arem", "activity_rec"]
+    # dataset_list = ["chess"]
     start_time = time_stamp_to_date_time_adjoin(time.time())
     result_save_dir = "results/{}/ex_{}".format(args.method, start_time)
     excel_save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\{}".format(start_time)
@@ -43,9 +42,13 @@ if __name__ == '__main__':
     excel_headers.append("Data Delay Time")
 
     for i, method_name in enumerate(method_list):
+        print("Current method:", method_name)
         cfg = get_config()
         cfg_path = ConfigInfo.MODEL_CONFIG_PATH.format(method_name)
         cfg.merge_from_file(cfg_path)
+        cfg.exp_params.window_size = 3000
+        cfg.exp_params.vis_iter = 1000
+        cfg.exp_params.eval_iter = 100
 
         args.method = method_name
         method_save_dir = os.path.join(excel_save_dir, method_name)
@@ -53,6 +56,7 @@ if __name__ == '__main__':
             os.makedirs(method_save_dir)
 
         for j, dataset_name in enumerate(dataset_list):
+            print("Processing Data:", dataset_name)
             excel_save_path = os.path.join(method_save_dir, "{}.xlsx".format(dataset_name))
             total_res = []
             cfg.exp_params.dataset = dataset_name

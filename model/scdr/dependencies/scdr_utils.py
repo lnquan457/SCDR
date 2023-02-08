@@ -368,6 +368,7 @@ class EmbeddingQualitySupervisor:
         if pre_data is not None:
             sta = time.time()
             self._lof.fit(pre_data)
+            self._lof.n_samples_fit_ = pre_data.shape[0]
             # print("fit time", time.time() - sta)
         # label = self._lof.predict(data)
         label = self._lof.predict_novel(knn_indices.squeeze(), knn_dists.squeeze())
@@ -397,7 +398,7 @@ class EmbeddingQualitySupervisor:
             self._judge_model_update(manifold_change_list)
 
     def slide_window(self, out_num):
-        self._lof.n_samples_fit_ -= out_num
+        self._lof.n_samples_fit_ = max(0, self._lof.n_samples_fit_ - out_num)
 
 
 class MyLocalOutlierFactor(LocalOutlierFactor):
@@ -418,6 +419,7 @@ class MyLocalOutlierFactor(LocalOutlierFactor):
                                     metric_params=metric_params, contamination=contamination, novelty=novelty,
                                     n_jobs=n_jobs)
         self._valid_rate = 0.5
+        self.n_samples_fit_ = 0
 
     def predict_novel(self, nn_indices, nn_dists):
         valid_indices = np.where(nn_indices < self.n_samples_fit_)[0]

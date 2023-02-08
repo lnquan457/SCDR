@@ -512,12 +512,10 @@ class StreamingDatasetWrapper(DataSetWrapper):
         return 1 - relationships
 
     def update_previous_info(self, pre_num, new_self, out_during_update, skipped_slide_num):
-        # self.symmetric_nn_indices[:pre_num-out_during_update] = new_self.symmetric_nn_indices[out_during_update:pre_num] - skipped_slide_num
-        # self.symmetric_nn_weights[:pre_num-out_during_update] = new_self.symmetric_nn_weights[out_during_update:pre_num]
+        if pre_num <= out_during_update:
+            return
         self.__sigmas[:pre_num-out_during_update] = new_self.__sigmas[out_during_update:pre_num]
         self.__rhos[:pre_num-out_during_update] = new_self.__rhos[out_during_update:pre_num]
-        # self._knn_manager.knn_indices[:pre_num] = new_self._knn_manager.knn_indices[:pre_num]
-        # self._knn_manager.knn_dists[:pre_num] = new_self._knn_manager.knn_dists[:pre_num]
         self.raw_knn_weights[:pre_num-out_during_update] = new_self.raw_knn_weights[out_during_update:pre_num]
 
     def get_data_neighbor_mean_std_dist(self):

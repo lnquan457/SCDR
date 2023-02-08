@@ -92,12 +92,12 @@ class XtreamingModel:
 
             # self.model_slide(out_num)
 
-    def model_slide(self, out_num):
+    def model_slide(self, new_embeddings, out_num):
         self.pre_control_indices -= out_num
         valid_indices = np.argwhere(self.pre_control_indices >= 0).squeeze()
         self.pre_control_indices = self.pre_control_indices[valid_indices].squeeze()
         self.pre_control_points = self.pre_control_points[valid_indices].squeeze()
-        self.pre_cntp_embeddings = self.pre_cntp_embeddings[valid_indices].squeeze()
+        self.pre_cntp_embeddings = new_embeddings[self.pre_control_indices].squeeze()
         self.pro_model.control_points = self.pro_model.control_points[valid_indices]
         self.pro_model.ctp2ctp_dists = self.pro_model.ctp2ctp_dists[valid_indices][:, valid_indices]
         self.pro_model.control_embeddings = self.pro_model.control_embeddings[valid_indices]
@@ -131,10 +131,11 @@ class XtreamingModel:
                 # aligned_total_embeddings, total_cntp_points = self._re_projection_slide()
 
                 self.pre_control_points = total_cntp_points
-                self.pre_cntp_embeddings = aligned_total_embeddings[self.pre_control_indices]
                 self.pre_embedding = aligned_total_embeddings
                 # print(self.pre_control_indices)
-                self.model_slide(self._total_out_num)
+                self.model_slide(aligned_total_embeddings, self._total_out_num)
+                print(self.pre_control_points.shape)
+                self.lof.fit(self.pre_control_points)
                 self._total_out_num = 0
 
         self.buffered_data = None
@@ -152,9 +153,10 @@ class XtreamingModel:
         # self.pre_embedding = self.pro_model.fit_transform_cntp_free(dists)
         self.pre_cntp_embeddings = self.pre_embedding[sampled_indices]
         self.buffered_data = None
+        self.lof.fit(self.pre_control_points)
 
     def _detect_concept_drift(self, cur_medoids):
-        self.lof.fit(self.pre_control_points)
+        # self.lof.fit(self.pre_control_points)
         labels = self.lof.predict(cur_medoids)
         # print(labels)
         control_indices = np.where(labels == -1)[0]
@@ -183,7 +185,8 @@ class XtreamingModel:
         total_embeddings = np.concatenate([prev_updated_embeddings, new_embeddings], axis=0)
 
         # 更新后的之前所有control points的投影结果，需要与之前的投影结果对齐
-        updated_pre_cntp_embeddings = total_embeddings[self.pre_control_indices]
+        # updated_pre_cntp_embeddings = total_embeddings[self.pre_control_indices]
+        updated_pre_cntp_embeddings = self.pro_model.reuse_project(cdist(self.pre_control_points, total_cntp_points))
         # 使用Procrustes analysis保持mental-map
         aligned_total_embeddings = procrustes_analysis(self.pre_cntp_embeddings,
                                                        updated_pre_cntp_embeddings, total_embeddings, align=True)

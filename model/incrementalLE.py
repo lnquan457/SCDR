@@ -14,7 +14,7 @@ from utils.nn_utils import compute_knn_graph
 
 
 class kNNBasedIncrementalMethods:
-    def __init__(self, train_num, n_components, n_neighbors, single=False, window_size=2000):
+    def __init__(self, train_num, n_components, n_neighbors, single=False, window_size=2000, self_slide=True):
         self.single = single
         self.initial_train_num = train_num
         self.n_components = n_components
@@ -26,6 +26,7 @@ class kNNBasedIncrementalMethods:
         self.time_cost = 0
         self._time_cost_records = [0]
         self._window_size = window_size
+        self._self_slide = self_slide
 
     def _update_kNN(self, new_data):
         # 1. 计算新数据的kNN
@@ -87,7 +88,8 @@ class kNNBasedIncrementalMethods:
                 self.trained = True
                 self._first_train(self.stream_dataset.get_total_data())
             add_data_time = time.time() - sta
-            self._slide_window()
+            if self._self_slide:
+                self._slide_window()
         else:
             add_data_time = 0
             for i, item in enumerate(x):
@@ -97,7 +99,8 @@ class kNNBasedIncrementalMethods:
                 self.stream_dataset.add_new_data(np.reshape(item, (1, -1)), None, labels[i] if labels is not None else None)
                 add_data_time += time.time() - t_sta
                 self._incremental_embedding(np.reshape(item, (1, -1)))
-                self._slide_window()
+                if self._self_slide:
+                    self._slide_window()
                 self.time_cost += time.time() - sta
 
         return self.pre_embeddings, add_data_time, True
@@ -106,7 +109,8 @@ class kNNBasedIncrementalMethods:
         out_num = self.stream_dataset.get_total_data().shape[0] - self._window_size
         if out_num > 0:
             self.stream_dataset._total_data = self.stream_dataset._total_data[out_num:]
-            self.stream_dataset._total_label = self.stream_dataset._total_label[out_num:]
+            if self.stream_dataset._total_label is not None:
+                self.stream_dataset._total_label = self.stream_dataset._total_label[out_num:]
             self.stream_dataset._total_n_samples = self.stream_dataset._total_data.shape[0]
             self.pre_embeddings = self.pre_embeddings[out_num:]
         return out_num
