@@ -11,4 +11,4 @@ exp_params:
   make_animation: False
 
 method_params:
-  n_neighbors: 10
+  n_neighbors: 15

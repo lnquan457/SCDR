@@ -90,14 +90,13 @@ class XtreamingModel:
             self.pre_embedding = self.pre_embedding[out_num:]
             self.total_data = self.total_data[out_num:]
 
-            # self.model_slide(out_num)
-
     def model_slide(self, new_embeddings, out_num):
         self.pre_control_indices -= out_num
         valid_indices = np.argwhere(self.pre_control_indices >= 0).squeeze()
         self.pre_control_indices = self.pre_control_indices[valid_indices].squeeze()
         self.pre_control_points = self.pre_control_points[valid_indices].squeeze()
         self.pre_cntp_embeddings = new_embeddings[self.pre_control_indices].squeeze()
+
         self.pro_model.control_points = self.pro_model.control_points[valid_indices]
         self.pro_model.ctp2ctp_dists = self.pro_model.ctp2ctp_dists[valid_indices][:, valid_indices]
         self.pro_model.control_embeddings = self.pro_model.control_embeddings[valid_indices]
@@ -111,6 +110,13 @@ class XtreamingModel:
         if self.pre_embedding is None:
             self._initial_project(medoids, sampled_indices)
         else:
+            """
+            首先需要采样，然后从采样的代表点中以此判断是否分布发生变化，对于分布发生变化的点，应该将其加入到代表点集合中
+            但是这里需要注意，代表点集合是在时刻变化的
+            
+            需要维持一个专门给lof用的代表点集合，然后动态更新这个代表点集合。如果集合发生改变则需要重新拟合LoF
+            然后再对当前buffer的数据进行预测，
+            """
             cur_control_points, drift_indices = self._detect_concept_drift(medoids)
             cur_control_indices = sampled_indices[drift_indices]
             dists2cntp = cdist(self.buffered_data, self.pre_control_points)
@@ -133,8 +139,8 @@ class XtreamingModel:
                 self.pre_control_points = total_cntp_points
                 self.pre_embedding = aligned_total_embeddings
                 # print(self.pre_control_indices)
-                self.model_slide(aligned_total_embeddings, self._total_out_num)
-                print(self.pre_control_points.shape)
+                # self.model_slide(aligned_total_embeddings, self._total_out_num)
+                # print(self.pre_control_points.shape)
                 self.lof.fit(self.pre_control_points)
                 self._total_out_num = 0
 
@@ -164,25 +170,46 @@ class XtreamingModel:
         return cur_control_points, control_indices
 
     def _re_projection(self, dists2cntp, control_indices, control_points):
+        pre_data = self.total_data[:self.pre_embedding.shape[0]]
+        new_pre_cntp_points, new_pre_cntp_indices = sampled_control_points(pre_data)
+        new_pre_cntp_embeddings = self.pre_embedding[new_pre_cntp_indices]
+        # cur_cntp_embeddings = self.pro_model.reuse_project(dists2cntp[control_indices])
+        # total_cntp_embeddings = np.concatenate([new_pre_cntp_embeddings, cur_cntp_embeddings], axis=0)
+        total_cntp_points = np.concatenate([new_pre_cntp_points, control_points], axis=0)
+        pre_dists2all_cntp = cdist(pre_data, total_cntp_points)
+        cntp2cntp_dists = cdist(total_cntp_points, total_cntp_points)
+        updated_pre_embeddings = self.pro_model.fit_transform(pre_dists2all_cntp, cntp2cntp_dists)
+        new_data_embeddings = self.pro_model.reuse_project(cdist(self.buffered_data, total_cntp_points))
+        updated_total_embeddings = np.concatenate([updated_pre_embeddings, new_data_embeddings], axis=0)
+        updated_pre_cntp_embeddings = updated_total_embeddings[new_pre_cntp_indices]
+
+        aligned_total_embeddings = procrustes_analysis(new_pre_cntp_embeddings,
+                                                       updated_pre_cntp_embeddings, updated_total_embeddings, align=True)
+
+        self.pre_control_indices = np.concatenate([new_pre_cntp_indices, control_indices + pre_data.shape[0]])
+        return aligned_total_embeddings, total_cntp_points
+
+    def _re_projection_no_slide(self, dists2cntp, control_indices, control_points):
+
         pre_data_num = self.pre_embedding.shape[0]
         total_cntp_points = np.concatenate([self.pre_control_points, control_points], axis=0)
 
         # 求出之前的所有数据到之前的控制点的距离
-        dists2new_cntp_1 = cdist(self.pre_embedding, self.pre_cntp_embeddings)
+        dists2pre_cntp = cdist(self.pre_embedding, self.pre_cntp_embeddings)
         # 求出之前的所有数据到当前控制点的距离
         cur_cntp_embeddings = self.pro_model.reuse_project(dists2cntp[control_indices])
-        dists2new_cntp_2 = cdist(self.pre_embedding, cur_cntp_embeddings)
-        dists2new_cntp_all = np.concatenate([dists2new_cntp_1, dists2new_cntp_2], axis=1)
+        dists2new_cntp = cdist(self.pre_embedding, cur_cntp_embeddings)
+        pre_dists2all_cntp = np.concatenate([dists2pre_cntp, dists2new_cntp], axis=1)
 
         # 所有control points之间的距离，用于构造投影函数
         total_cntp_embeddings = np.concatenate([self.pre_cntp_embeddings, cur_cntp_embeddings], axis=0)
         cntp_dists = cal_dist(total_cntp_embeddings)
         # 对之前的数据以及所有control points进行重新投影
-        prev_updated_embeddings = self.pro_model.fit_transform(dists2new_cntp_all, cntp_dists)
+        updated_pre_embeddings = self.pro_model.fit_transform(pre_dists2all_cntp, cntp_dists)
 
         # 使用最新的投影函数对新数据进行投影
         new_embeddings = self.pro_model.reuse_project(cdist(self.buffered_data, total_cntp_points))
-        total_embeddings = np.concatenate([prev_updated_embeddings, new_embeddings], axis=0)
+        total_embeddings = np.concatenate([updated_pre_embeddings, new_embeddings], axis=0)
 
         # 更新后的之前所有control points的投影结果，需要与之前的投影结果对齐
         # updated_pre_cntp_embeddings = total_embeddings[self.pre_control_indices]
@@ -192,29 +219,6 @@ class XtreamingModel:
                                                        updated_pre_cntp_embeddings, total_embeddings, align=True)
 
         self.pre_control_indices = np.concatenate([self.pre_control_indices, control_indices + pre_data_num])
-        return aligned_total_embeddings, total_cntp_points
-
-    def _re_projection_slide(self):
-        total_cntp_points, sampled_indices = sampled_control_points(self.total_data[:-self.buffered_data.shape[0]])
-        total_cntp_embeddings = self.pre_embedding[sampled_indices]
-
-        dists2new_cntp_all = cdist(self.pre_embedding, total_cntp_embeddings)
-
-        cntp_dists = cdist(total_cntp_embeddings, total_cntp_embeddings)
-        # 对之前的数据以及所有control points进行重新投影
-        prev_updated_embeddings = self.pro_model.fit_transform(dists2new_cntp_all, cntp_dists)
-
-        # 使用最新的投影函数对新数据进行投影
-        new_embeddings = self.pro_model.reuse_project(cdist(self.buffered_data, total_cntp_points))
-        total_embeddings = np.concatenate([prev_updated_embeddings, new_embeddings], axis=0)
-
-        # 更新后的之前所有control points的投影结果，需要与之前的投影结果对齐
-        updated_pre_cntp_embeddings = total_embeddings[self.pre_control_indices]
-        # 使用Procrustes analysis保持mental-map
-        aligned_total_embeddings = procrustes_analysis(self.pre_cntp_embeddings,
-                                                       updated_pre_cntp_embeddings, total_embeddings, align=True)
-
-        self.pre_control_indices = sampled_indices
         return aligned_total_embeddings, total_cntp_points
 
     def transform(self, data):

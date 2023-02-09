@@ -56,6 +56,7 @@ def position_vis(c, vis_save_path, z, title=None):
     # plt.xticks([])
     # plt.yticks([])
     # plt.axis("equal")
+    plt.legend()
 
     # plt.title("{} Embeddings".format(method_name), fontsize=20)
     if vis_save_path is not None:

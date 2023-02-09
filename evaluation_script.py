@@ -25,12 +25,16 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    method_list = [XTREAMING, INE, SISOMAPPP, SCDR]
-    # method_list = [SIPCA]
+    # method_list = [SIPCA, XTREAMING, INE, SISOMAPPP, SCDR]
+    # method_list = [SIPCA, XTREAMING, INE]
+    # method_list = [INE, SCDR, SISOMAPPP]
+    method_list = [SIPCA, XTREAMING, INE, SISOMAPPP, SCDR]
     test_time = 3
     # situation_list = ["ND", "FD", "PD"]
     situation = "FD"
-    dataset_list = ["usps", "chess", "dry_bean", "mnist", "news_popularity", "shuttle", "arem", "activity_rec"]
+    # dataset_list = ["food", "sat", "HAR_2", "usps", "mnist_fla", "dry_bean", "shuttle", "arem", "basketball", "electric_devices"]
+    dataset_list = ["food"]
+    dim_list = [512, 36, 561, 256, 784, 16, 9, 6, 6, 96]
     # dataset_list = ["chess"]
     start_time = time_stamp_to_date_time_adjoin(time.time())
     result_save_dir = "results/{}/ex_{}".format(args.method, start_time)
@@ -46,8 +50,8 @@ if __name__ == '__main__':
         cfg = get_config()
         cfg_path = ConfigInfo.MODEL_CONFIG_PATH.format(method_name)
         cfg.merge_from_file(cfg_path)
-        cfg.exp_params.window_size = 3000
-        cfg.exp_params.vis_iter = 1000
+        cfg.exp_params.window_size = 7000
+        cfg.exp_params.vis_iter = 200
         cfg.exp_params.eval_iter = 100
 
         args.method = method_name
@@ -57,6 +61,8 @@ if __name__ == '__main__':
 
         for j, dataset_name in enumerate(dataset_list):
             print("Processing Data:", dataset_name)
+            if method_name == SCDR:
+                cfg.exp_params.input_dims = dim_list[j]
             excel_save_path = os.path.join(method_save_dir, "{}.xlsx".format(dataset_name))
             total_res = []
             cfg.exp_params.dataset = dataset_name

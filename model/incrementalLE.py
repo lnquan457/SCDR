@@ -43,11 +43,12 @@ class kNNBasedIncrementalMethods:
 
     def _cal_new_data_kNN(self, new_data, include_self=True):
         new_data_num = new_data.shape[0]
-        dists = cdist(new_data, self.stream_dataset.get_total_data())
         if include_self:
-            knn_indices = np.argsort(dists, axis=1)[:, :self.n_neighbors]
+            data = self.stream_dataset.get_total_data()
         else:
-            knn_indices = np.argsort(dists, axis=1)[:, 1:self.n_neighbors + 1]
+            data = self.stream_dataset.get_total_data()[:-1]
+        dists = cdist(new_data, data)
+        knn_indices = np.argsort(dists, axis=1)[:, :self.n_neighbors]
         knn_dists = np.zeros(shape=(new_data_num, self.n_neighbors))
         # print("new_data_num", new_data_num)
         for i in range(new_data_num):

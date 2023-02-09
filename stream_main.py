@@ -90,7 +90,7 @@ def custom_indices_training(configs, custom_indices_path, recv_args, res_save_di
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=SCDR,
+    parser.add_argument("--method", type=str, default=XTREAMING,
                         choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
     parser.add_argument("--parallel", type=bool, default=False)

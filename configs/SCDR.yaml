@@ -17,7 +17,7 @@ method_params:
   finetune_epoch: 50
   batch_size: 512
   LR: 0.001
-  n_neighbors: 10
+  n_neighbors: 15
   temperature: 0.15
   split_upper: 0.11
   split_lower: 0.005

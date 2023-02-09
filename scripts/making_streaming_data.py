@@ -78,7 +78,7 @@ if __name__ == '__main__':
     check_path_exists(save_dir)
     situation_list = ["ND", "PD", "FD"]
     for item in os.listdir(dataset_dir):
-        if not str(item).endswith(".h5") or (item != "food.h5"):
+        if not str(item).endswith(".h5") or (item != "basketball.h5" and item != "HAR_2.h5" and item != "electric_devices.h5"):
             continue
         data_name = item.split(".")[0]
 
