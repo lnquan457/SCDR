@@ -85,6 +85,7 @@ class StreamingEx:
         self.eval_k = 10
         self.vc_k = self.eval_k
 
+        self._save_embeddings_for_eval = False
         self._key_time = 0
         self.pre_embedding = None
         self.cur_embedding = None
@@ -115,6 +116,7 @@ class StreamingEx:
         self._steady_metric_records = [[] for item in STEADY_METRIC_NAMES]
         self._data_arrival_time = []
         self._data_present_time = []
+        self.acc_key_time = 0
 
     def _prepare_streaming_data(self):
         # self.streaming_mock = StreamingDataMock(self.dataset_name, self.cfg.exp_params.stream_rate, self.seq_indices)
@@ -138,7 +140,8 @@ class StreamingEx:
                                   k=self.eval_k)
 
     def start_siPCA(self):
-        self.model = StreamingIPCA(self.n_components, self.cfg.method_params.forgetting_factor)
+        self.model = StreamingIPCA(self.n_components, self.cfg.method_params.forgetting_factor,
+                                   window_size=self.cfg.exp_params.window_size)
         return self.stream_fitting()
 
     def start_xtreaming(self):
@@ -216,19 +219,19 @@ class StreamingEx:
         if cache_flag:
             self.pre_embedding = self.cur_embedding
             if self.cur_time_step > 1:
-                self._data_arrival_time.extend([time.time()] * stream_data.shape[0])
+                data_arrival_time = time.time()
+                self._data_arrival_time.extend([data_arrival_time] * stream_data.shape[0])
 
-            sta = time.time()
-            ret_embeddings, add_data_time, embedding_updated = self.model.fit_new_data(stream_data, stream_labels)
-            end_time = time.time()
+            ret_embeddings, key_time, embedding_updated, out_num = self.model.fit_new_data(stream_data, stream_labels)
+            self.acc_key_time += key_time
             if self.cur_time_step > 1 and embedding_updated:
-                self._data_present_time.extend([end_time] * (len(self._data_arrival_time) -
-                                                             len(self._data_present_time)))
+                self._data_present_time.extend([data_arrival_time + self.acc_key_time] * (len(self._data_arrival_time) -
+                                                                                          len(self._data_present_time)))
+                self.acc_key_time = 0
 
             if self.cur_time_step > 2:
-                single_process_time = end_time - sta - add_data_time
-                self.process_time_records.append(single_process_time)
-                self._key_time += single_process_time
+                self.process_time_records.append(key_time)
+                self._key_time += key_time
                 # print("_key_time", self._key_time)
 
             if ret_embeddings is not None:
@@ -240,7 +243,8 @@ class StreamingEx:
                 self._y_max = max(self._y_max, cur_y_max)
                 self._embeddings_histories.append([len(self.history_label) - ret_embeddings.shape[0], ret_embeddings])
                 if self.pre_embedding is not None:
-                    self.evaluate(self.pre_embedding, ret_embeddings, pre_labels[-self.pre_embedding.shape[0]:])
+                    self.evaluate(self.pre_embedding, ret_embeddings, pre_labels[-self.pre_embedding.shape[0]:],
+                                  out_num=out_num)
                 self.cur_embedding = ret_embeddings
                 self.save_embeddings_info(self.cur_embedding)
 
@@ -270,8 +274,18 @@ class StreamingEx:
             position_vis(self.history_label[-cur_embeddings.shape[0]:], img_save_path, cur_embeddings,
                          "T_{}".format(len(self._embeddings_histories)))
 
-    def evaluate(self, pre_embeddings, cur_embeddings, pre_labels, train_end=False):
+    def evaluate(self, pre_embeddings, cur_embeddings, pre_labels, train_end=False, out_num=None):
         if self.cur_time_step % self._eval_iter > 0 and not train_end:
+            return
+
+        if not train_end and self._save_embeddings_for_eval:
+            save_dir = os.path.join(self.result_save_dir, "eval_embeddings")
+            check_path_exist(save_dir)
+            pre_valid_embeddings = pre_embeddings[out_num:] if out_num is not None else pre_embeddings
+            cur_valid_embeddings = cur_embeddings[
+                                   :pre_valid_embeddings.shape[0]] if out_num is not None else cur_embeddings
+            np.save(os.path.join(save_dir, "t{}.npy".format(self.cur_time_step)),
+                    [self.cur_time_step, cur_embeddings, pre_valid_embeddings, cur_valid_embeddings], allow_pickle=True)
             return
 
         cur_data_num = cur_embeddings.shape[0]
@@ -282,7 +296,8 @@ class StreamingEx:
         self.metric_tool = Metric(self.dataset_name, data, targets, knn_indices, knn_dists, pairwise_distance,
                                   k=self.eval_k)
 
-        faithful_results = self.metric_tool.cal_all_metrics(self.eval_k, cur_embeddings, knn_k=self.eval_k)
+        # faithful_results = self.metric_tool.cal_all_metrics(self.eval_k, cur_embeddings, knn_k=self.eval_k)
+        faithful_results = self.metric_tool.cal_simplified_metrics(self.eval_k, cur_embeddings, knn_k=self.eval_k)
         faith_metric_output = ""
         for i, item in enumerate(METRIC_NAMES):
             faith_metric_output += " %s: %.4f" % (item, faithful_results[i])
@@ -290,8 +305,14 @@ class StreamingEx:
 
         InfoLogger.info(faith_metric_output)
 
-        position_change = cal_global_position_change(cur_embeddings, pre_embeddings)
-        pdist_change = cal_manifold_pdist_change(cur_embeddings, pre_embeddings, pre_labels)
+        if out_num is None:
+            position_change = cal_global_position_change(cur_embeddings, pre_embeddings)
+        else:
+            pre_valid_embeddings = pre_embeddings[out_num:]
+            cur_valid_embeddings = cur_embeddings[:pre_valid_embeddings.shape[0]]
+            position_change = cal_global_position_change(cur_valid_embeddings, pre_valid_embeddings)
+        # pdist_change = cal_manifold_pdist_change(cur_embeddings, pre_embeddings, pre_labels)
+        pdist_change = 0
 
         steady_results = [position_change, pdist_change]
         steady_metric_output = ""
@@ -349,7 +370,7 @@ class StreamingEx:
         self.log.write(output + "\n")
 
         avg_data_delay_time = np.mean(np.array(self._data_present_time) - np.array(self._data_arrival_time))
-        output = "Average Data show up time delay: %.2f s" % avg_data_delay_time
+        output = "Average Data show up time delay: %.4f s" % avg_data_delay_time
         InfoLogger.info(output)
         self.log.write(output + "\n")
 

@@ -2,6 +2,7 @@
 # -*- coding:utf-8 -*-
 import math
 import time
+from copy import copy
 
 import numba.typed.typedlist
 import numpy as np
@@ -54,7 +55,7 @@ class DataRepo:
         self._total_embeddings = None
         self._knn_manager = KNNManager(n_neighbor)
 
-    def slide_window(self, out_num):
+    def slide_window(self, out_num, *args):
         if out_num <= 0:
             return out_num
 
@@ -258,48 +259,88 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self._concat_num = 1000
         self._tmp_neighbor_weights = np.ones((1, self.n_neighbor))
         self._unfitted_data_num = 0
+        self.out_sum = 0
 
         self.dist_t = 0
         self.update_t = 0
         self.concat_t = 0
         self.fuzzy_t = 0
         self.get_t = 0
+        self.ttt_time = 0
 
-    def slide_window(self, out_num):
+    def slide_window(self, out_num, *args):
         if out_num <= 0:
             return
         super().slide_window(out_num)
+        cached_candidate_indices, cached_candidate_dists, cached_candidate_idx = args
 
-        # TODO：下面五个暂时不需要更新
-        # TODO: 需要更新kNN
         knn_indices = self.get_knn_indices()
         knn_dists = self.get_knn_dists()
         knn_indices -= out_num
         out_indices = np.argwhere(self.get_knn_indices() < 0)
         changed_data_idx = out_indices[:, 0]
-        # print("change data idx", changed_data_idx)
-        dists = cdist(self.get_total_data()[changed_data_idx], self.get_total_data())
-        sorted_indices = np.argsort(dists, axis=1)
-        knn_indices[changed_data_idx] = sorted_indices[:, 1:1 + self.n_neighbor]
-        for i, item in enumerate(changed_data_idx):
-            knn_dists[item] = dists[i][knn_indices[item]]
-        self._knn_manager.update_knn_graph(knn_indices, knn_dists)
 
+        # total_embeddings = self.get_total_embeddings()
+        # total_data = self.get_total_data()
+        # dists = cdist(total_embeddings[changed_data_idx], total_embeddings)
+        # sorted_indices = np.argsort(dists, axis=1)[:, 1:1 + int(0.15 * np.sqrt(total_embeddings.shape[0]) * self.n_neighbor)]
+        # for i, item in enumerate(changed_data_idx):
+        #     dist = cdist(total_data[item][np.newaxis, :], total_data[sorted_indices[i]]).squeeze()
+        #     tmp_sorted_indices = np.argsort(dist)[1:1 + self.n_neighbor]
+        #     knn_indices[item] = sorted_indices[i][tmp_sorted_indices]
+        #     knn_dists[item] = dist[tmp_sorted_indices]
+        #
+        # TODO: 需要提高效率
+        total_data = self.get_total_data()
+        total_embeddings = self.get_total_embeddings()
+        # new_k = int(0.1 * np.sqrt(total_embeddings.shape[0]) * self.n_neighbor)
+        new_k = 5 * self.n_neighbor + 1
+        dist_cal_set = []
+        for i, item in enumerate(changed_data_idx):
+            if item in dist_cal_set:
+                continue
+            n = len(cached_candidate_indices[item])
+            # idx = 0
+            idx = cached_candidate_idx[item]
+            while (idx < n) and (cached_candidate_indices[item][idx] < 0):
+                idx += 1
+
+            if idx < n:
+                knn_indices[item, out_indices[i, 1]] = cached_candidate_indices[item][idx]
+                knn_dists[item, out_indices[i, 1]] = cached_candidate_dists[item][idx]
+                cached_candidate_idx[item] = idx
+            else:
+                dist_cal_set.append(item)
+                dist = cdist(total_embeddings[item][np.newaxis, :], total_embeddings).squeeze()
+
+                tmp_sorted_indices = np.argsort(dist)
+                knn_indices[item] = tmp_sorted_indices[1:1 + self.n_neighbor]
+                knn_dists[item] = dist[knn_indices[item]]
+                cached_candidate_indices[item] = tmp_sorted_indices[1 + self.n_neighbor:new_k]
+                cached_candidate_dists[item] = dist[cached_candidate_indices[item]]
+                cached_candidate_idx[item] = 0
+
+                # sorted_indices = np.argsort(dist)[1:1 + new_k]
+                # dist = cdist(total_data[item][np.newaxis, :], total_data[sorted_indices]).squeeze()
+                # tmp_indices = np.argsort(dist)
+                # tmp_sorted_indices = tmp_indices[1:1+self.n_neighbor]
+                # cached_candidate_indices[item] = tmp_indices[1+self.n_neighbor:]
+                # cached_candidate_dists[item] = dist[cached_candidate_indices[item]]
+                # cached_candidate_idx[item] = 0
+                # knn_indices[item] = sorted_indices[tmp_sorted_indices]
+                # knn_dists[item] = dist[tmp_sorted_indices]
+
+        self._knn_manager.update_knn_graph(knn_indices, knn_dists)
         self.__sigmas = self.__sigmas[out_num:]
         self.__rhos = self.__rhos[out_num:]
-        # self.symmetric_nn_indices = self.symmetric_nn_indices[out_num:] - out_num
-
-        # self.symmetric_nn_weights = self.symmetric_nn_weights[out_num:]
         self.raw_knn_weights = self.raw_knn_weights[out_num:]     # 是应该更新的，但是影响很小
 
         self.train_dataset.slide_window(out_num)
 
-        if len(self._cached_neighbor_change_indices) > 0 :
+        if len(self._cached_neighbor_change_indices) > 0:
             self._cached_neighbor_change_indices -= out_num
-            valid_indices = np.where(self._cached_neighbor_change_indices >= 0)[0]
-            self._cached_neighbor_change_indices = self._cached_neighbor_change_indices[valid_indices]
 
-        self._cached_neighbor_change_indices = np.union1d(self._cached_neighbor_change_indices, changed_data_idx)
+        self._cached_neighbor_change_indices = np.append(self._cached_neighbor_change_indices, np.unique(changed_data_idx))
         return out_num
 
     def update_unfitted_data_num(self, unfitted_num):
@@ -463,8 +504,17 @@ class StreamingDatasetWrapper(DataSetWrapper):
         return None
 
     def update_cached_neighbor_similarities(self):
-        print("cached neighbor change num", len(self._cached_neighbor_change_indices))
-        self._cached_neighbor_change_indices = self._cached_neighbor_change_indices.astype(int)
+        if len(self._cached_neighbor_change_indices) <= 0:
+            return
+
+        valid_indices = np.where(self._cached_neighbor_change_indices >= 0)[0]
+        if len(valid_indices) <= 0:
+            self._cached_neighbor_change_indices = np.array([])
+            return
+
+        self._cached_neighbor_change_indices = np.unique(self._cached_neighbor_change_indices[valid_indices]).astype(int)
+
+        # print("cached neighbor change num", len(self._cached_neighbor_change_indices))
         umap_graph, sigmas, rhos, self.raw_knn_weights = \
             fuzzy_simplicial_set_partial(self._knn_manager.knn_indices, self._knn_manager.knn_dists,
                                          self.raw_knn_weights,
@@ -517,6 +567,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self.__sigmas[:pre_num-out_during_update] = new_self.__sigmas[out_during_update:pre_num]
         self.__rhos[:pre_num-out_during_update] = new_self.__rhos[out_during_update:pre_num]
         self.raw_knn_weights[:pre_num-out_during_update] = new_self.raw_knn_weights[out_during_update:pre_num]
+        self._knn_manager.knn_indices[:pre_num-out_during_update] = new_self.get_knn_indices()[out_during_update:pre_num]
+        self._knn_manager.knn_dists[:pre_num-out_during_update] = new_self.get_knn_dists()[out_during_update:pre_num]
 
     def get_data_neighbor_mean_std_dist(self):
         knn_dists = self._knn_manager.knn_dists[:-self._unfitted_data_num] if self._unfitted_data_num > 0 else self._knn_manager.knn_dists
@@ -599,7 +651,7 @@ class KNNManager:
                 if len(indices) < 1:
                     flag = False
             else:
-                indices = np.setdiff1d(indices, [pre_n_samples])
+                indices = np.setdiff1d(indices, [pre_n_samples + i])
 
             if flag:
                 for j in indices:
@@ -618,6 +670,7 @@ class KNNManager:
                     # 这个更新的过程应该是迭代的，distance必须是递增的, 将[insert_index+1: -1]的元素向后移一位
                     arr_move_one(self.knn_dists[j], insert_index + 1, dists2pre_data[i][j])
                     arr_move_one(self.knn_indices[j], insert_index + 1, pre_n_samples + i)
+                    farest_neighbor_dist[j] = self.knn_dists[j, -1]
 
         self._pre_neighbor_changed_meta = np.array(self._pre_neighbor_changed_meta, dtype=int)
 
@@ -665,6 +718,7 @@ def _do_update(new_data_num, pre_n_samples, candidate_indices_list, candidate_di
             # arr_move_one(knn_indices[data_idx], insert_index + 1, pre_n_samples)
             knn_indices[data_idx][insert_index + 2:] = knn_indices[data_idx][insert_index + 1:-1]
             knn_indices[data_idx][insert_index + 1] = pre_n_samples
+            # print("knn", knn_indices[data_idx])
 
     return neighbor_changed_indices, pre_neighbor_changed_meta, knn_indices, knn_dists
 

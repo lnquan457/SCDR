@@ -16,7 +16,7 @@ device = "cuda:0"
 log_path = "logs/logs.txt"
 
 
-def start(ex, recv_args):
+def start(ex, recv_args, config, cfg_path, res_save_dir, device, log_path):
     if recv_args.method == ATSNE:
         # ==============1. at-SNE model=====================
         return ex.start_atSNE()
@@ -47,11 +47,11 @@ def start(ex, recv_args):
             return ex.start_sisomap()
     elif recv_args.method == SCDR:
         assert isinstance(ex, StreamingExProcess)
-        cdr_model = MODELS["LwF_CDR"](cfg, device=device)
+        cdr_model = MODELS["LwF_CDR"](config, device=device)
         model_update_queue_set = ModelUpdateQueueSet()
 
-        model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, cfg.exp_params.dataset,
-                                           cfg_path, cfg, result_save_dir, device=device, log_path=log_path)
+        model_trainer = SCDRTrainerProcess(model_update_queue_set, cdr_model, config.exp_params.dataset,
+                                           cfg_path, config, res_save_dir, device=device, log_path=log_path)
         # return ex.start_parallel_scdr(model_update_queue_set, model_trainer)
         return ex.start_full_parallel_scdr(model_update_queue_set, model_trainer)
     else:
@@ -72,7 +72,7 @@ def random_training():
     start(ex)
 
 
-def custom_indices_training(configs, custom_indices_path, recv_args, res_save_dir):
+def custom_indices_training(configs, custom_indices_path, recv_args, res_save_dir, cfg_path, device, log_path):
     # custom_indices_path = os.path.join(ConfigInfo.CUSTOM_INDICES_DIR, "{}.npy".format(args.dataset))
     custom_indices = np.load(custom_indices_path, allow_pickle=True)
 
@@ -84,13 +84,13 @@ def custom_indices_training(configs, custom_indices_path, recv_args, res_save_di
 
     data_generator.start()
 
-    return start(ex, recv_args)
+    return start(ex, recv_args, configs, cfg_path, res_save_dir, device, log_path)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=XTREAMING,
+    parser.add_argument("--method", type=str, default=SCDR,
                         choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
     parser.add_argument("--parallel", type=bool, default=False)
@@ -106,12 +106,4 @@ if __name__ == '__main__':
     result_save_dir = "results/{}/".format(args.method)
 
     custom_indices_path = os.path.join(args.indices_dir, "{}_FD.npy".format(cfg.exp_params.dataset))
-    custom_indices_training(cfg, custom_indices_path, args, result_save_dir)
-
-    # suffix_list = ["TI", "FV", "TV"]
-    # suffix_list = ["TI", "TV"]
-    # for item in suffix_list:
-    #     custom_indices_path = os.path.join(args.indices_dir, "{}_{}.npy".format(cfg.exp_params.dataset, item))
-    #     for i in range(1):
-    #         # cfg.exp_params.make_animation = i == 0
-    #         custom_indices_training(custom_indices_path)
+    custom_indices_training(cfg, custom_indices_path, args, result_save_dir, cfg_path, device, log_path)

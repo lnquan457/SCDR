@@ -3,7 +3,7 @@
 import numpy as np
 from multiprocessing import Queue
 
-METRIC_NAMES = ["Trust", "Continuity", 'Neighbor Hit', 'KA(10)', 'SC', 'DSC']
+METRIC_NAMES = ["Trust", "Continuity", 'Neighbor Hit', 'KA(10)']
 STEADY_METRIC_NAMES = ["Global Position Change", "Manifold Pdist Change"]
 ALL_DATASETS = ["animals", "banknote", "Anuran Calls_8c", "cifar10_ex_10000", "cnae9", "dogs_cats_10000_idx",
                 "fish", "food", "har", "isolet_subset", "mnist_r_10000",
@@ -12,12 +12,12 @@ ALL_DATASETS = ["animals", "banknote", "Anuran Calls_8c", "cifar10_ex_10000", "c
 DATASET_MAP = {"stanford dogs": "stanford dogs_subset", "animals": "animals_clear", "pendigits": "pendigits_clear"}
 
 ILLE = "iLLE"
-SIPCA = "siPCA"
+SIPCA = "sPCA"
 ATSNE = "atSNE"
 XTREAMING = "Xtreaming"
 SCDR = "SCDR"
 INE = "INE"
-SISOMAPPP = "SISOMAP"
+SISOMAPPP = "SIsomap++"
 
 # STREAM_METHOD_LIST = [SIPCA, XTREAMING, ATSNE, SCDR]
 # STREAM_METHOD_LIST = [ATSNE, SCDR]

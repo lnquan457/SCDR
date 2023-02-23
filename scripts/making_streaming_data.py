@@ -73,16 +73,15 @@ func_dict = {
 
 
 if __name__ == '__main__':
-    dataset_dir = r"D:\Projects\流数据\Data\new"
+    dataset_dir = r"D:\Projects\流数据\Data\H5 Data"
     save_dir = os.path.join(dataset_dir, "indices_seq")
     check_path_exists(save_dir)
+    dataset_list = ["Anuran Calls_8c", "texture"]
     situation_list = ["ND", "PD", "FD"]
-    for item in os.listdir(dataset_dir):
-        if not str(item).endswith(".h5") or (item != "basketball.h5" and item != "HAR_2.h5" and item != "electric_devices.h5"):
-            continue
+    for item in dataset_list:
         data_name = item.split(".")[0]
 
-        with h5py.File(os.path.join(dataset_dir, item), "r") as hf:
+        with h5py.File(os.path.join(dataset_dir, "{}.h5".format(item)), "r") as hf:
             x = np.array(hf['x'])
             y = np.array(hf['y'], dtype=int)
             unique_cls, cls_nums = np.unique(y, return_counts=True)

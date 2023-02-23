@@ -21,19 +21,20 @@ class StreamingIPCA:
         self._window_size = window_size
 
     def fit_new_data(self, x, labels=None):
+        key_time = 0
         sta = time.time()
         if self._buffered_data is None:
             self._buffered_data = x
         else:
             self._buffered_data = np.concatenate([self._buffered_data, x], axis=0)
         if self._buffered_data.shape[0] < self._buffer_size:
-            return self.pre_embeddings, time.time() - sta, False
+            return self.pre_embeddings, time.time() - sta, False, 0
+        key_time += time.time() - sta
 
         if self.total_data is None:
             self.total_data = self._buffered_data
         else:
             self.total_data = np.concatenate([self.total_data, self._buffered_data], axis=0)[-self._window_size:]
-        add_data_time = time.time() - sta
 
         sta = time.time()
         self.pca_model.partial_fit(self._buffered_data)
@@ -42,12 +43,15 @@ class StreamingIPCA:
         if self.pre_embeddings is None:
             self.pre_embeddings = cur_embeddings
         else:
-            self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings, cur_embeddings)
+            self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings[self._buffered_data.shape[0]:], cur_embeddings)
+
         self._buffered_data = None
+        out_num = max(0, self.pre_embeddings.shape[0] - self._window_size)
         self.pre_embeddings = self.pre_embeddings[-self._window_size:]
+        key_time += time.time() - sta
         # self.time_cost += time.time() - sta
         # self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
-        return self.pre_embeddings, add_data_time, True
+        return self.pre_embeddings, key_time, True, out_num
 
     def ending(self):
         output = "Time Cost: %.4f" % self.time_cost

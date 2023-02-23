@@ -27,7 +27,6 @@ class DataProcessor:
 
         # 用于确定何时要更新模型，1）新的流形出现；2）模型对旧流形数据的嵌入质量太低；3）长时间没有更新；
         self.model_update_intervals = 6000
-        # TODO: 这个过程中，保持的knn可能是不对的，在之后也无法得到修正。所以这个值不能设置的太小了。
         self.model_update_num_thresh = 50
         self.manifold_change_num_thresh = 200
         self.bad_embedding_num_thresh = 400
@@ -40,12 +39,13 @@ class DataProcessor:
         self.opt_neg_num = 50
 
         # 模型优化时，对于旧流形中的数据，采样的比例
-        self._old_manifold_sample_rate = 1.0    # 0.5
+        self._old_manifold_sample_rate = 1.0  # 0.5
         self._min_training_num = 100
 
         self.update_when_end = False
 
         self.knn_searcher_approx = StreamingANNSearchAnnoy()
+        self._knn_update_iter = 1000
 
         # 进行初次训练后，初始化以下对象
         self.stream_dataset = None
@@ -70,6 +70,11 @@ class DataProcessor:
         self._total_processed_data_num = 0
         self._out_since_last_send_update = 0
         self._skipped_slide_num = []
+        self._cached_candidate_indices = None
+        self._cached_candidate_dists = None
+        self._cached_candidate_idx = None
+        self._candidate_num = 0
+        self._process_num = 0
 
         self.whole_time = 0
         self.knn_cal_time = 0
@@ -89,8 +94,13 @@ class DataProcessor:
 
     def init_stream_dataset(self, stream_dataset):
         self.stream_dataset = stream_dataset
+        self.stream_dataset.initial_data_num = self.stream_dataset.get_n_samples()
         self._total_processed_data_num = self.stream_dataset.get_n_samples()
         self.fitted_data_num = self.stream_dataset.get_n_samples()
+        self._candidate_num = (self.knn_searcher_approx._beta - 1) * self.n_neighbors
+        self._cached_candidate_indices = np.ones((self.fitted_data_num, self._candidate_num), dtype=int) * -1
+        self._cached_candidate_dists = np.ones((self.fitted_data_num, self._candidate_num), dtype=int) * -1
+        self._cached_candidate_idx = [1] * len(self._cached_candidate_indices)
         # self._model_just_replaced = True
         self._is_new_manifold = [False] * self.fitted_data_num
         self.initial_embedding_optimizer_and_quality_supervisor()
@@ -99,12 +109,13 @@ class DataProcessor:
     def process(self, data, data_embeddings, labels=None):
         # w_sta = time.time()
         other_time = 0
+        self._process_num += 1
         self._total_processed_data_num += data.shape[0]
         pre_n_samples = self.stream_dataset.get_n_samples()
         pre_embeddings = self.stream_dataset.get_total_embeddings()
 
-        if self._record_time:
-            sta = time.time()
+        # if self._record_time:
+        #     sta = time.time()
         update = False
         if self._model_just_replaced:
             update = True
@@ -114,14 +125,22 @@ class DataProcessor:
             self.knn_searcher_approx.search_2(self.n_neighbors, pre_embeddings,
                                               self.stream_dataset.get_total_data(),
                                               data_embeddings, data, self.current_model_unfitted_num, update)
+
+        self._cached_candidate_idx.append(0)
+        self._cached_candidate_indices = \
+            np.concatenate([self._cached_candidate_indices, candidate_indices[0][np.newaxis, self.n_neighbors:self.n_neighbors + self._candidate_num]], axis=0)
+        self._cached_candidate_dists = \
+            np.concatenate([self._cached_candidate_dists, candidate_dists[0][np.newaxis,
+                                                          self.n_neighbors:self.n_neighbors + self._candidate_num]], axis=0)
+
         # knn_indices = knn_indices[np.newaxis, :]
         # knn_dists = knn_dists[np.newaxis, :]
 
         # 准确查询
         # knn_indices, knn_dists = query_knn2(data, np.concatenate([self.stream_dataset.get_total_data(), data],
         #                                                         axis=0), k=self.n_neighbors)
-        if self._record_time:
-            self.knn_cal_time += time.time() - sta
+        # if self._record_time:
+        #     self.knn_cal_time += time.time() - sta
         # print("knn acc:", len(np.intersect1d(knn_indices.squeeze(), acc_knn_indices.squeeze()))/self.n_neighbors)
 
         sta = time.time()
@@ -133,17 +152,18 @@ class DataProcessor:
         # before_acc = np.sum(np.ravel(acc_knn_indices) == np.ravel(cur_knn_indices)) / len(np.ravel(acc_knn_indices))
         # print("before_acc", before_acc)
 
-        if self._record_time:
-            sta = time.time()
+        # if self._record_time:
+        #     sta = time.time()
         if OPTIMIZE_NEIGHBORS:
             self.stream_dataset.update_knn_graph(pre_n_samples, data, None, candidate_indices, candidate_dists,
                                                  update_similarity=False, symmetric=False)
-        if self._record_time and self.embedding_update_time > 0:
-            self.knn_update_time += time.time() - sta
+        # if self._record_time and self.embedding_update_time > 0:
+        #     self.knn_update_time += time.time() - sta
 
-        # cur_knn_indices = self.stream_dataset.get_knn_indices()
-        # after_acc = np.sum(np.ravel(acc_knn_indices) == np.ravel(cur_knn_indices)) / len(np.ravel(acc_knn_indices))
-        # print("after_acc", after_acc)
+        if self._process_num % self._knn_update_iter == 0:
+            acc_knn_indices, acc_knn_dists = compute_knn_graph(self.stream_dataset.get_total_data(), None,
+                                                               self.n_neighbors, None)
+            self.stream_dataset._knn_manager.update_knn_graph(acc_knn_indices, acc_knn_dists)
 
         if update:
             fit_data = [self.stream_dataset.get_knn_indices(), self.stream_dataset.get_knn_dists(),
@@ -151,15 +171,15 @@ class DataProcessor:
         else:
             fit_data = None
 
-        neighbor_embeddings = None
+        # neighbor_embeddings = None
         # if self._record_time:
         #     sta = time.time()
         # neighbor_embeddings = self._model_embeddings[knn_indices.squeeze()]
         # if self._record_time:
         #     self.model_infer_time += time.time() - sta
 
-        if self._record_time:
-            sta = time.time()
+        # if self._record_time:
+        #     sta = time.time()
         # p_need_optimize, manifold_change, need_replace_model, need_update_model = \
         #     self.embedding_quality_supervisor.quality_record_lof(data_embeddings, neighbor_embeddings,
         #                                                          knn_indices, knn_dists, fit_data)
@@ -170,8 +190,8 @@ class DataProcessor:
         self._is_new_manifold.extend(manifold_change)
         # self._is_embedding_optimized = np.append(self._is_embedding_optimized, p_need_optimize)
         # print(p_need_optimize)
-        if self._record_time:
-            self.quality_record_time += time.time() - sta
+        # if self._record_time:
+        #     self.quality_record_time += time.time() - sta
 
         # unique_labels, counts = np.unique(self.stream_dataset.get_total_label()[:self.fitted_data_num],
         #                                   return_counts=True)
@@ -202,12 +222,12 @@ class DataProcessor:
         if need_replace_model or self._need_replace_model:
             if self.model_update_queue_set.training_data_queue.empty() or self._update_after_replace_signal:
                 # print("replace model")
-                if self._record_time:
-                    sta = time.time()
+                # if self._record_time:
+                #     sta = time.time()
                 self._replace_model()
                 need_replace_model = True
-                if self._record_time:
-                    self.replace_model_time += time.time() - sta
+                # if self._record_time:
+                #     self.replace_model_time += time.time() - sta
             else:
                 self._need_replace_model = True
                 need_replace_model = False
@@ -238,8 +258,8 @@ class DataProcessor:
         #     self.stream_dataset.get_total_embeddings()[pre_n_samples:] = data_embeddings
 
         if OPTIMIZE_NEIGHBORS and not need_replace_model:
-            if self._record_time:
-                sta = time.time()
+            # if self._record_time:
+            #     sta = time.time()
             neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
                 self.stream_dataset.get_pre_neighbor_changed_info()
             if len(neighbor_changed_indices) > 0:
@@ -250,8 +270,8 @@ class DataProcessor:
                     self.stream_dataset.raw_knn_weights[neighbor_changed_indices], anchor_positions,
                     replaced_indices, replaced_raw_weights)
                 self.stream_dataset.update_embeddings(optimized_embeddings)
-            if self._record_time:
-                self.embedding_update_time += time.time() - sta
+            # if self._record_time:
+            #     self.embedding_update_time += time.time() - sta
 
         ret = self.stream_dataset.get_total_embeddings()
         # self.whole_time += time.time() - w_sta
@@ -323,7 +343,7 @@ class DataProcessor:
                 self.model_update_queue_set.embedding_queue.get()  # 取出之前训练的结果，但是在这里是没用的了
             self._send_update_signal()
             embeddings, infer_model, stream_dataset, _ = self.model_update_queue_set.embedding_queue.get()
-            self.update_scdr(infer_model, embeddings, stream_dataset)
+            self.update_scdr(infer_model, embeddings, stream_dataset, self._total_processed_data_num)
         return embeddings
 
     def initial_embedding_optimizer_and_quality_supervisor(self):
@@ -404,6 +424,9 @@ class DataProcessorProcess(DataProcessor, Process):
         Process.__init__(self, name=self.name)
         self._embedding_data_queue: DataProcessorQueue = embedding_data_queue
         self._newest_model = None
+        self.sub_time = 0
+        self.dataset_slide_time = 0
+        self.last_time = 0
 
     def run(self) -> None:
         while True:
@@ -422,18 +445,19 @@ class DataProcessorProcess(DataProcessor, Process):
             self._newest_model = None
             # TODO: 滑动窗口
             sta = time.time()
-            self.slide_window()
+            out_num = self.slide_window()
             self._slide_time += time.time() - sta
 
-            sta = time.time()
+            # sta = time.time()
             total_embeddings, other_time = super().process(data, data_embedding, label)
-            self._embedding_data_queue.put_res([total_embeddings, self._newest_model, time.time() - sta - other_time, other_time])
+            self._embedding_data_queue.put_res([total_embeddings, self._newest_model, other_time, out_num])
             self._embedding_data_queue.processed()
 
         self.ending()
 
     def _replace_model(self):
         # Todo: 这里进行替换时，不一定是最新的模型
+        print("replace model!")
         newest_model, embeddings, total_data_idx = self._last_update_meta
         self._newest_model = newest_model
 
@@ -443,7 +467,8 @@ class DataProcessorProcess(DataProcessor, Process):
             tmp_model = newest_model
             new_data_embeddings = tmp_model(data).numpy()
 
-        total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)[-self.stream_dataset.get_n_samples():]
+        total_embeddings = np.concatenate([embeddings, new_data_embeddings], axis=0)[
+                           -self.stream_dataset.get_n_samples():]
         self.stream_dataset.update_embeddings(total_embeddings)
         self.stream_dataset.update_unfitted_data_num(new_data_embeddings.shape[0])
         # self.update_thresholds()
@@ -454,11 +479,20 @@ class DataProcessorProcess(DataProcessor, Process):
         self._update_after_replace_signal = False
 
     def slide_window(self):
-        out_num = self.stream_dataset.get_n_samples() - self._window_size
+        out_num = max(0, self.stream_dataset.get_n_samples() - self._window_size)
         if out_num <= 0:
-            return
-        self.stream_dataset.slide_window(out_num)
+            return out_num
 
+        # sta = time.time()
+        self._cached_candidate_indices = self._cached_candidate_indices[out_num:]
+        self._cached_candidate_indices -= out_num
+        self._cached_candidate_dists = self._cached_candidate_dists[out_num:]
+        self._cached_candidate_idx = self._cached_candidate_idx[out_num:]
+
+        self.stream_dataset.slide_window(out_num, self._cached_candidate_indices, self._cached_candidate_dists,
+                                         self._cached_candidate_idx)
+
+        # sta = time.time()
         self.embedding_quality_supervisor.slide_window(out_num)
         self._is_new_manifold = self._is_new_manifold[out_num:]
         self.fitted_data_num = max(0, self.fitted_data_num - out_num)
@@ -468,10 +502,6 @@ class DataProcessorProcess(DataProcessor, Process):
             self._skipped_slide_num.append(out_num)
 
         return out_num
-
-    def post_slide(self, out_num):
-        if out_num > 0:
-            self.stream_dataset.post_slide(out_num)
 
 
 def query_knn2(query_data, data_set, k, return_indices=False):

@@ -245,7 +245,7 @@ class StreamingANNSearchKD:
 
 
 class StreamingANNSearchAnnoy:
-    def __init__(self, beta=10, update_iter=500, automatic_beta=True):
+    def __init__(self, beta=5, update_iter=500, automatic_beta=False):
         self._searcher = None
         self._beta = beta
         self._update_iter = update_iter
@@ -279,11 +279,11 @@ class StreamingANNSearchAnnoy:
             candidate_data = pre_data[candidate_indices]
 
             dists = cdist(query_data, candidate_data).squeeze()
-            sorted_indices = np.argsort(dists)[:k].astype(int)
-            final_indices = candidate_indices[sorted_indices][np.newaxis, :]
-            final_dists = dists[sorted_indices][np.newaxis, :]
-            candidate_indices = [candidate_indices]
-            dists = [dists]
+            sorted_indices = np.argsort(dists).astype(int)
+            final_indices = candidate_indices[sorted_indices[:k]][np.newaxis, :]
+            final_dists = dists[sorted_indices[:k]][np.newaxis, :]
+            candidate_indices = [candidate_indices[sorted_indices]]
+            dists = [dists[sorted_indices]]
         else:
             # ====================================for batch process=====================================
             final_indices = np.empty((query_num, k), dtype=int)
@@ -298,12 +298,12 @@ class StreamingANNSearchAnnoy:
                 if not update:
                     candidate_indices = np.union1d(candidate_indices, unfitted_data_indices)
 
-                final_candidate_indices.append(candidate_indices)
                 cur_dists = cdist(query_data[i][np.newaxis, :], pre_data[candidate_indices]).squeeze()
-                dists.append(cur_dists)
-                sorted_indices = np.argsort(cur_dists)[:k]
-                final_indices[i] = candidate_indices[sorted_indices]
-                final_dists[i] = cur_dists[sorted_indices]
+                sorted_indices = np.argsort(cur_dists)
+                final_candidate_indices.append(candidate_indices[sorted_indices])
+                dists.append(cur_dists[sorted_indices])
+                final_indices[i] = candidate_indices[sorted_indices[:k]]
+                final_dists[i] = cur_dists[sorted_indices[:k]]
 
             candidate_indices = final_candidate_indices
             # ====================================for batch process=====================================

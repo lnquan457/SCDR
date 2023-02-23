@@ -51,7 +51,7 @@ class SCDRTrainer(CDRsExperiments):
         self.back_time = 0
 
     def update_batch_size(self, data_num):
-        self.batch_size = data_num // self._fixed_batch_num
+        self.batch_size = min(data_num // self._fixed_batch_num, 1024)
         self.stream_dataset.batch_size = self.batch_size
         self.model.update_batch_size(int(self.batch_size))
         self.model.reset_partial_corr_mask()
@@ -354,10 +354,11 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 self.stream_dataset.symmetric_nn_indices = np.concatenate([pre_symm_nn_indices, np.ones(cur_data_num)])
                 self.stream_dataset.symmetric_nn_weights = np.concatenate([pre_symm_nn_weights, np.ones(cur_data_num)])
 
-                knn_indices, knn_dists = compute_knn_graph(stream_dataset.get_total_data(), None, 10, None)
-                cur_knn_indices = stream_dataset.get_knn_indices()
-                acc = np.sum(np.ravel(knn_indices) == np.ravel(cur_knn_indices)) / len(np.ravel(knn_indices))
-                print("acc", acc)
+                knn_indices, knn_dists = compute_knn_graph(stream_dataset.get_total_data(), None, self.n_neighbors, None)
+                # cur_knn_indices = stream_dataset.get_knn_indices()
+                # acc = np.sum(np.ravel(knn_indices) == np.ravel(cur_knn_indices)) / len(np.ravel(knn_indices))
+                # print("acc", acc)
+                self.stream_dataset._knn_manager.update_knn_graph(knn_indices, knn_dists)
 
                 # acc_list = []
                 # for i, item in enumerate(knn_indices):

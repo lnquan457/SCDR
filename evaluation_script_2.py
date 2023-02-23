@@ -25,7 +25,7 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
     device = "cuda:0"
-    log_path = "logs/logs.txt"
+    log_path = "logs/logs_2.txt"
     method_list = [SIPCA, XTREAMING, INE, SISOMAPPP, SCDR]
     # method_list = [SCDR]
     # method_list = [SIPCA, XTREAMING, INE]
@@ -34,11 +34,11 @@ if __name__ == '__main__':
     # method_list = [SCDR]
     test_time = 2
     # situation_list = ["ND", "FD", "PD"]
-    situation = "PD"
+    situation = "FD"
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
-    dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
-    # dataset_list = ["food"]
-    dim_list = [36, 561, 256, 784, 9, 6, 6]
+    dataset_list = ["sat", "HAR_2", "usps", "mnist_fla", "shuttle", "arem", "basketball", "electric_devices",
+                    "texture", "Anuran Calls_8c"]
+    dim_list = [36, 561, 256, 784, 9, 6, 6, 96, 40, 22]
     # dataset_list = ["chess"]
     start_time = time_stamp_to_date_time_adjoin(time.time())
     excel_save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\{}_{}".format(start_time, situation)
@@ -65,7 +65,9 @@ if __name__ == '__main__':
 
         for j, dataset_name in enumerate(dataset_list):
             print("Processing Data:", dataset_name)
-            # if method_name == SCDR and j < 3:
+            if j < 7:
+                continue
+            # if method_name == SCDR and j < 1:
             #     continue
             if method_name == SIPCA and "mnist" in dataset_name:
                 continue

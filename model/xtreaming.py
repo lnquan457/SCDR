@@ -15,8 +15,9 @@ def sampled_control_points(data):
     km.fit(data)
     centroids = km.cluster_centers_
     # len(centroids) * n
-    dists = np.linalg.norm(np.repeat(np.expand_dims(data, axis=0), axis=0, repeats=centroids.shape[0]) - \
-                           np.repeat(np.expand_dims(centroids, axis=1), axis=1, repeats=n_samples), axis=-1)
+    # dists = np.linalg.norm(np.repeat(np.expand_dims(data, axis=0), axis=0, repeats=centroids.shape[0]) - \
+    #                        np.repeat(np.expand_dims(centroids, axis=1), axis=1, repeats=n_samples), axis=-1)
+    dists = cdist(centroids, data)
 
     sampled_indices = np.argsort(dists, axis=-1)[:, 0]
     sampled_x = data[sampled_indices]
@@ -67,28 +68,29 @@ class XtreamingModel:
         return self.buffered_data.shape[0] >= self.buffer_size
 
     def fit_new_data(self, data, labels=None):
+        key_time = 0
         sta = time.time()
         if not self._buffering(data):
-            return self.pre_embedding, 0, False
-
+            return self.pre_embedding, 0, False, 0
+        key_time += time.time() - sta
         self.total_data = self.buffered_data if self.total_data is None else np.concatenate([self.total_data,
                                                                                              self.buffered_data], axis=0)
-        add_data_time = time.time() - sta
         self._total_n_samples += self.buffered_data.shape[0]
 
+        sta = time.time()
         ret = self.fit()
-        self._slide_window()
-        self.time_costs += time.time() - sta
-        self._time_cost_records.append(time.time() - sta + self._time_cost_records[-1])
-        return ret, add_data_time, True
+        out_num = self._slide_window()
+        key_time += time.time() - sta
+        return ret, key_time, True, out_num
 
     def _slide_window(self):
-        out_num = self._total_n_samples - self._window_size
+        out_num = max(0, self._total_n_samples - self._window_size)
         if out_num > 0:
             self._total_out_num += out_num
             self._total_n_samples -= out_num
             self.pre_embedding = self.pre_embedding[out_num:]
             self.total_data = self.total_data[out_num:]
+        return out_num
 
     def model_slide(self, new_embeddings, out_num):
         self.pre_control_indices -= out_num

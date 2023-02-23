@@ -31,6 +31,13 @@ def normalization(data):
 
 def cal_global_position_change(cur_embeddings, pre_embeddings):
     pre_n_samples = pre_embeddings.shape[0]
+    total_embeddings = np.concatenate([cur_embeddings, pre_embeddings], axis=0)
+    cur_x_min, cur_y_min = np.min(total_embeddings, axis=0)
+    cur_x_max, cur_y_max = np.max(total_embeddings, axis=0)
+    total_embeddings[:, 0] = (total_embeddings[:, 0] - cur_x_min) / (cur_x_max - cur_x_min)
+    total_embeddings[:, 1] = (total_embeddings[:, 1] - cur_y_min) / (cur_y_max - cur_y_min)
+    cur_embeddings = total_embeddings[:cur_embeddings.shape[0]]
+    pre_embeddings = total_embeddings[cur_embeddings.shape[0]:]
     dists = np.linalg.norm(cur_embeddings[:pre_n_samples] - pre_embeddings, axis=-1)
     return np.mean(dists)
 
@@ -143,6 +150,7 @@ class Metric:
 
         self.low_dis_matrix = None
         self.low_knn_indices = None
+        self.low_nn_indices = None
 
         # 是否对丢失邻居点分布进行记录
         self.record_lost_neighbors = False
@@ -154,7 +162,7 @@ class Metric:
         self.first_lost_neighbor_dict = {}
         self.first_fake_neighbor_dict = {}
 
-        self.detail_trust_cont = True
+        self.detail_trust_cont = False
         # 虚假邻居中，与样本类别相同的比例
         self.sim_fake_num = 0
         # 丢失邻居中，与样本类别不同的比例， 两者都是越高越好
@@ -198,6 +206,21 @@ class Metric:
         self.low_dis_matrix = None
         self.low_knn_indices = None
         return trust, continuity, neighbor_hit, knn_ac, sc, dsc
+
+    def cal_simplified_metrics(self, k, embedding_data, knn_k=10, compute_shepard=False, final=False):
+        self.val_count += 1
+        self.acquire_low_distance(embedding_data)
+        # trust = self.metric_trustworthiness(k, embedding_data, final=final)
+        # continuity = self.metric_continuity(k, embedding_data)
+        trust, continuity, neighbor_hit, knn_ac = self.metric_trust_continuity(k, embedding_data)
+
+        # neighbor_hit = self.metric_neighborhood_hit(k, embedding_data)
+        # knn_ac = knn_score(embedding_data, self.origin_label, knn_k)
+
+        self.embedding_data = None
+        self.low_dis_matrix = None
+        self.low_knn_indices = None
+        return trust, continuity[0], neighbor_hit, knn_ac
 
     def eval_dataset(self, k):
         is_balanced, class_num, class_counts = self.metric_dc_dataset_is_balanced()
@@ -297,7 +320,8 @@ class Metric:
         if self.low_dis_matrix is None:
             self.low_dis_matrix = get_pairwise_distance(embedding_data, metric="euclidean")
         if self.low_knn_indices is None:
-            self.low_knn_indices = np.argsort(self.low_dis_matrix, axis=1)[:, 1:self.K + 1]
+            self.low_nn_indices = np.argsort(self.low_dis_matrix, axis=1)
+            self.low_knn_indices = self.low_nn_indices[:, 1:self.K + 1]
 
     def metric_fake_lost(self, embedding_data, k, high_nn_indices=None):
         self.acquire_low_distance(embedding_data)
@@ -353,6 +377,58 @@ class Metric:
     这个值较小就说明算法把原来高维空间中相距较远的两个点投影到比较近的距离了。
     """
 
+    def metric_trust_continuity(self, k, embedding_data, high_nn_indices=None, final=False):
+        self.acquire_low_distance(embedding_data)
+        # 按距离从小到大进行排序，默认按列进行排序
+        # 筛选出高维空间中每个数据点的除自己以外的前k个邻居
+
+        knn_indices = self.knn_indices
+
+        sum_i_t = 0
+        sum_i = 0
+        n = knn_indices.shape[0]
+        indices = np.arange(0, n)
+        pred_knn_labels = np.zeros(shape=(n, self.K))
+        labels_predict = []
+
+        for i in range(n):
+            # 返回在knn_proj（低维空间）中但是不在knn_orig（高维空间中）的排序后的邻居索引
+            U = np.setdiff1d(self.low_knn_indices[i], knn_indices[i])
+            sum_j_t = 0
+            for j in range(U.shape[0]):
+                high_rank = np.where(self.high_nn_indices[i] == U[j])[0][0]
+                sum_j_t += high_rank - k
+
+            sum_i_t += sum_j_t
+
+            # 这里的V代表的是在高维空间中但是不在低维空间上的邻居点，也就是低维空间上丢失的邻居点
+            V = np.setdiff1d(knn_indices[i], self.low_knn_indices[i])
+
+            sum_j = 0
+            for j in range(V.shape[0]):
+                # 丢失邻居点在低维空间上的秩序
+                low_rank = np.where(self.low_nn_indices[i] == V[j])[0]
+                sum_j += low_rank - k
+
+            sum_i += sum_j
+
+            pred_knn_labels[i] = self.origin_label[self.low_knn_indices[i]]
+
+            top_k = self.origin_label[knn_indices[i]]
+            nums, counts = np.unique(top_k, return_counts=True)
+            labels_predict.append(nums[np.argmax(counts)])
+
+        labels_predict = np.array(labels_predict)
+        labels_gt = self.origin_label
+        acc = np.sum(labels_predict == labels_gt) / len(labels_gt)
+
+        nn_label_same_ratio = np.mean(
+            np.mean((pred_knn_labels == np.tile(self.origin_label[indices].reshape((-1, 1)), k)).astype('uint8'),
+                    axis=1))
+
+        return 1 - (2 / (n * k * (2 * n - 3 * k - 1)) * sum_i_t), 1 - (2 / (n * k * (2 * n - 3 * k - 1)) * sum_i), \
+            nn_label_same_ratio, acc
+
     def metric_trustworthiness(self, k, embedding_data, high_nn_indices=None, final=False):
         self.acquire_low_distance(embedding_data)
         # 按距离从小到大进行排序，默认按列进行排序
@@ -365,33 +441,15 @@ class Metric:
 
         sum_i = 0
         n = knn_indices.shape[0]
-        fake_num = 0
-        sim_fake_num = 0
         for i in range(n):
             # 返回在knn_proj（低维空间）中但是不在knn_orig（高维空间中）的排序后的邻居索引
             U = np.setdiff1d(self.low_knn_indices[i], knn_indices[i])
-            if self.detail_trust_cont:
-                fake_num += len(U)
-                sim_fake_num += len(np.where(self.origin_label[i] == self.origin_label[U])[0])
             sum_j = 0
             for j in range(U.shape[0]):
                 high_rank = np.where(high_nn_indices[i] == U[j])[0][0]
                 sum_j += high_rank - k
 
-                # ==============================记录虚假邻居点的秩序分布=============================
-                # 低维空间上的秩序
-                if self.record_lost_neighbors:
-                    low_rank = np.where(self.low_knn_indices[i] == U[j])[0][0]
-                    if low_rank not in self.fake_neighbor_dict:
-                        self.fake_neighbor_dict[low_rank] = 0
-                    self.fake_neighbor_dict[low_rank] += 1
-                    self.fake_neighbor_points.append([low_rank, high_rank])
-                # =================================================================================
-
             sum_i += sum_j
-
-        if fake_num != 0:
-            self.sim_fake_num = sim_fake_num
 
         return 1 - (2 / (n * k * (2 * n - 3 * k - 1)) * sum_i)
 
@@ -404,49 +462,25 @@ class Metric:
     def metric_continuity(self, k, embedding_data, final=False, high_nn_indices=None):
         self.acquire_low_distance(embedding_data)
 
-        if high_nn_indices is None:
-            high_nn_indices = self.high_nn_indices
-
         knn_indices = self.knn_indices
         n = knn_indices.shape[0]
 
         sum_i = 0
-        lost_num = 0
-        dissim_lost_num = 0
 
         for i in range(n):
             # 这里的V代表的是在高维空间中但是不在低维空间上的邻居点，也就是低维空间上丢失的邻居点
             V = np.setdiff1d(knn_indices[i], self.low_knn_indices[i])
 
-            if self.detail_trust_cont:
-                lost_num += len(V)
-                dissim_lost_num += len(np.where(self.origin_label[i] != self.origin_label[V])[0])
-
-            pro_nn_indices = np.argsort(self.low_dis_matrix[i])
-
             sum_j = 0
             for j in range(V.shape[0]):
                 # 丢失邻居点在低维空间上的秩序
-                low_rank = np.where(pro_nn_indices == V[j])[0]
-
-                # ==============================记录丢失邻居点的秩序分布=============================
-                # 高维空间上的秩序
-                high_rank = np.where(knn_indices[i] == V[j])[0][0]
-                if high_rank not in self.lost_neighbor_dict:
-                    self.lost_neighbor_dict[high_rank] = 0
-                self.lost_neighbor_dict[high_rank] += 1
-                self.lost_neighbor_points.append([high_rank, low_rank])
-                # =================================================================================
-
+                low_rank = np.where(self.low_nn_indices[i] == V[j])[0]
                 sum_j += low_rank - k
 
             sum_i += sum_j
 
-        if lost_num != 0:
-            self.dissim_lost_num = dissim_lost_num
-
-        if self.val_count == 1:
-            self.first_lost_neighbor_dict = dict.copy(self.lost_neighbor_dict)
+        # if self.val_count == 1:
+        #     self.first_lost_neighbor_dict = dict.copy(self.lost_neighbor_dict)
 
         return 1 - (2 / (n * k * (2 * n - 3 * k - 1)) * sum_i)
 

@@ -115,10 +115,11 @@ class SCDRFullParallel(SCDRParallel):
         self._embedding_data_queue: DataProcessorQueue = embedding_data_queue
 
     def fit_new_data(self, data, labels=None, end=False):
+        key_time = 0
         if not self.model_trained:
 
             if not self._caching_initial_data(data, labels):
-                return None, 0, False
+                return None, 0, False, 0
 
             self.stream_dataset.add_new_data(data=self.initial_data_buffer, labels=self.initial_label_buffer)
             total_embeddings = self._initial_project_model()
@@ -127,24 +128,31 @@ class SCDRFullParallel(SCDRParallel):
             self.data_processor.daemon = True
             self.data_processor.start()
             self._embedding_data_queue.put_res([total_embeddings, None, 0, 0])
-            add_data_time = 0
+            out_num = 0
         else:
             if data is None:
                 self._embedding_data_queue.put([data, None, labels, end])
-                return None, 0, False
+                return None, 0, False, 0
 
-            data_embeddings = self.nn_embedder.embed(data)
-
-            total_embeddings, newest_model, cost_time, add_data_time = self._embedding_data_queue.get_res()
             sta = time.time()
+            data_embeddings = self.nn_embedder.embed(data)
+            key_time += time.time() - sta
+
+            t_sta = time.time()
+            total_embeddings, newest_model, add_data_time, out_num = self._embedding_data_queue.get_res()
+            waiting_time = time.time() - t_sta
+
+            key_time += max(0, waiting_time - add_data_time)
+
             total_embeddings = np.concatenate([total_embeddings, data_embeddings], axis=0)
 
+            sta = time.time()
             if newest_model is not None:
                 self.nn_embedder.update_model(newest_model)
             self._embedding_data_queue.put([data, data_embeddings, labels, end])
-            self._time_cost_records.append(time.time() - sta + cost_time + self._time_cost_records[-1])
+            key_time += time.time() - sta
 
-        return total_embeddings, add_data_time, True
+        return total_embeddings, key_time, True, out_num
 
 
 def query_knn(query_data, data_set, k, return_indices=False):
