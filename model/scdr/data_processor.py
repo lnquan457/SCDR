@@ -28,8 +28,8 @@ class DataProcessor:
         # 用于确定何时要更新模型，1）新的流形出现；2）模型对旧流形数据的嵌入质量太低；3）长时间没有更新；
         self.model_update_intervals = 6000
         self.model_update_num_thresh = 50
-        self.manifold_change_num_thresh = 200
-        self.bad_embedding_num_thresh = 400
+        self.manifold_change_num_thresh = 100
+        self.bad_embedding_num_thresh = 100
 
         # self._manifold_change_d_weight = 1
         # self._local_move_std_weight = 3
@@ -65,8 +65,7 @@ class DataProcessor:
         self._model_is_updating = False
         self._model_update_delayed = False
         self._last_update_meta = None
-        # 新数据是否来自新的流形，以及其嵌入是否经过优化
-        self._is_new_manifold = []
+
         self._total_processed_data_num = 0
         self._out_since_last_send_update = 0
         self._skipped_slide_num = []
@@ -154,9 +153,9 @@ class DataProcessor:
 
         # if self._record_time:
         #     sta = time.time()
-        if OPTIMIZE_NEIGHBORS:
-            self.stream_dataset.update_knn_graph(pre_n_samples, data, None, candidate_indices, candidate_dists,
-                                                 update_similarity=False, symmetric=False)
+
+        self.stream_dataset.update_knn_graph(pre_n_samples, data, None, candidate_indices, candidate_dists,
+                                             update_similarity=False, symmetric=False)
         # if self._record_time and self.embedding_update_time > 0:
         #     self.knn_update_time += time.time() - sta
 
@@ -187,7 +186,6 @@ class DataProcessor:
         p_need_optimize, manifold_change, need_replace_model, need_update_model = \
             self.embedding_quality_supervisor.quality_record_simple(knn_indices, knn_dists, fit_data)
 
-        self._is_new_manifold.extend(manifold_change)
         # self._is_embedding_optimized = np.append(self._is_embedding_optimized, p_need_optimize)
         # print(p_need_optimize)
         # if self._record_time:
@@ -232,8 +230,8 @@ class DataProcessor:
                 self._need_replace_model = True
                 need_replace_model = False
 
-        if not need_replace_model:
-            pass
+        # if not need_replace_model:
+        #     pass
             # ====================================1. 只对新数据本身的嵌入进行更新=======================================
             # if OPTIMIZE_NEW_DATA_EMBEDDING:
             #     self.opt_count += 1
@@ -257,7 +255,7 @@ class DataProcessor:
         # else:
         #     self.stream_dataset.get_total_embeddings()[pre_n_samples:] = data_embeddings
 
-        if OPTIMIZE_NEIGHBORS and not need_replace_model:
+        if not need_replace_model:
             # if self._record_time:
             #     sta = time.time()
             neighbor_changed_indices, replaced_raw_weights, replaced_indices, anchor_positions = \
@@ -318,7 +316,7 @@ class DataProcessor:
         print("send fitted data num:", pre_fitted_num)
         self.model_update_queue_set.training_data_queue.put(
             [self.stream_dataset, None, pre_fitted_num,
-             self.stream_dataset.get_n_samples() - pre_fitted_num, self._is_new_manifold,
+             self.stream_dataset.get_n_samples() - pre_fitted_num,
              self._total_processed_data_num, self._out_since_last_send_update])
         self._model_is_updating = True
         self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.UPDATE)

@@ -414,7 +414,7 @@ class Metric:
 
             pred_knn_labels[i] = self.origin_label[self.low_knn_indices[i]]
 
-            top_k = self.origin_label[knn_indices[i]]
+            top_k = self.origin_label[self.low_knn_indices[i]]
             nums, counts = np.unique(top_k, return_counts=True)
             labels_predict.append(nums[np.argmax(counts)])
 

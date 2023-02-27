@@ -26,7 +26,7 @@ if __name__ == '__main__':
     args = parse_args()
     device = "cuda:0"
     log_path = "logs/logs.txt"
-    method_list = [SIPCA, XTREAMING, INE, SISOMAPPP, SCDR]
+    method_list = [SIPCA]
     # method_list = [SCDR]
     # method_list = [SIPCA, XTREAMING, INE]
     # method_list = [INE, SCDR, SISOMAPPP]
@@ -34,9 +34,10 @@ if __name__ == '__main__':
     # method_list = [SCDR]
     test_time = 2
     # situation_list = ["ND", "FD", "PD"]
-    situation = "PD"
+    situation = "FD"
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
-    dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
+    # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
+    dataset_list = ["electric_devices"]
     # dataset_list = ["food"]
     dim_list = [36, 561, 256, 784, 9, 6, 6]
     # dataset_list = ["chess"]

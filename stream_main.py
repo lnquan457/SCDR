@@ -105,5 +105,5 @@ if __name__ == '__main__':
     cfg.merge_from_file(cfg_path)
     result_save_dir = "results/{}/".format(args.method)
 
-    custom_indices_path = os.path.join(args.indices_dir, "{}_FD.npy".format(cfg.exp_params.dataset))
+    custom_indices_path = os.path.join(args.indices_dir, "{}_ND.npy".format(cfg.exp_params.dataset))
     custom_indices_training(cfg, custom_indices_path, args, result_save_dir, cfg_path, device, log_path)

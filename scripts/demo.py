@@ -10,13 +10,15 @@ from umap import UMAP
 from model.scdr.dependencies.experiment import position_vis
 
 if __name__ == '__main__':
-    data_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\20230217_15h30m42s"
-    save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\per_metrics_0217"
-    total_res = np.empty((3, 7, 5))
+    data_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\20230221_21h52m04s_PD"
+    save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\20230221_21h52m04s_PD"
+    total_res = np.empty((3, 10, 5))
     method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE", "SCDR"]
+    # method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE"]
     metric_indices = [-3, -2, -1]
     metric_list = ["Trust", "Neighbor Hit", "KA(10)", "Position Change", "Single Process Time", "Total Process Time", "Delay Time"]
-    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps"]
+    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps", "Anuran Calls_8c",
+                    "electric_devices", "texture"]
 
     for i, method in enumerate(method_list):
         print("=================", method)
@@ -24,7 +26,7 @@ if __name__ == '__main__':
         for j, dataset in enumerate(dataset_list):
             print("*****************", dataset)
             if method == "sPCA" and dataset == "mnist_fla":
-                data = [0 for i in range(4)]
+                data = [0 for i in range(3)]
                 data = np.array([data])
             else:
                 file_path = os.path.join(method_dir, "{}.xlsx".format(dataset))

@@ -85,7 +85,7 @@ class StreamingEx:
         self.eval_k = 10
         self.vc_k = self.eval_k
 
-        self._save_embeddings_for_eval = False
+        self._save_embeddings_for_eval = True
         self._key_time = 0
         self.pre_embedding = None
         self.cur_embedding = None

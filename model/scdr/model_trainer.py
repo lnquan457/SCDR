@@ -31,6 +31,7 @@ class SCDRTrainer(CDRsExperiments):
         self._is_incremental_learning = False
         self.incremental_steps = 0
         self._fixed_batch_num = 3
+        self._initial_fixed_batch_num = 8
 
         # 用于计算VC损失
         self.rep_batch_nums = None
@@ -64,7 +65,10 @@ class SCDRTrainer(CDRsExperiments):
         self.initialize_streaming_dataset(dataset)
         self.batch_size = self.configs.method_params.batch_size
         sta = time.time()
+        tmp_batch_num = self._fixed_batch_num
+        self._fixed_batch_num = self._initial_fixed_batch_num
         self.update_batch_size(dataset.get_n_samples())
+        self._fixed_batch_num = tmp_batch_num
         self.update_dataloader(self.initial_train_epoch)
         print("first prepare dataset cost:", time.time() - sta)
         self.result_save_dir_modified = True
@@ -334,7 +338,7 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 self._last_fit_data_idx = stream_dataset.get_n_samples()
                 total_data_idx = embeddings.shape[0]
             else:
-                stream_dataset, _, fitted_data_num, cur_data_num, _is_new_manifold, total_data_idx, out_num = training_info
+                stream_dataset, _, fitted_data_num, cur_data_num, total_data_idx, out_num = training_info
                 # print("fitted num", fitted_data_num)
                 sta = time.time()
                 # pre_num = self.pre_embeddings.shape[0]

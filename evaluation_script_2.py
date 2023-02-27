@@ -26,7 +26,8 @@ if __name__ == '__main__':
     args = parse_args()
     device = "cuda:0"
     log_path = "logs/logs_2.txt"
-    method_list = [SIPCA, XTREAMING, INE, SISOMAPPP, SCDR]
+    # method_list = [SIPCA, XTREAMING, INE, SISOMAPPP]
+    method_list = [XTREAMING, INE, SISOMAPPP]
     # method_list = [SCDR]
     # method_list = [SIPCA, XTREAMING, INE]
     # method_list = [INE, SCDR, SISOMAPPP]
@@ -34,7 +35,7 @@ if __name__ == '__main__':
     # method_list = [SCDR]
     test_time = 2
     # situation_list = ["ND", "FD", "PD"]
-    situation = "FD"
+    situation = "ND"
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
     dataset_list = ["sat", "HAR_2", "usps", "mnist_fla", "shuttle", "arem", "basketball", "electric_devices",
                     "texture", "Anuran Calls_8c"]
@@ -65,10 +66,10 @@ if __name__ == '__main__':
 
         for j, dataset_name in enumerate(dataset_list):
             print("Processing Data:", dataset_name)
-            if j < 7:
-                continue
-            # if method_name == SCDR and j < 1:
+            # if j < 7:
             #     continue
+            if method_name == XTREAMING and j < 6:
+                continue
             if method_name == SIPCA and "mnist" in dataset_name:
                 continue
             if method_name == SCDR:

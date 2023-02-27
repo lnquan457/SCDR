@@ -36,21 +36,25 @@ def cal_knn(pdist):
 
 
 if __name__ == '__main__':
-    res_dir = r"D:\Projects\流数据\Code\SCDR\results\eval_res\0215\raw data"
+    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\ND\0224"
     data_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
-    save_dir = r"D:\Projects\流数据\Code\SCDR\results\eval_res\0215\metric data"
+    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\ND\0224"
     eval_k = 10
     window_size = 5000
     valid_metric_indices = [0, 1, 2, 3, 4]
-    total_res_data = np.zeros((5, 7, 5))
+    total_res_data = np.zeros((5, 10, 5))
     xtreaming_buffer_size = 200
-    # method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE", "SCDR"]
-    # method_list = ["SIsomap++", "INE", "SCDR"]
-    method_list = ["Xtreaming", "INE"]
+    eval_step = 100
+    situation = "ND"
+    # method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE"]
+    method_list = ["SIsomap++"]
+    # method_list = ["SCDR"]
     metric_list = ["Trust", "Continuity", "Neighbor Hit", "KA(10)", "Position Change"]
-    # dataset_list = ["HAR_2"]
-    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps"]
+    # dataset_list = ["arem"]
+    # dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps", "Anuran Calls_8c",
+    #                 "electric_devices", "texture"]
+    dataset_list = ["basketball"]
 
     for i, method in enumerate(method_list):
         print("Method:", method)
@@ -61,6 +65,7 @@ if __name__ == '__main__':
             if method == "sPCA" and dataset == "mnist_fla":
                 for k, item in enumerate(valid_metric_indices):
                     total_res_data[k, j, i] = 0
+                j += 1
                 continue
 
             dataset_dir = os.path.join(method_dir, dataset)
@@ -68,8 +73,7 @@ if __name__ == '__main__':
                 x = np.array(hf['x'], dtype=float)
                 y = np.array(hf['y'], dtype=int)
 
-            initial_indices, after_indices = np.load(os.path.join(indices_dir, "{}_FD.npy".format(dataset)), allow_pickle=True)
-            initial_num = min(len(initial_indices), window_size)
+            initial_indices, after_indices = np.load(os.path.join(indices_dir, "{}_{}.npy".format(dataset, situation)), allow_pickle=True)
             initial_data = x[initial_indices]
             initial_label = y[initial_indices]
 
@@ -80,97 +84,78 @@ if __name__ == '__main__':
 
             dataset_res = []
             res_dict = {}
+            # dataset_dir = r"H:\Projects\流数据\Code\SCDR\results\SCDR\arem"
             for k, item in enumerate(os.listdir(dataset_dir)):
                 if item.endswith("xlsx"):
                     continue
-                total_data = initial_data
-                total_label = initial_label
                 item_dir = os.path.join(dataset_dir, item)
                 eval_embedding_dir = os.path.join(item_dir, "eval_embeddings")
+                # eval_embedding_dir = r"H:\Projects\流数据\Code\SCDR\results\SCDR\arem\20230224_16h04m23s\eval_embeddings"
 
                 metric_records = [[] for i in range(len(METRIC_NAMES) + 1)]
                 metric_image_dir = os.path.join(item_dir, "metric_imgs")
                 check_path_exist(metric_image_dir)
-                sta_t = 0
+                sta_time_step = 1
                 eval_num = 0
-                pre_pairwise_dist = get_pairwise_distance(initial_data[-window_size:],
-                                                          pairwise_distance_cache_path=None, preload=False)
-                total_data = total_data[-window_size:]
-                total_label = total_label[-window_size:]
-                pre_embedding_pdist = None
-                pre_data_num = initial_num
-                pre_e_num = 0
-                data_idx = len(initial_indices)
-                pre_time_step = 0
+
+                pre_pairwise_dist = None
+                pre_time_step = sta_time_step
                 eval_time = 0
+                data_idx = len(initial_indices)
+                total_data = None
+                total_label = None
                 while True:
-                    sta_t += 100
-                    jtem = "t{}.npy".format(sta_t)
+                    sta_time_step += eval_step
+                    jtem = "t{}.npy".format(sta_time_step - 1)
                     if not os.path.exists(os.path.join(eval_embedding_dir, jtem)):
                         break
-                    print(jtem)
                     cur_time_step, cur_embeddings, pre_valid_embeddings, cur_valid_embeddings = \
                         np.load(os.path.join(eval_embedding_dir, jtem), allow_pickle=True)
 
                     new_data_num = cur_time_step - pre_time_step
                     new_data = total_raw_data[data_idx:data_idx+new_data_num]
-                    total_data = np.concatenate([total_data, new_data], axis=0)
-                    total_label = np.concatenate([total_label, total_raw_label[data_idx:data_idx+new_data_num]])
+                    new_label = total_raw_label[data_idx:data_idx+new_data_num]
+                    if total_data is None:
+                        valid_init_num = window_size - new_data_num
+                        total_data = np.concatenate([initial_data[-valid_init_num:], new_data], axis=0)
+                        total_label = np.concatenate([initial_label[-valid_init_num:], new_label])
+                    else:
+                        total_data = np.concatenate([total_data, new_data], axis=0)
+                        total_label = np.concatenate([total_label, new_label])
 
-                    out_num = max(0, pre_pairwise_dist.shape[0] - window_size + new_data_num)
+                    out_num = max(0, total_data.shape[0] - window_size)
                     if out_num > 0:
-                        pre_pairwise_dist = pre_pairwise_dist[out_num:, ][:, out_num:]
+                        if pre_pairwise_dist is not None:
+                            pre_pairwise_dist = pre_pairwise_dist[out_num:, :][:, out_num:]
                         total_data = total_data[out_num:]
                         total_label = total_label[out_num:]
 
-                    data_idx = initial_num + cur_time_step
-                    cur_data_num = min(window_size, data_idx)
+                    cur_data_num = total_data.shape[0]
                     cur_embeddings = cur_embeddings[-cur_data_num:]
                     pre_valid_embeddings = pre_valid_embeddings[-cur_data_num:]
                     cur_valid_embeddings = cur_valid_embeddings[-cur_data_num:]
-                    # print("data idx", data_idx)
-
                     embedding_num = cur_embeddings.shape[0]
 
-                    sta = time.time()
-                    pre_data_num = pre_pairwise_dist.shape[0]
-                    new2cur_dist = cdist(new_data, total_data)
-                    # print("new data num", new_data_num, " pre data num", pre_data_num)
-                    # print(pre_pairwise_dist.shape, new2cur_dist.shape)
-                    pairwise_distance = np.concatenate([pre_pairwise_dist, new2cur_dist[:, :pre_data_num]], axis=0)
-                    pairwise_distance = np.concatenate([pairwise_distance, new2cur_dist.T], axis=1)
-                    pre_pairwise_dist = pairwise_distance
-                    pre_time_step = cur_time_step
-                    pre_data_num += new_data_num
+                    if pre_pairwise_dist is None:
+                        pairwise_distance = get_pairwise_distance(total_data)
+                        pre_pairwise_dist = pairwise_distance
+                    else:
+                        new2cur_dist = cdist(new_data, total_data)
+                        pairwise_distance = np.concatenate([pre_pairwise_dist, new2cur_dist[:, :-new_data_num]], axis=0)
+                        pairwise_distance = np.concatenate([pairwise_distance, new2cur_dist.T], axis=1)
+                        pre_pairwise_dist = pairwise_distance
 
+                    pre_time_step = cur_time_step
+                    data_idx += new_data_num
                     eval_time += 1
+                    output = ""
                     if method == "Xtreaming" and eval_time % 2 != 1:
                         for ii, metric in enumerate(metric_list):
                             metric_records[ii].append(metric_records[ii][-1])
                         continue
 
-                    if pre_embedding_pdist is None:
-                        pre_embedding_pdist = get_pairwise_distance(cur_embeddings)
-                    else:
-
-                        if method == "Xtreaming":
-                            new_data_num = 200
-
-                        e_out_num = 0 if pre_embedding_pdist is None else max(0, pre_embedding_pdist.shape[
-                            0] - window_size + new_data_num)
-                        if e_out_num > 0:
-                            pre_embedding_pdist = pre_embedding_pdist[e_out_num:, ][:, e_out_num:]
-                            pre_e_num -= e_out_num
-
-                        new_embeddings = cur_embeddings[-new_data_num:]
-                        new2cur_e_dist = cdist(new_embeddings, cur_embeddings)
-                        # print(new2cur_e_dist.shape, pre_embedding_pdist.shape, pre_e_num)
-                        embedding_pdist = np.concatenate([pre_embedding_pdist, new2cur_e_dist[:, :pre_e_num]], axis=0)
-                        embedding_pdist = np.concatenate([embedding_pdist, new2cur_e_dist.T], axis=1)
-                        pre_embedding_pdist = embedding_pdist
+                    pre_embedding_pdist = get_pairwise_distance(cur_embeddings)
                     pre_e_num = pre_embedding_pdist.shape[0]
-                    # pairwise_distance = get_pairwise_distance(cur_data, pairwise_distance_cache_path=None,
-                    #                                           preload=False)
 
                     eval_pdist = pairwise_distance[:embedding_num, :][:, :embedding_num]
                     knn_indices, knn_dists = cal_knn(eval_pdist)
@@ -181,9 +166,11 @@ if __name__ == '__main__':
 
                     faithful_results = metric_tool.cal_simplified_metrics(eval_k, cur_embeddings, knn_k=eval_k)
                     for ii, metric in enumerate(faithful_results):
+                        output += "%s %.4f " % (metric_list[ii], metric)
                         metric_records[ii].append(metric)
-
-                    position_change = cal_global_position_change(cur_valid_embeddings, pre_valid_embeddings)
+                    print(jtem, output)
+                    # position_change = cal_global_position_change(cur_valid_embeddings, pre_valid_embeddings)
+                    position_change = 0
                     metric_records[-1].append(position_change)
 
                 metric_records = np.array(metric_records)
