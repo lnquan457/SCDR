@@ -83,7 +83,7 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
         candidate_embeddings = self._generate_candidate_embeddings()
         initial_embeddings = _select_min_loss_one(candidate_embeddings, self.pre_embeddings[new_knn_indices],
                                                   high_prob, self._k)
-
+        initial_embeddings = np.mean(self.pre_embeddings[new_knn_indices], axis=0)
         return initial_embeddings
 
     def _optimize_new_data_embedding(self, new_data_knn_indices, initial_embedding, new_data_prob):
@@ -92,7 +92,7 @@ class INEModel(kNNBasedIncrementalMethods, TSNE):
             normed_similarities = similarities / np.expand_dims(np.sum(similarities, axis=1), axis=1)
             return -np.sum(high_prob * np.log(normed_similarities))
 
-        res = scipy.optimize.minimize(loss_func, initial_embedding, method="BFGS", jac=tsne_grad,
+        res = scipy.optimize.minimize(loss_func, initial_embedding, method="Newton-CG", jac=tsne_grad,
                                       args=(new_data_prob, self.pre_embeddings[new_data_knn_indices], self._k),
                                       options={'gtol': 1e-6, 'disp': False})
         # print("opt x:", res.x)

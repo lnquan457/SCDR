@@ -26,8 +26,8 @@ def simple_draw(x_indices, y_indices, title, save_path):
 
 
 if __name__ == '__main__':
-    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\ND\0224"
-    save_dir = r"D:\Projects\流数据\Evaluation\表格数据\ND\0224"
+    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0222"
+    save_dir = r"D:\Projects\流数据\Evaluation\表格数据\PD\0222"
     data_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
     eval_k = 10
@@ -37,13 +37,13 @@ if __name__ == '__main__':
     xtreaming_buffer_size = 200
     eval_step = 100
     situation = "PD"
-    # method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE", "SCDR"]
-    method_list = ["sPCA", "Xtreaming", "INE", "SCDR", "SIsomap++"]
-    # method_list = ["SCDR"]
+    method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE", "SCDR"]
+    # method_list = ["sPCA", "Xtreaming", "INE", "SCDR", "SIsomap++"]
+    # method_list = ["sPCA"]
     metric_list = ["Position Change", "Big Position Change"]
-    # dataset_list = ["HAR_2"]
-    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps", "Anuran Calls_8c",
-                    "electric_devices", "texture"]
+    dataset_list = ["mnist_fla"]
+    # dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps", "Anuran Calls_8c",
+    #                 "electric_devices", "texture"]
     # dataset_list = ["Anuran Calls_8c", "electric_devices", "texture"]
 
     for i, method in enumerate(method_list):
@@ -52,11 +52,6 @@ if __name__ == '__main__':
         j = 0
         for dataset in dataset_list:
             print("==========Dataset:", dataset)
-            if method == "sPCA" and dataset == "mnist_fla":
-                for k, item in enumerate(valid_metric_indices):
-                    total_res_data[k, j, i] = 0
-                j += 1
-                continue
 
             dataset_dir = os.path.join(method_dir, dataset)
             dataset_res = np.zeros((2, 2))
@@ -120,6 +115,7 @@ if __name__ == '__main__':
 
                 avg_metric_records = np.mean(metric_records)
                 avg_big_metric_records = np.mean(big_metric_records)
+                np.save(os.path.join(item_dir, "ts_metric_records.npy"), [metric_records, big_metric_records])
 
                 out_put = " PC: %.4f Big PC: %.4f" % (avg_metric_records, avg_big_metric_records)
                 print("Final Average **************************************", out_put)

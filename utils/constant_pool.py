@@ -3,6 +3,7 @@
 import numpy as np
 from multiprocessing import Queue
 
+FINAL_DATASET_LIST = ["arem", "basketball", "HAR_2", "shuttle", "mnist_fla"]
 METRIC_NAMES = ["Trust", "Continuity", 'Neighbor Hit', 'KA(10)']
 STEADY_METRIC_NAMES = ["Global Position Change", "Manifold Pdist Change"]
 ALL_DATASETS = ["animals", "banknote", "Anuran Calls_8c", "cifar10_ex_10000", "cnae9", "dogs_cats_10000_idx",

@@ -51,12 +51,12 @@ def position_vis(c, vis_save_path, z, title=None):
         palette = "tab10" if num_classes <= 10 else "tab20"
         sns.scatterplot(x=x, y=y, hue=c, s=8, palette=palette, legend=False, alpha=1.0)
 
-    if title is not None:
-        plt.title(title, fontsize=18)
-    # plt.xticks([])
-    # plt.yticks([])
+    # if title is not None:
+    #     plt.title(title, fontsize=18)
+    plt.xticks([])
+    plt.yticks([])
     # plt.axis("equal")
-    plt.legend()
+    # plt.legend()
 
     # plt.title("{} Embeddings".format(method_name), fontsize=20)
     if vis_save_path is not None:

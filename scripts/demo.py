@@ -8,40 +8,25 @@ from sklearn.decomposition import PCA
 from umap import UMAP
 
 from model.scdr.dependencies.experiment import position_vis
+from utils.metrics_tool import Metric
+from utils.nn_utils import compute_knn_graph, get_pairwise_distance
 
 if __name__ == '__main__':
-    data_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\20230221_21h52m04s_PD"
-    save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\20230221_21h52m04s_PD"
-    total_res = np.empty((3, 10, 5))
-    method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE", "SCDR"]
-    # method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE"]
-    metric_indices = [-3, -2, -1]
-    metric_list = ["Trust", "Neighbor Hit", "KA(10)", "Position Change", "Single Process Time", "Total Process Time", "Delay Time"]
-    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps", "Anuran Calls_8c",
-                    "electric_devices", "texture"]
+    dataset_name = "HAR_2"
+    eval_k = 10
+    num = 5000
+    with h5py.File(r"D:\Projects\流数据\Data\H5 Data\{}.h5".format(dataset_name), "r") as hf:
+        x = np.array(hf['x'], dtype=float)
+        y = np.array(hf['y'], dtype=int)
 
-    for i, method in enumerate(method_list):
-        print("=================", method)
-        method_dir = os.path.join(data_dir, method)
-        for j, dataset in enumerate(dataset_list):
-            print("*****************", dataset)
-            if method == "sPCA" and dataset == "mnist_fla":
-                data = [0 for i in range(3)]
-                data = np.array([data])
-            else:
-                file_path = os.path.join(method_dir, "{}.xlsx".format(dataset))
-                df = pd.read_excel(file_path)
-                data = np.array(df.values)
-            for idx, k in enumerate(metric_indices):
-                total_res[idx, j, i] = data[-1][k]
+        # x = x[:num]
+        # y = y[:num]
 
-    for i, metric in enumerate(metric_list[-3:]):
-        res_dict = {"Dataset": dataset_list}
-        for j, method in enumerate(method_list):
-            res_dict[method] = total_res[i, :, j]
-
-        df = pd.DataFrame(res_dict)
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        df.to_excel(os.path.join(save_dir, "{}.xlsx".format(metric)))
-
+        pca = PCA(n_components=2)
+        embeddings = pca.fit_transform(x)
+        knn_indices, knn_dists = compute_knn_graph(x, None, eval_k, None, accelerate=False)
+        pairwise_distance = get_pairwise_distance(x, pairwise_distance_cache_path=None, preload=False)
+        metric_tool = Metric(dataset_name, x, y, knn_indices, knn_dists, pairwise_distance,
+                             k=eval_k)
+        faithful_results = metric_tool.cal_simplified_metrics(eval_k, embeddings, knn_k=eval_k)
+        print(faithful_results)

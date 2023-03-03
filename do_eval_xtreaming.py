@@ -36,10 +36,10 @@ def cal_knn(pdist):
 
 
 if __name__ == '__main__':
-    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0302"
+    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0222"
     data_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
-    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0302"
+    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0222"
     eval_k = 10
     window_size = 5000
     valid_metric_indices = [0, 1, 2, 3, 4]
@@ -48,13 +48,11 @@ if __name__ == '__main__':
     eval_step = 100
     situation = "PD"
     # method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE"]
-    # method_list = ["INE", "SIsomap++", "SCDR"]
-    method_list = ["INE"]
+    method_list = ["Xtreaming"]
     metric_list = ["Trust", "Continuity", "Neighbor Hit", "KA(10)", "Position Change"]
-    # dataset_list = ["arem"]
-    # dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps", "Anuran Calls_8c",
-    #                 "electric_devices", "texture"]
-    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "shuttle"]
+    # dataset_list = ["arem", "basketball", "HAR_2", "shuttle", "mnist_fla"]
+    # dataset_list = ["HAR_2", "shuttle", "mnist_fla"]
+    dataset_list = ["HAR_2"]
 
     for i, method in enumerate(method_list):
         print("Method:", method)
@@ -62,6 +60,11 @@ if __name__ == '__main__':
         j = 0
         for dataset in dataset_list:
             print("==========Dataset:", dataset)
+            if method == "sPCA" and dataset == "mnist_fla":
+                for k, item in enumerate(valid_metric_indices):
+                    total_res_data[k, j, i] = 0
+                j += 1
+                continue
 
             dataset_dir = os.path.join(method_dir, dataset)
             with h5py.File(os.path.join(data_dir, "{}.h5".format(dataset)), "r") as hf:
@@ -79,13 +82,13 @@ if __name__ == '__main__':
 
             dataset_res = []
             res_dict = {}
-            # dataset_dir = r"D:\Projects\流数据\Code\SCDR\results\INE\arem"
+            # dataset_dir = r"D:\Projects\流数据\Code\SCDR\results\Xtreaming\arem"
             for k, item in enumerate(os.listdir(dataset_dir)):
                 if item.endswith("xlsx"):
                     continue
                 item_dir = os.path.join(dataset_dir, item)
                 eval_embedding_dir = os.path.join(item_dir, "eval_embeddings")
-                # eval_embedding_dir = r"D:\Projects\流数据\Code\SCDR\results\INE\arem\20230228_15h15m59s\eval_embeddings"
+                # eval_embedding_dir = r"D:\Projects\流数据\Code\SCDR\results\Xtreaming\arem\20230228_14h43m19s\eval_embeddings"
 
                 metric_records = [[] for i in range(len(METRIC_NAMES) + 1)]
                 metric_image_dir = os.path.join(item_dir, "metric_imgs")
@@ -111,15 +114,16 @@ if __name__ == '__main__':
                     new_data = total_raw_data[data_idx:data_idx+new_data_num]
                     new_label = total_raw_label[data_idx:data_idx+new_data_num]
                     if total_data is None:
-                        valid_init_num = window_size - new_data_num
+                        valid_init_num = window_size - new_data_num + 99
                         total_data = np.concatenate([initial_data[-valid_init_num:], new_data], axis=0)
                         total_label = np.concatenate([initial_label[-valid_init_num:], new_label])
                     else:
                         total_data = np.concatenate([total_data, new_data], axis=0)
                         total_label = np.concatenate([total_label, new_label])
 
-                    out_num = max(0, total_data.shape[0] - window_size)
+                    out_num = max(0, total_data.shape[0] - window_size) - 1
                     if out_num > 0:
+                        out_num = max(0, out_num - 98)
                         if pre_pairwise_dist is not None:
                             pre_pairwise_dist = pre_pairwise_dist[out_num:, :][:, out_num:]
                         total_data = total_data[out_num:]
@@ -144,6 +148,10 @@ if __name__ == '__main__':
                     data_idx += new_data_num
                     eval_time += 1
                     output = ""
+                    if method == "Xtreaming" and eval_time % 2 != 1:
+                        for ii, metric in enumerate(metric_list):
+                            metric_records[ii].append(metric_records[ii][-1])
+                        continue
 
                     pre_embedding_pdist = get_pairwise_distance(cur_embeddings)
                     pre_e_num = pre_embedding_pdist.shape[0]
@@ -182,7 +190,6 @@ if __name__ == '__main__':
                 metric_file = open(os.path.join(item_dir, "metric_res.txt"), "w")
                 metric_file.write(out_put)
                 metric_file.close()
-                break
 
             dataset_res_npy = np.array(dataset_res)
             avg_res = np.mean(dataset_res_npy, axis=0)

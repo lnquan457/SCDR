@@ -92,7 +92,8 @@ def parse_args():
 
     parser.add_argument("--method", type=str, default=SCDR,
                         choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
-    parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
+    # parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
+    parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
     parser.add_argument("--parallel", type=bool, default=False)
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
@@ -105,5 +106,5 @@ if __name__ == '__main__':
     cfg.merge_from_file(cfg_path)
     result_save_dir = "results/{}/".format(args.method)
 
-    custom_indices_path = os.path.join(args.indices_dir, "{}_ND.npy".format(cfg.exp_params.dataset))
+    custom_indices_path = os.path.join(args.indices_dir, "{}_FV.npy".format(cfg.exp_params.dataset))
     custom_indices_training(cfg, custom_indices_path, args, result_save_dir, cfg_path, device, log_path)

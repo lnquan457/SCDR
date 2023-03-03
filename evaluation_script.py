@@ -25,22 +25,24 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
     device = "cuda:0"
-    log_path = "logs/logs.txt"
-    method_list = [SIPCA]
-    # method_list = [SCDR]
-    # method_list = [SIPCA, XTREAMING, INE]
+    log_path = "logs/logs_2.txt"
+    # method_list = [SIPCA, XTREAMING, INE, SISOMAPPP]
+    # method_list = [XTREAMING]
+    method_list = [SCDR]
     # method_list = [INE, SCDR, SISOMAPPP]
     # method_list = [XTREAMING, INE, SISOMAPPP]
     # method_list = [SCDR]
-    test_time = 2
+    test_time = 1
     # situation_list = ["ND", "FD", "PD"]
     situation = "FD"
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
-    # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
-    dataset_list = ["electric_devices"]
-    # dataset_list = ["food"]
-    dim_list = [36, 561, 256, 784, 9, 6, 6]
-    # dataset_list = ["chess"]
+    # dataset_list = ["sat", "HAR_2", "usps", "mnist_fla", "shuttle", "arem", "basketball", "electric_devices",
+    #                 "texture", "Anuran Calls_8c"]
+    # dataset_list = ["mnist_fla", "HAR_2", "arem", "basketball", "shuttle"]
+    dataset_list = ["mnist_fla", "HAR_2", "arem", "basketball", "shuttle"]
+    # dim_list = [36, 561, 256, 784, 9, 6, 6, 96, 40, 22]
+    dim_list = [784, 561, 6, 6, 9]
+
     start_time = time_stamp_to_date_time_adjoin(time.time())
     excel_save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\{}_{}".format(start_time, situation)
     excel_headers = copy(METRIC_NAMES)
@@ -56,7 +58,7 @@ if __name__ == '__main__':
         cfg.merge_from_file(cfg_path)
         cfg.exp_params.window_size = 5000
         cfg.exp_params.vis_iter = 1000
-        cfg.exp_params.eval_iter = 100
+        cfg.exp_params.eval_iter = 1000
 
         args.method = method_name
         result_save_dir = "results/{}/ex_{}_{}".format(args.method, start_time, situation)
@@ -66,8 +68,7 @@ if __name__ == '__main__':
 
         for j, dataset_name in enumerate(dataset_list):
             print("Processing Data:", dataset_name)
-            # if method_name == SCDR and j < 3:
-            #     continue
+
             if method_name == SIPCA and "mnist" in dataset_name:
                 continue
             if method_name == SCDR:

@@ -98,12 +98,14 @@ class StreamingEx:
         self.initial_labels = None
         self.history_data = None
         self.history_label = None
+        self._not_show_num = 0
 
         self.cls2idx = {}
         self.debug = True
         self.save_img = True
         self._make_animation = cfg.exp_params.make_animation
         self.save_embedding_npy = False
+        self._pc_list = []
 
         # 实验用
         self._x_min = 1e7
@@ -223,6 +225,10 @@ class StreamingEx:
                 self._data_arrival_time.extend([data_arrival_time] * stream_data.shape[0])
 
             ret_embeddings, key_time, embedding_updated, out_num = self.model.fit_new_data(stream_data, stream_labels)
+            if not embedding_updated:
+                self._not_show_num += stream_data.shape[0]
+            else:
+                self._not_show_num = 0
             self.acc_key_time += key_time
             if self.cur_time_step > 1 and embedding_updated:
                 self._data_present_time.extend([data_arrival_time + self.acc_key_time] * (len(self._data_arrival_time) -
@@ -245,6 +251,16 @@ class StreamingEx:
                 if self.pre_embedding is not None:
                     self.evaluate(self.pre_embedding, ret_embeddings, pre_labels[-self.pre_embedding.shape[0]:],
                                   out_num=out_num)
+                    window_size = 5000
+                    if out_num == 0 and self.pre_embedding.shape[0] > window_size:
+                        out_num = self.pre_embedding.shape[0] - window_size
+                    pre_valid_embeddings = self.pre_embedding[out_num:] if out_num is not None else self.pre_embedding
+                    cur_valid_embeddings = ret_embeddings[
+                                           :pre_valid_embeddings.shape[0]] if out_num is not None else ret_embeddings
+                    pc = cal_global_position_change(cur_valid_embeddings, pre_valid_embeddings)
+                    # print("projection change:", pc)
+                    self._pc_list.append(pc)
+
                 self.cur_embedding = ret_embeddings
                 self.save_embeddings_info(self.cur_embedding)
 
@@ -289,8 +305,17 @@ class StreamingEx:
             return
 
         cur_data_num = cur_embeddings.shape[0]
-        data = self.history_data[-cur_data_num:]
-        targets = self.history_label[-cur_data_num:]
+        if self._not_show_num > 0:
+            data = self.history_data[:-self._not_show_num][-cur_data_num:]
+            targets = self.history_label[:-self._not_show_num][-cur_data_num:]
+        else:
+            data = self.history_data[-cur_data_num:]
+            targets = self.history_label[-cur_data_num:]
+        # print(self._not_show_num, cur_data_num)
+        # print(data.shape)
+        # print(data[:10, :5])
+        # print()
+        # print(cur_embeddings[:10])
         knn_indices, knn_dists = compute_knn_graph(data, None, self.eval_k, None, accelerate=False)
         pairwise_distance = get_pairwise_distance(data, pairwise_distance_cache_path=None, preload=False)
         self.metric_tool = Metric(self.dataset_name, data, targets, knn_indices, knn_dists, pairwise_distance,
@@ -340,6 +365,9 @@ class StreamingEx:
             self.model.save_model()
 
         ret, time_cost_records = self.model.ending()
+
+        pc_list = np.array(self._pc_list)
+        np.save(os.path.join(self.result_save_dir, "detail_pc_records.npy"), pc_list)
 
         x_indices = np.arange(len(self.process_time_records))
         single_process_avg_time = np.mean(self.process_time_records)
