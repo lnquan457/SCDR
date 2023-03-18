@@ -329,6 +329,7 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                 break
 
             print("开始更新模型！", self.model_update_queue_set.MODEL_UPDATING.value)
+            # self.model_update_queue_set.MODEL_UPDATING.value = 1
             # 该进程会在这里阻塞住
             training_info = self.model_update_queue_set.training_data_queue.get()
             # print("准备更新模型！")

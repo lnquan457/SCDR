@@ -1,15 +1,16 @@
 exp_params:
 #  dataset: 'isolet_subset'
-  dataset: 'usps'
+  dataset: 'usps_clear'
   input_dims: 256   # x for vectors or (h, w, c) for images
   latent_dim: 2
   stream_rate: 1
   initial_data_num: 300
-  window_size: 5000
-  vis_iter: 10000
+  window_size: 50000
+  vis_iter: 30
   save_iter: 100000
   eval_iter: 300000
   make_animation: False
+  check_point_path: "./results/SCDR/usps_clear/20230308_17h02m48s_2/initial/200.pth.tar"
 
 
 method_params:
@@ -23,4 +24,4 @@ method_params:
   split_lower: 0.001
   alpha: 6
   separation_begin_ratio: 0.20
-  steady_begin_ratio: 0.9
+  steady_begin_ratio: 0.95

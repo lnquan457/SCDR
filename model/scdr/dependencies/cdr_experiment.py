@@ -90,8 +90,7 @@ class CDRsExperiments(Experiment):
             embeddings = self._after_epoch(ckp_save_inter, epoch + 1, training_loss, training_loss_history,
                                            self.vis_inter)
 
-        if not self.multi or self.device_id == 0:
-            self._train_end(test_loss_history, training_loss_history, embeddings)
+        self._train_end(test_loss_history, training_loss_history, embeddings)
         return embeddings
 
     def resume_train(self, resume_epoch, *args):

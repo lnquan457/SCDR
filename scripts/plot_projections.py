@@ -14,22 +14,33 @@ from utils.constant_pool import FINAL_DATASET_LIST
 
 
 if __name__ == '__main__':
-    data_dir = r"D:\Projects\流数据\Evaluation\原始数据\FD\0215"
+    data_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0222"
     raw_dataset_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
-    dataset_list = FINAL_DATASET_LIST
-    # dataset_list = ["mnist_fla"]
+    save_dir = r"D:\Projects\流数据\Evaluation\过程数据\散点图_2\color"
+    # dataset_list = FINAL_DATASET_LIST
+    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "shuttle"]
     method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE", "SCDR"]
+
+    selected_indices = [
+        [100, 5100, 10100, 15100, 20100, 25100, 30100, 35500],
+        [100, 6100, 12100, 18100, 24100, 30100, 36100, 43300],
+        [100, 1000, 2000, 3000, 4000, 5000, 6000],
+        [100, 7500, 14900, 22300, 29700, 37100, 44700],
+        [100, 4100, 8100, 12100, 16100, 20100, 24100, 26300]
+    ]
+
+    # method_list = ["INE", "sPCA", "Xtreaming", "SCDR", "SIsomap++"]
+    # method_list = ["SIsomap++"]
     # method_list = ["INE"]
-    # method_list = ["INE"]
-    situation = "FD"
+    situation = "PD"
     window_size = 5000
     eval_step = 100
 
     for method in method_list:
         print("==========================={}=================================".format(method))
         method_dir = os.path.join(data_dir, method)
-        for dataset in dataset_list:
+        for i, dataset in enumerate(dataset_list):
             print("Processing", dataset)
             if dataset == "mnist_fla" and method == "sPCA" and situation == "FD":
                 continue
@@ -70,8 +81,16 @@ if __name__ == '__main__':
                         break
 
                     t_step = cur_time_step - 1
-                    save_path = os.path.join(img_save_dir, "t_{}.jpg".format(t_step))
-                    gray_save_path = os.path.join(gray_img_save_dir, "t_{}.jpg".format(t_step))
+                    # save_path = os.path.join(img_save_dir, "t_{}.jpg".format(t_step))
+                    # gray_save_path = os.path.join(gray_img_save_dir, "t_{}.jpg".format(t_step))
+
+                    gray_save_dir = os.path.join(save_dir, dataset, method)
+                    if not os.path.exists(gray_save_dir):
+                        os.makedirs(gray_save_dir)
+
+                    save_path = os.path.join(gray_save_dir, "t_{}.jpg".format(t_step))
+                    gray_save_path = os.path.join(gray_save_dir, "t_{}.jpg".format(t_step))
+
                     cur_embeddings = np.load(os.path.join(embedding_dir, time_step_e_file), allow_pickle=True)[1]
 
                     new_data_num = t_step - pre_timestep
@@ -96,19 +115,34 @@ if __name__ == '__main__':
                     if method == "Xtreaming" and pre_labels is not None and t_step % 200 == 0:
                         show_labels = pre_labels
 
+                    pre_timestep = t_step
+                    pre_embeddings = cur_embeddings
+                    pre_labels = cur_labels
+
+                    if cur_time_step - 1 not in selected_indices[i]:
+                        continue
+
                     x = cur_embeddings[:, 0]
                     y = cur_embeddings[:, 1]
 
-                    if dataset == "shuttle":
-                        mean_x, mean_y = np.mean(cur_embeddings, axis=0)
-                        std_x, std_y = np.std(cur_embeddings, axis=0)
+                    if dataset == "shuttle" and method in ["SIsomap++", "Xtreaming", "sPCA", "SCDR"]:
+                        Percentile = np.percentile(x, [0, 25, 50, 75, 100])
+                        thresh = 1.5
+                        IQR = Percentile[3] - Percentile[1]
+                        UpLimit = Percentile[3] + IQR * thresh
+                        DownLimit = Percentile[1] - IQR * thresh
 
-                        indices = [True] * cur_embeddings.shape[0]
-                        indices[x > mean_x + 3 * std_x] = False
-                        indices[x < mean_x - 3 * std_x] = False
+                        indices = np.array([True] * cur_embeddings.shape[0])
+                        indices[x > UpLimit] = False
+                        indices[x < DownLimit] = False
 
-                        indices[y > mean_y + 3 * std_y] = False
-                        indices[y < mean_y - 3 * std_y] = False
+                        Percentile = np.percentile(y, [0, 25, 50, 75, 100])
+                        IQR = Percentile[3] - Percentile[1]
+                        UpLimit = Percentile[3] + IQR * thresh
+                        DownLimit = Percentile[1] - IQR * thresh
+
+                        indices[y > UpLimit] = False
+                        indices[y < DownLimit] = False
                         x = x[indices]
                         y = y[indices]
                         show_labels = show_labels[indices]
@@ -119,20 +153,18 @@ if __name__ == '__main__':
                     plt.xticks([])
                     plt.yticks([])
                     plt.axis("equal")
+                    plt.axis('off')
                     # plt.title("{} embeddings".format(method), fontsize=18)
                     plt.savefig(save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
 
                     plt.figure(figsize=(6, 6))
-                    sns.scatterplot(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1], s=5, legend=False, alpha=1.0,
-                                    color="royalblue", linewidth=0)
+                    sns.scatterplot(x=x, y=y, s=5, legend=False, alpha=1.0,
+                                    color="steelblue", linewidth=0)   # color="steelblue" #2F5597
                     plt.xticks([])
                     plt.yticks([])
                     plt.axis("equal")
-                    plt.savefig(gray_save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
-
-                    pre_timestep = t_step
-                    pre_embeddings = cur_embeddings
-                    pre_labels = cur_labels
+                    plt.axis('off')
+                    # plt.savefig(gray_save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
 
                 # break
 

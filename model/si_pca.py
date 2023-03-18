@@ -37,13 +37,17 @@ class StreamingIPCA:
             self.total_data = np.concatenate([self.total_data, self._buffered_data], axis=0)[-self._window_size:]
 
         sta = time.time()
+
+        new_data_num = self._buffered_data.shape[0]
         self.pca_model.partial_fit(self._buffered_data)
         cur_embeddings = self.pca_model.transform(self.total_data)
 
         if self.pre_embeddings is None:
             self.pre_embeddings = cur_embeddings
         else:
-            self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings[self._buffered_data.shape[0]:], cur_embeddings)
+            valid_cur_embeddings = cur_embeddings[:-new_data_num]
+            self.pre_embeddings = IncPCA.geom_trans(self.pre_embeddings[-valid_cur_embeddings.shape[0]:],
+                                                    valid_cur_embeddings)
 
         self._buffered_data = None
         out_num = max(0, self.pre_embeddings.shape[0] - self._window_size)

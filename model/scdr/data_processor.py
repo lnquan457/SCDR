@@ -28,13 +28,14 @@ class DataProcessor:
         # 用于确定何时要更新模型，1）新的流形出现；2）模型对旧流形数据的嵌入质量太低；3）长时间没有更新；
         self.model_update_intervals = 6000
         self.model_update_num_thresh = 50
-        self.manifold_change_num_thresh = 100
-        self.bad_embedding_num_thresh = 100
+        self.manifold_change_num_thresh = 30
+        self.bad_embedding_num_thresh = 50
 
         # self._manifold_change_d_weight = 1
         # self._local_move_std_weight = 3
+        self._do_model_update = True
         # 是否进行跳步优化
-        self.skip_opt = True
+        self.skip_opt = False
         # bfgs优化时,使用的负例数目
         self.opt_neg_num = 50
 
@@ -136,8 +137,9 @@ class DataProcessor:
         # knn_dists = knn_dists[np.newaxis, :]
 
         # 准确查询
-        # knn_indices, knn_dists = query_knn2(data, np.concatenate([self.stream_dataset.get_total_data(), data],
-        #                                                         axis=0), k=self.n_neighbors)
+        if self.debug:
+            knn_indices, knn_dists = query_knn2(data, np.concatenate([self.stream_dataset.get_total_data(), data],
+                                                                    axis=0), k=self.n_neighbors)
         # if self._record_time:
         #     self.knn_cal_time += time.time() - sta
         # print("knn acc:", len(np.intersect1d(knn_indices.squeeze(), acc_knn_indices.squeeze()))/self.n_neighbors)
@@ -213,11 +215,11 @@ class DataProcessor:
         self.stream_dataset.add_new_data(embeddings=data_embeddings)
         other_time += time.time() - sta
 
-        if need_update_model or self._model_update_delayed:
+        if self._do_model_update and (need_update_model or self._model_update_delayed):
             self._send_update_signal()
 
         need_replace_model = need_replace_model and self._last_update_meta is not None
-        if need_replace_model or self._need_replace_model:
+        if self._do_model_update and (need_replace_model or self._need_replace_model):
             if self.model_update_queue_set.training_data_queue.empty() or self._update_after_replace_signal:
                 # print("replace model")
                 # if self._record_time:
@@ -319,15 +321,17 @@ class DataProcessor:
              self.stream_dataset.get_n_samples() - pre_fitted_num,
              self._total_processed_data_num, self._out_since_last_send_update])
         self._model_is_updating = True
+        self.model_update_queue_set.MODEL_UPDATING.value = 1
         self.model_update_queue_set.flag_queue.put(ModelUpdateQueueSet.UPDATE)
         self.update_count += 1
         self._model_update_delayed = False
         self._out_since_last_send_update = 0
 
         # TODO: 使得模型更新和数据处理变成串行的
-        # while self.model_update_queue_set.MODEL_UPDATING.value:
-        #     pass
-        # self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
+        if self.debug:
+            while self.model_update_queue_set.MODEL_UPDATING.value == 1:
+                pass
+            self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
 
     def get_final_embeddings(self):
         embeddings = self.stream_dataset.get_total_embeddings()

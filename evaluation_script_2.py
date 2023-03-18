@@ -8,7 +8,7 @@ import pandas as pd
 from stream_main import custom_indices_training
 from utils.common_utils import get_config, time_stamp_to_date_time_adjoin
 from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREAM_METHOD_LIST, INE, SISOMAPPP, ILLE, \
-    METRIC_NAMES, STEADY_METRIC_NAMES
+    METRIC_NAMES, STEADY_METRIC_NAMES, FINAL_DATASET_LIST
 
 
 def parse_args():
@@ -26,20 +26,20 @@ if __name__ == '__main__':
     args = parse_args()
     device = "cuda:0"
     log_path = "logs/logs_2.txt"
-    # method_list = [SIPCA, XTREAMING, INE, SISOMAPPP]
-    # method_list = [XTREAMING]
+    # method_list = [SISOMAPPP]
     method_list = [SIPCA]
+    # method_list = [SIPCA]
     # method_list = [INE, SCDR, SISOMAPPP]
     # method_list = [XTREAMING, INE, SISOMAPPP]
     # method_list = [SCDR]
     test_time = 1
     # situation_list = ["ND", "FD", "PD"]
-    situation = "FD"
+    situation = "PD"
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
     # dataset_list = ["sat", "HAR_2", "usps", "mnist_fla", "shuttle", "arem", "basketball", "electric_devices",
     #                 "texture", "Anuran Calls_8c"]
     # dataset_list = ["mnist_fla", "HAR_2", "arem", "basketball", "shuttle"]
-    dataset_list = ["mnist_fla"]
+    dataset_list = FINAL_DATASET_LIST
     # dim_list = [36, 561, 256, 784, 9, 6, 6, 96, 40, 22]
     dim_list = [784, 561, 6, 6, 9]
 
@@ -58,7 +58,7 @@ if __name__ == '__main__':
         cfg.merge_from_file(cfg_path)
         cfg.exp_params.window_size = 5000
         cfg.exp_params.vis_iter = 1000
-        cfg.exp_params.eval_iter = 1000
+        cfg.exp_params.eval_iter = 1
 
         args.method = method_name
         result_save_dir = "results/{}/ex_{}_{}".format(args.method, start_time, situation)

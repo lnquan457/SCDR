@@ -128,8 +128,6 @@ class StreamingEx:
 
     def _train_begin(self):
         self._prepare_streaming_data()
-        self.result_save_dir = os.path.join(self.result_save_dir, self.dataset_name,
-                                            time_stamp_to_date_time_adjoin(int(time.time())))
         check_path_exist(self.result_save_dir)
         self.log = open(os.path.join(self.result_save_dir, self.log_path), 'a')
 
@@ -251,15 +249,16 @@ class StreamingEx:
                 if self.pre_embedding is not None:
                     self.evaluate(self.pre_embedding, ret_embeddings, pre_labels[-self.pre_embedding.shape[0]:],
                                   out_num=out_num)
-                    window_size = 5000
-                    if out_num == 0 and self.pre_embedding.shape[0] > window_size:
-                        out_num = self.pre_embedding.shape[0] - window_size
-                    pre_valid_embeddings = self.pre_embedding[out_num:] if out_num is not None else self.pre_embedding
-                    cur_valid_embeddings = ret_embeddings[
-                                           :pre_valid_embeddings.shape[0]] if out_num is not None else ret_embeddings
-                    pc = cal_global_position_change(cur_valid_embeddings, pre_valid_embeddings)
-                    # print("projection change:", pc)
-                    self._pc_list.append(pc)
+
+                    # window_size = 5000
+                    # if out_num == 0 and self.pre_embedding.shape[0] > window_size:
+                    #     out_num = self.pre_embedding.shape[0] - window_size
+                    # pre_valid_embeddings = self.pre_embedding[out_num:] if out_num is not None else self.pre_embedding
+                    # cur_valid_embeddings = ret_embeddings[
+                    #                        :pre_valid_embeddings.shape[0]] if out_num is not None else ret_embeddings
+                    # pc = cal_global_position_change(cur_valid_embeddings, pre_valid_embeddings)
+                    # # print("projection change:", pc)
+                    # self._pc_list.append(pc)
 
                 self.cur_embedding = ret_embeddings
                 self.save_embeddings_info(self.cur_embedding)
@@ -519,6 +518,8 @@ class StreamingExProcess(StreamingEx, Process):
 
     def start_parallel_scdr(self, model_update_queue_set, model_trainer):
         self.cdr_update_queue_set = model_update_queue_set
+        self.result_save_dir = os.path.join(self.result_save_dir, self.dataset_name,
+                                            time_stamp_to_date_time_adjoin(int(time.time())))
         self.model = SCDRParallel(self.cfg.method_params.n_neighbors, self.cfg.method_params.batch_size,
                                   model_update_queue_set, self.cfg.exp_params.initial_data_num,
                                   window_size=self.cfg.exp_params.window_size, device=model_trainer.device)
@@ -526,12 +527,13 @@ class StreamingExProcess(StreamingEx, Process):
         model_trainer.start()
         return self.stream_fitting()
 
-    def start_full_parallel_scdr(self, model_update_queue_set, model_trainer):
+    def start_full_parallel_scdr(self, model_update_queue_set, model_trainer, res_save_dir, ckpt_path):
+        self.result_save_dir = res_save_dir
         self.cdr_update_queue_set = model_update_queue_set
         self.embedding_data_queue = DataProcessorQueue()
         self.model = SCDRFullParallel(self.embedding_data_queue, self.cfg.method_params.n_neighbors,
                                       self.cfg.method_params.batch_size, model_update_queue_set,
-                                      self.cfg.exp_params.initial_data_num,
+                                      self.cfg.exp_params.initial_data_num, ckpt_path=ckpt_path,
                                       device=model_trainer.device, window_size=self.cfg.exp_params.window_size)
         model_trainer.daemon = True
         model_trainer.start()

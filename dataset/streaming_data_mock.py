@@ -13,12 +13,15 @@ from multiprocessing import Process, Queue
 def resort_label(label_seq):
     # 按照cls出现的顺序重新分配标签
     unique_cls, show_seq = np.unique(label_seq, return_index=True)
+    re_indices = np.argsort(show_seq)
+    unique_cls = unique_cls[re_indices]
     color_list = []
+    new_label = np.ones_like(label_seq)
     for i, item in enumerate(unique_cls):
         indices = np.argwhere(label_seq == item).squeeze()
-        label_seq[indices] = i
+        new_label[indices] = i
         color_list.extend([ProjectSettings.LABEL_COLORS[i]] * len(indices))
-    return label_seq.astype(int), color_list
+    return new_label.astype(int), color_list
 
 
 class RealStreamingData(Process):
@@ -98,8 +101,10 @@ class SimulatedStreamingData(Process):
         if self.targets is None:
             self.seq_label = None
             self.seq_color = None
+            self.seq_stream_label = None
         else:
             self.seq_label, self.seq_color = resort_label(self.targets[self.custom_seq])
+            self.seq_stream_label = self.seq_label
 
         stream_num = self.n_samples - initial_num
 
@@ -120,6 +125,7 @@ class SimulatedStreamingData(Process):
         if self.data_index > 0:
             self.data_index = 0
         stop = False
+        stream_data_num = 0
         while True:
             if stop:
                 break
@@ -129,7 +135,8 @@ class SimulatedStreamingData(Process):
             cur_label = []
             for j in self.custom_seq[self.data_index:self.data_index + cur_data_num]:
                 cur_data.append(self.data[j])
-                cur_label.append(None if self.targets is None else self.targets[j])
+                cur_label.append(None if self.seq_stream_label is None else self.seq_stream_label[stream_data_num])
+                stream_data_num += 1
 
             time.sleep(self._iter_time)
 

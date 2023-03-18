@@ -32,7 +32,7 @@ class EmbeddingOptimizer:
                  skip_opt=False, timeout_thresh=5.0):
         # Todo: 后续应该修改成百分比
         self.nce_opt_update_thresh = 5
-        self.__local_move_thresh_w = 3  # 1.5 for high accuracy, 3 for high speed
+        self.__local_move_thresh_w = 1.5  # 1.5 for high accuracy, 3 for high speed
         self.__neg_num = neg_num
         self.__temperature = temperature
         self.__a, self.__b = find_ab_params(1.0, min_dist)

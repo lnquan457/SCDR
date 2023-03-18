@@ -55,6 +55,8 @@ def position_vis(c, vis_save_path, z, title=None):
     #     plt.title(title, fontsize=18)
     plt.xticks([])
     plt.yticks([])
+    plt.axis("equal")
+    plt.axis('off')
     # plt.axis("equal")
     # plt.legend()
 
@@ -248,10 +250,7 @@ class Experiment:
 
     def _after_epoch(self, ckp_save_inter, epoch, training_loss, training_loss_history, val_inter):
 
-        if self.configs.method_params.scheduler == "cosine" and epoch >= 10:
-            self.scheduler.step()
-        elif self.configs.method_params.scheduler == "multi_step":
-            self.scheduler.step()
+        self.scheduler.step()
 
         if not self.multi or self.device_id == 0:
             train_loss = np.mean(training_loss)
