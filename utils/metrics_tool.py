@@ -6,6 +6,9 @@ import random
 
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import shortest_path
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import normalize
@@ -102,6 +105,14 @@ def cal_manifold_pdist_change(cur_embeddings, pre_embeddings, pre_labels):
         total_dists.append(np.mean(dists))
 
     return np.sum(total_dists)
+
+
+def get_matrix_spearman_corr(high_dis_matrix, low_dis_matrix):
+    corr_list = []
+    for i in range(high_dis_matrix.shape[0]):
+        corr, _ = stats.spearmanr(high_dis_matrix[i], low_dis_matrix[i])
+        corr_list.append(corr)
+    return np.mean(corr_list)
 
 
 class Metric:
@@ -513,64 +524,29 @@ class Metric:
 
         # 耗费很大的内存空间
         # corr, _ = stats.spearmanr(self.high_dis_matrix, self.low_dis_matrix)
-        corr_list = []
-        for i in range(high_dis_matrix.shape[0]):
-            corr, _ = stats.spearmanr(high_dis_matrix[i], self.low_dis_matrix[i])
-            corr_list.append(corr)
-        return np.mean(corr_list)
+        return get_matrix_spearman_corr(high_dis_matrix, self.low_dis_matrix)
 
-    def metric_dsc(self, embedding_data):
-        classes = np.unique(self.origin_label.astype(int))
-        cls_centroids = []
-        for cls in classes:
-            indices = np.argwhere(self.origin_label == cls).squeeze()
-            cls_embeddings = embedding_data[indices]
-            if len(cls_embeddings.shape) < 2:
-                cls_embeddings = cls_embeddings[np.newaxis, :]
-            centroid = np.mean(cls_embeddings, axis=0)
-            cls_centroids.append(centroid)
-        flags = np.ones(self.n_samples)
-        diff = np.repeat(np.expand_dims(embedding_data, axis=1), len(classes), 1) - \
-               np.repeat(np.expand_dims(np.array(cls_centroids), axis=0), self.n_samples, 0)
-        dist = np.linalg.norm(diff, axis=-1)
-        closet_cls_indices = np.argmin(dist, axis=1).astype(np.int)
-        closet_cls = classes[closet_cls_indices]
-        dsc = np.mean(closet_cls == self.origin_label)
-        return dsc
+    def metric_demap(self, embedding_data, high_knn_infos=None):
+        self.acquire_low_distance(embedding_data)
 
-    def metric_gong(self, embedding_data, gamma=0.35, k=2):
-        n_samples = embedding_data.shape[0]
-        thresh_num = 5000
-        if n_samples > thresh_num:
-            neighbor_graph = get_knng(embedding_data, k)
+        if high_knn_infos is None:
+            high_knn_dists = self.knn_dists
+            high_knn_indices = self.knn_indices
         else:
-            neighbor_graph = get_gong(embedding_data, gamma).neighbors
+            high_knn_indices = high_knn_infos[0]
+            high_knn_dists = high_knn_infos[1]
 
-        cp = []
-        for node in range(n_samples):
-            if n_samples > thresh_num:
-                neighbor_indices = list(neighbor_graph[node])
-            else:
-                neighbor_indices = list(neighbor_graph(node))
-            neighbour_classes = list(self.origin_label[neighbor_indices])
-            amount_of_neighbours = len(neighbour_classes)
+        n_samples = embedding_data.shape[0]
+        rows = np.ravel(np.repeat(np.expand_dims(np.arange(0, n_samples, 1), axis=1),
+                                  axis=1, repeats=high_knn_dists.shape[1]))
+        cols = np.ravel(high_knn_indices)
+        vals = np.ravel(high_knn_dists)
 
-            self_class = self.origin_label[node]
-            count_of_self = neighbour_classes.count(self_class)
+        kng = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n_samples, n_samples)).tocsr()
 
-            if amount_of_neighbours == 0:
-                cp.append(1)
-            else:
-                cp.append(count_of_self / amount_of_neighbours)
-
-        cp = np.array(cp)
-        classes = np.unique(self.origin_label)
-        cpt = []
-        for cls in classes:
-            cur_indices = np.argwhere(self.origin_label == cls).squeeze()
-            cpt.append(np.mean(cp[cur_indices]))
-
-        return np.mean(cpt)
+        geo_dist_matrix = shortest_path(kng, method='D', directed=False, return_predecessors=False)
+        demap = get_matrix_spearman_corr(geo_dist_matrix, self.low_dis_matrix)
+        return demap
 
 
 class MetricProcess(Process, Metric):

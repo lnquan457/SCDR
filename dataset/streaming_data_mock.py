@@ -15,12 +15,13 @@ def resort_label(label_seq):
     unique_cls, show_seq = np.unique(label_seq, return_index=True)
     re_indices = np.argsort(show_seq)
     unique_cls = unique_cls[re_indices]
-    color_list = []
+
     new_label = np.ones_like(label_seq)
     for i, item in enumerate(unique_cls):
         indices = np.argwhere(label_seq == item).squeeze()
         new_label[indices] = i
-        color_list.extend([ProjectSettings.LABEL_COLORS[i]] * len(indices))
+
+    color_list = [ProjectSettings.LABEL_COLORS[i] for i in new_label]
     return new_label.astype(int), color_list
 
 
@@ -142,7 +143,7 @@ class SimulatedStreamingData(Process):
 
             self.data_index += cur_data_num
             idx += 1
-            if idx >= len(self.data_num_list):
+            if idx >= len(self.data_num_list) or len(cur_data) == 0:
                 stop = True
             self.data_queue.put([cur_data, cur_label, stop])
 

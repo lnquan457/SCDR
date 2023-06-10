@@ -161,12 +161,12 @@ class StreamingEx:
 
     def start_parallel_spca(self):
         self.model = ParallelsPCA(queue.Queue(), queue.Queue(), queue.Queue(), queue.Queue(), self.n_components,
-                                  self.cfg.method_params.forgetting_factor)
+                                  self.cfg.method_params.forgetting_factor, window_size=self.cfg.exp_params.window_size)
         return self.stream_fitting()
 
     def start_parallel_xtreaming(self):
         self.model = ParallelXtreaming(Queue(), Queue(), Queue(), Queue(), self.cfg.method_params.buffer_size,
-                                       self.cfg.method_params.eta)
+                                       self.cfg.method_params.eta, window_size=self.cfg.exp_params.window_size)
         return self.stream_fitting()
 
     def start_parallel_ine(self):
@@ -185,6 +185,8 @@ class StreamingEx:
         return self.train_end()
 
     def _cache_initial(self, stream_data, stream_labels):
+        if len(stream_data.shape) == 1:
+            stream_data = np.reshape(stream_data, (-1, len(stream_labels)))
         self.history_data = stream_data if self.history_data is None else np.concatenate(
             [self.history_data, stream_data], axis=0)
         if stream_labels is not None:
@@ -549,7 +551,7 @@ class StreamingExProcess(StreamingEx, Process):
         self.cur_time_step += 1
 
         total_data = np.array(data, dtype=float)
-        total_labels = None if labels[0] is None else np.array(labels, dtype=int)
+        total_labels = None if (len(labels) > 0 and labels[0] is None) is None else np.array(labels, dtype=int)
 
         output = "Get stream data timestamp {}".format(self.cur_time_step)
         InfoLogger.info(output)

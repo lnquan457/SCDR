@@ -71,7 +71,7 @@ class SCDRTrainer(CDRsExperiments):
         self._fixed_batch_num = tmp_batch_num
         self.update_dataloader(self.initial_train_epoch)
         print("first prepare dataset cost:", time.time() - sta)
-        self.result_save_dir_modified = True
+        self.result_save_dir_modified = False
         self.do_test = False
         self.do_vis = False
         self.save_model = True

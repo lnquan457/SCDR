@@ -26,11 +26,11 @@ if __name__ == '__main__':
     args = parse_args()
     device = "cuda:0"
     log_path = "logs/logs_2.txt"
-    method_list = [SIPCA, XTREAMING]
+    # method_list = [SCDR]
     # method_list = [XTREAMING]
     # method_list = [SIPCA]
     # method_list = [INE, SCDR, SISOMAPPP]
-    # method_list = [XTREAMING, INE, SISOMAPPP]
+    method_list = [SIPCA, XTREAMING, INE, SISOMAPPP]
     # method_list = [SCDR]
     test_time = 1
     # situation_list = ["ND", "FD", "PD"]
@@ -38,10 +38,12 @@ if __name__ == '__main__':
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
     # dataset_list = ["sat", "HAR_2", "usps", "mnist_fla", "shuttle", "arem", "basketball", "electric_devices",
     #                 "texture", "Anuran Calls_8c"]
-    # dataset_list = ["mnist_fla", "HAR_2", "arem", "basketball", "shuttle"]
-    dataset_list = FINAL_DATASET_LIST
+    dataset_list = ["usps_clear"]
+    # dataset_list = FINAL_DATASET_LIST
+    # dataset_list = ["usps_clear", "mnist_fla"]
     # dim_list = [36, 561, 256, 784, 9, 6, 6, 96, 40, 22]
-    dim_list = [6, 6, 561, 9, 784]
+    # dim_list = [6, 6, 561, 9, 784]
+    dim_list = [784]
 
     start_time = time_stamp_to_date_time_adjoin(time.time())
     excel_save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\{}_{}".format(start_time, situation)
@@ -70,6 +72,8 @@ if __name__ == '__main__':
             print("Processing Data:", dataset_name)
 
             # if method_name == SIPCA and "mnist" in dataset_name:
+            #     continue
+            # if method_name == SIPCA and j < 2:
             #     continue
             if method_name == SCDR:
                 cfg.exp_params.input_dims = dim_list[j]

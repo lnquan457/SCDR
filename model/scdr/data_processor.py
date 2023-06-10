@@ -328,10 +328,10 @@ class DataProcessor:
         self._out_since_last_send_update = 0
 
         # TODO: 使得模型更新和数据处理变成串行的
-        if self.debug:
-            while self.model_update_queue_set.MODEL_UPDATING.value == 1:
-                pass
-            self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
+        # if self.debug:
+        #     while self.model_update_queue_set.MODEL_UPDATING.value == 1:
+        #         pass
+        #     self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
 
     def get_final_embeddings(self):
         embeddings = self.stream_dataset.get_total_embeddings()

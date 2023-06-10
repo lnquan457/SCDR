@@ -20,6 +20,11 @@ from utils.nn_utils import compute_knn_graph
 
 def _select_min_loss_one(candidate_embeddings, neighbors_embeddings, high_probabilities, k):
     # [G*G, n]
+    if len(neighbors_embeddings.shape) < 2:
+        neighbors_embeddings = np.reshape(neighbors_embeddings, (1, -1))
+    if len(neighbors_embeddings.shape) > 2:
+        neighbors_embeddings = np.squeeze(neighbors_embeddings)
+    # print(neighbors_embeddings.shape, candidate_embeddings.shape)
     dists = cdist(candidate_embeddings, neighbors_embeddings)
     tmp_prob = 1 / (1 + dists ** 2) ** (0.5 + k/10)
     q = tmp_prob / np.expand_dims(np.sum(tmp_prob, axis=1), axis=1)

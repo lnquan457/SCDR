@@ -59,7 +59,7 @@ def start(ex, recv_args, config, cfg_path, res_save_dir, device, log_path):
                                            cfg_path, config, res_save_dir, device=device, log_path=log_path)
         # return ex.start_parallel_scdr(model_update_queue_set, model_trainer)
         return ex.start_full_parallel_scdr(model_update_queue_set, model_trainer, res_save_dir,
-                                           cfg.exp_params.check_point_path)
+                                           config.exp_params.check_point_path)
     else:
         raise RuntimeError("Non-supported method! please ensure param 'method' is one of 'atSNE/siPCA/Xtreaming/SCDR'!")
 
@@ -97,11 +97,11 @@ def custom_indices_training(configs, custom_indices_path, recv_args, res_save_di
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=SCDR,
+    parser.add_argument("--method", type=str, default=INE,
                         choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
     # parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
-    parser.add_argument("--parallel", type=bool, default=False)
+    parser.add_argument("--parallel", type=bool, default=True)
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 
@@ -114,5 +114,5 @@ if __name__ == '__main__':
     result_save_dir = "results/{}/".format(args.method)
 
     # custom_indices_path = os.path.join(args.indices_dir, "{}_FV.npy".format(cfg.exp_params.dataset))
-    custom_indices_path = os.path.join(args.indices_dir, "{}_FD.npy".format(cfg.exp_params.dataset))
+    custom_indices_path = os.path.join(args.indices_dir, "{}_PD_new.npy".format(cfg.exp_params.dataset))
     custom_indices_training(cfg, custom_indices_path, args, result_save_dir, cfg_path, device, log_path)

@@ -26,8 +26,8 @@ if __name__ == '__main__':
     args = parse_args()
     device = "cuda:0"
     log_path = "logs/logs_2.txt"
-    # method_list = [SISOMAPPP]
-    method_list = [SIPCA]
+    method_list = [INE]
+    # method_list = [XTREAMING]
     # method_list = [SIPCA]
     # method_list = [INE, SCDR, SISOMAPPP]
     # method_list = [XTREAMING, INE, SISOMAPPP]
@@ -38,10 +38,11 @@ if __name__ == '__main__':
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
     # dataset_list = ["sat", "HAR_2", "usps", "mnist_fla", "shuttle", "arem", "basketball", "electric_devices",
     #                 "texture", "Anuran Calls_8c"]
-    # dataset_list = ["mnist_fla", "HAR_2", "arem", "basketball", "shuttle"]
-    dataset_list = FINAL_DATASET_LIST
+    dataset_list = ["HAR_2", "mnist_fla_10000", "mnist_fla_20000", "arem", "basketball", "shuttle", "usps_clear"]
+    # dataset_list = FINAL_DATASET_LIST
+    # dataset_list = ["usps_clear", "mnist_fla"]
     # dim_list = [36, 561, 256, 784, 9, 6, 6, 96, 40, 22]
-    dim_list = [784, 561, 6, 6, 9]
+    dim_list = [6, 6, 561, 9, 784]
 
     start_time = time_stamp_to_date_time_adjoin(time.time())
     excel_save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\{}_{}".format(start_time, situation)
@@ -71,12 +72,14 @@ if __name__ == '__main__':
 
             # if method_name == SIPCA and "mnist" in dataset_name:
             #     continue
+            # if method_name == SIPCA and j < 2:
+            #     continue
             if method_name == SCDR:
                 cfg.exp_params.input_dims = dim_list[j]
             excel_save_path = os.path.join(method_save_dir, "{}.xlsx".format(dataset_name))
             total_res = []
             cfg.exp_params.dataset = dataset_name
-            custom_indices_path = os.path.join(args.indices_dir, "{}_{}.npy".format(cfg.exp_params.dataset, situation))
+            custom_indices_path = os.path.join(args.indices_dir, "{}_{}_new.npy".format(cfg.exp_params.dataset, situation))
             for e in range(test_time):
                 metrics_list, avg_single_process_time, total_process_time, avg_data_delay_time = \
                     custom_indices_training(cfg, custom_indices_path, args, result_save_dir, cfg_path, device, log_path)

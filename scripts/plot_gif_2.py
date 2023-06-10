@@ -38,8 +38,8 @@ def _make_embedding_video(save_path, embeddings_list, labels_list, x_min, x_max,
 
         plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.05)
         ax.scatter(x=cur_step_embeddings[:, 0], y=cur_step_embeddings[:, 1],
-                   c=cur_step_labels, s=1, cmap="tab10")
-        # ax.set_title("Process: %2.2f" % (100 * idx / FRAMES) + "%")
+                   c=cur_step_labels, s=2, cmap="tab10")
+        # ax.set_title("Data points: %2.2f" % (100 * idx / FRAMES) + "%")
         ax.set_title("Data points: %5d" % idx)
 
     ani = FuncAnimation(fig, update, frames=FRAMES, interval=1/FPS, blit=False)
@@ -50,15 +50,13 @@ if __name__ == '__main__':
     raw_data_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
     embedding_data_dir = r"D:\Projects\流数据\Evaluation\GIF\原始数据"
-    # method_list = ["sPCA", "SIsomap++", "INE", "Xtreaming"]
+    method_list = ["sPCA", "SIsomap++", "INE", "SCDR", "Xtreaming"]
     # method_list = ["SIsomap++", "INE", "SCDR", "Xtreaming"]
-    method_list = ["SCDR"]
+    # method_list = ["SIsomap++"]
     # dataset_list = FINAL_DATASET_LIST
-    # dataset_list = ["usps_clear"]
-    dataset_list = ["usps_clear"]
+    dataset_list = ["HAR_2"]
     FPS = 30
-    FRAMES = 5463
-    # FRAMES = 500
+    FRAMES = 8429
     situation = "PD"
     sta_t = 1
     eval_step = 1
@@ -81,9 +79,7 @@ if __name__ == '__main__':
             initial_indices, after_indices = np.load(os.path.join(indices_dir, "{}_{}_new.npy".format(dataset, situation)),
                                                      allow_pickle=True)
             labels = y[np.concatenate([initial_indices, after_indices])]
-
             labels = resort_label(labels)[1]
-
             initial_num = len(initial_indices)
             if initial_num > window_size:
                 sta_idx = initial_num - window_size
@@ -122,6 +118,7 @@ if __name__ == '__main__':
 
                 if method in ["SIsomap++", "INE"] and len(cur_labels) > cur_embeddings.shape[0]:
                     cur_labels = cur_labels[-cur_embeddings.shape[0]:]
+                    # cur_embeddings = cur_embeddings[:len(cur_labels)]
                 if method in ["INE", "SCDR"] and len(cur_labels) < cur_embeddings.shape[0]:
                     cur_embeddings = cur_embeddings[-len(cur_labels):]
 
@@ -132,12 +129,8 @@ if __name__ == '__main__':
                 if method in ["sPCA", "Xtreaming"] and len(show_labels) < cur_embeddings.shape[0]:
                     cur_embeddings = cur_embeddings[:len(show_labels)]
 
-                if cur_time_step == 2:
-                    plt.figure()
-                    plt.scatter(x=cur_embeddings[:, 0], y=cur_embeddings[:, 1],
-                                c=show_labels, s=1, cmap="tab10")
-                    plt.savefig(os.path.join(dataset_dir, "{}_2.jpg".format(method)))
-                    plt.show()
+                if cur_embeddings.shape[0] != len(show_labels):
+                    print("wrong")
 
                 total_embedding_list.append(cur_embeddings)
                 total_labels_list.append(show_labels)

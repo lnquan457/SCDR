@@ -1,16 +1,17 @@
 exp_params:
 #  dataset: 'isolet_subset'
-  dataset: 'usps_clear'
-  input_dims: 256   # x for vectors or (h, w, c) for images
+  dataset: 'basketball'
+  input_dims: 6   # x for vectors or (h, w, c) for images
   latent_dim: 2
   stream_rate: 1
   initial_data_num: 300
-  window_size: 50000
-  vis_iter: 30
+  window_size: 5000
+  vis_iter: 100
   save_iter: 100000
-  eval_iter: 300000
+  eval_iter: 100
   make_animation: False
-  check_point_path: "./results/SCDR/usps_clear/20230308_17h02m48s_2/initial/200.pth.tar"
+#  check_point_path: "./results/SCDR/usps_clear/20230308_17h02m48s_2/initial/200.pth.tar"
+  check_point_path: None
 
 
 method_params:
@@ -24,4 +25,4 @@ method_params:
   split_lower: 0.001
   alpha: 6
   separation_begin_ratio: 0.20
-  steady_begin_ratio: 0.95
+  steady_begin_ratio: 0.90

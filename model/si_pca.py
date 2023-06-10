@@ -86,6 +86,8 @@ class ParallelsPCA:
         self._time_cost_records = [0]
 
     def fit_new_data(self, x, labels=None):
+        key_time = 0
+        sta = 0
         replace_model = False
         if self.total_data is None:
             self.total_data = x
@@ -103,6 +105,7 @@ class ParallelsPCA:
             self.total_data = np.concatenate([self.total_data, x], axis=0)[-self._window_size:]
             add_data_time = time.time() - sta
 
+        key_time += time.time() - sta
         sta = time.time()
 
         if not self._replace_model_queue.empty():
@@ -131,9 +134,11 @@ class ParallelsPCA:
             cur_embeddings = self.pca_model.transform(x)
             self.pre_embeddings = np.concatenate([self.pre_embeddings, cur_embeddings], axis=0)[-self._window_size:]
 
+        out_num = max(0, self.pre_embeddings.shape[0] - self._window_size)
+        key_time += time.time() - sta
         self.time_cost += time.time() - sta
-        self._time_cost_records.append(time.time() - sta - add_data_time + self._time_cost_records[-1])
-        return self.pre_embeddings, add_data_time
+        # self._time_cost_records.append(time.time() - sta - add_data_time + self._time_cost_records[-1])
+        return self.pre_embeddings, key_time, True, out_num
 
     def _get_new_model_info(self):
         self._newest_model = self._model_return_queue.get()

@@ -35,7 +35,9 @@ def name_map(name):
 
 
 class ProjectSettings:
-    LABEL_COLORS = {0: 'blue', 1: 'orange', 2: 'green', 3: 'red', 4: 'blueviolet', 5: 'maroon', 6: 'deeppink',
+    # LABEL_COLORS = {0: 'blue', 1: 'orange', 2: 'green', 3: 'red', 4: 'blueviolet', 5: 'maroon', 6: 'deeppink',
+    #                 7: 'greenyellow', 8: 'olive', 9: 'cyan', 10: 'yellow', 11: 'purple'}
+    LABEL_COLORS = {0: 'steelblue', 1: 'chocolate', 2: 'yellowgreen', 3: 'indianred', 4: 'slateblue', 5: 'darkgoldenrod', 6: 'deeppink',
                     7: 'greenyellow', 8: 'olive', 9: 'cyan', 10: 'yellow', 11: 'purple'}
     QUANTITATIVE_METRIC_NAME = ["Trust", "Continuity", 'Neighbor Hit', 'KNN ACC', 'Sim Fake', 'Dissim Lost', 'Acc',
                                 'NMI', 'SC', 'DSC', 'GON']

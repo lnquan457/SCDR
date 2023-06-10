@@ -55,7 +55,7 @@ def position_vis(c, vis_save_path, z, title=None):
     #     plt.title(title, fontsize=18)
     plt.xticks([])
     plt.yticks([])
-    plt.axis("equal")
+    # plt.axis("equal")
     plt.axis('off')
     # plt.axis("equal")
     # plt.legend()

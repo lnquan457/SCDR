@@ -20,8 +20,8 @@ if __name__ == '__main__':
     # save_dir = r"D:\Projects\流数据\Evaluation\过程数据\散点图_2\color"
     # dataset_list = FINAL_DATASET_LIST
     # dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "shuttle", "usps_clear"]
-    dataset_list = ["basketball"]
-    # method_list = ["SIsomap++", "sPCA", "Xtreaming"]
+    dataset_list = ["HAR_2"]
+    # method_list = ["SCDR", "INE", "SIsomap++", "sPCA", "Xtreaming"]
     method_list = ["SCDR"]
 
     selected_indices = [
@@ -128,35 +128,34 @@ if __name__ == '__main__':
                 x = cur_embeddings[:, 0]
                 y = cur_embeddings[:, 1]
 
-                # if dataset == "shuttle" and method in ["SIsomap++", "Xtreaming", "sPCA"]:
-                if dataset == "basketball" and method in ["SCDR"]:
-                    Percentile = np.percentile(x, [0, 25, 50, 75, 100])
-                    thresh = 1.5
-                    IQR = Percentile[3] - Percentile[1]
-                    UpLimit = Percentile[3] + IQR * thresh
-                    DownLimit = Percentile[1] - IQR * thresh
-
-                    indices = np.array([True] * cur_embeddings.shape[0])
-                    indices[x > UpLimit] = False
-                    indices[x < DownLimit] = False
-
-                    Percentile = np.percentile(y, [0, 25, 50, 75, 100])
-                    IQR = Percentile[3] - Percentile[1]
-                    UpLimit = Percentile[3] + IQR * thresh
-                    DownLimit = Percentile[1] - IQR * thresh
-
-                    indices[y > UpLimit] = False
-                    indices[y < DownLimit] = False
-                    x = x[indices]
-                    y = y[indices]
-                    show_labels = show_labels[indices]
+                # if dataset == "shuttle" and method in ["SIsomap++", "Xtreaming", "sPCA", "SCDR"]:
+                #     Percentile = np.percentile(x, [0, 25, 50, 75, 100])
+                #     thresh = 1.5
+                #     IQR = Percentile[3] - Percentile[1]
+                #     UpLimit = Percentile[3] + IQR * thresh
+                #     DownLimit = Percentile[1] - IQR * thresh
+                #
+                #     indices = np.array([True] * cur_embeddings.shape[0])
+                #     indices[x > UpLimit] = False
+                #     indices[x < DownLimit] = False
+                #
+                #     Percentile = np.percentile(y, [0, 25, 50, 75, 100])
+                #     IQR = Percentile[3] - Percentile[1]
+                #     UpLimit = Percentile[3] + IQR * thresh
+                #     DownLimit = Percentile[1] - IQR * thresh
+                #
+                #     indices[y > UpLimit] = False
+                #     indices[y < DownLimit] = False
+                #     x = x[indices]
+                #     y = y[indices]
+                #     show_labels = show_labels[indices]
 
                 plt.figure(figsize=(6, 6))
                 sns.scatterplot(x=x, y=y, hue=show_labels, s=5,
                                 palette="tab10", legend=False, alpha=1.0, linewidth=0)
                 plt.xticks([])
                 plt.yticks([])
-                # plt.axis("equal")
+                plt.axis("equal")
                 plt.axis('off')
                 # plt.title("{} embeddings".format(method), fontsize=18)
                 plt.savefig(save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
@@ -166,7 +165,7 @@ if __name__ == '__main__':
                                 color="steelblue", linewidth=0)   # color="steelblue" #2F5597
                 plt.xticks([])
                 plt.yticks([])
-                # plt.axis("equal")
+                plt.axis("equal")
                 plt.axis('off')
                 plt.savefig(gray_save_path, dpi=400, bbox_inches='tight', pad_inches=0.1)
 

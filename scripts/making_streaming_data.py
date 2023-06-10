@@ -33,18 +33,42 @@ def no_drift(cls, cls_counts, labels, init_data_rate=0.3):
     return init_data_indices, stream_data_indices, len(cls), 0
 
 
-def partial_drift(cls, cls_counts, labels, init_manifold_rate=0.5, init_data_rate=0.5):
+def partial_drift(cls, cls_counts, labels, init_manifold_rate=0.5, init_data_rate=0.4):
+    # cls = [0, 7, 5, 3, 9, 8, 6, 1, 2, 4]
+
+    cls_counts = []
+    for jtem in cls:
+        cls_counts.append(len(np.where(labels == jtem)[0]))
+
     init_manifold_num = int(len(cls) * init_manifold_rate)
     init_data_indices, init_left_indices = no_drift(cls[:init_manifold_num], cls_counts[:init_manifold_num], labels,
                                                     init_data_rate=init_data_rate)[:2]
     avg_num = len(init_left_indices) // (len(cls) - init_manifold_num)
-    np.random.shuffle(init_left_indices)
+
+    init_left_indices = np.array(init_left_indices, dtype=int)
+
+    init_left_counts = []
+    init_left_indices_per_cls = []
+    for i in range(init_manifold_num):
+        cur_indices = np.where(labels[init_left_indices] == cls[i])[0]
+        init_left_counts.append(len(cur_indices))
+        init_left_indices_per_cls.append(init_left_indices[cur_indices])
+
+    avg_left_counts = np.array(init_left_counts) / (len(cls) - init_manifold_num)
+    avg_left_counts = avg_left_counts.astype(int)
+
     stream_data_indices = []
     idx = 0
+
     for i in range(init_manifold_num, len(cls)):
         cur_indices = np.where(labels == cls[i])[0]
-        stream_data_indices.extend(cur_indices)
-        stream_data_indices.extend(init_left_indices[idx*avg_num:(idx+1)*avg_num])
+        cur_total = list(cur_indices)
+
+        for j in range(init_manifold_num):
+            cur_total.extend(init_left_indices_per_cls[j][idx*avg_left_counts[j]:(idx+1)*avg_left_counts[j]])
+
+        np.random.shuffle(cur_total)
+        stream_data_indices.extend(cur_total)
         idx += 1
 
     return init_data_indices, stream_data_indices, init_manifold_num, len(cls) - init_manifold_num
@@ -53,11 +77,11 @@ def partial_drift(cls, cls_counts, labels, init_manifold_rate=0.5, init_data_rat
 def full_drift(cls, cls_counts, labels, init_manifold_rate=0.3, shuffle_stream=False):
     init_data_indices = []
     stream_data_indices = []
-    init_manifold_num = int(len(cls) * init_manifold_rate)
+    init_manifold_num = int(math.ceil(len(cls) * init_manifold_rate))
     ttt_indices = np.arange(len(cls))
     np.random.shuffle(ttt_indices)
-    # cls = cls[ttt_indices]
-    cls = [1, 2, 8, 4, 6, 9, 3, 5, 7, 0]
+    cls = cls[ttt_indices]
+    # cls = [1, 2, 8, 4, 6, 9, 3, 5, 7, 0]
 
     for i in range(init_manifold_num):
         cur_indices = np.where(labels == cls[i])[0]
@@ -83,7 +107,10 @@ if __name__ == '__main__':
     dataset_dir = r"D:\Projects\流数据\Data\H5 Data"
     save_dir = r"D:\Projects\流数据\Data\new\indices_seq"
     check_path_exists(save_dir)
-    dataset_list = ["usps_clear", "mnist_fla", "HAR_2", "arem", "shuttle", "basketball"]
+    # dataset_list = ["usps_clear", "mnist_fla", "HAR_2", "arem", "shuttle", "basketball"]
+    # dataset_list = ["usps_clear", "mnist_fla", "HAR_2", "arem", "shuttle", "basketball"]
+    # dataset_list = ["mnist_fla_10000", "mnist_fla_20000", "usps_clear", "mnist_fla", "HAR_2", "arem", "shuttle", "basketball"]
+    dataset_list = ["mnist_fla"]
     # situation_list = ["ND", "PD", "FD"]
     situation_list = ["PD"]
     for item in dataset_list:

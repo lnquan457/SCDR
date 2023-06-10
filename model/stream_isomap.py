@@ -474,25 +474,6 @@ class CustomizedLPCA(lPCA):
 
 
 if __name__ == '__main__':
-    with h5py.File("../../../Data/H5 Data/food.h5", "r") as hf:
-        X = np.array(hf['x'])
-        Y = np.array(hf['y'])
-
-    train_num = 2000
-    oos_num = 1000
-    train_data = X[:train_num]
-    train_labels = Y[:train_num]
-
-    ile = SIsomap(train_num, 2, 10)
-    # ile = SIsomapPlus(train_num, 2, 10)
-
-    first_embeddings = ile.fit_new_data(train_data, train_labels)
-    position_vis(train_labels, None, first_embeddings, "first")
-
-    second_embeddings = ile.fit_new_data(X[train_num:train_num + oos_num])
-    position_vis(Y[train_num:train_num + oos_num], None, second_embeddings[train_num:], "second new")
-    position_vis(train_labels, None, second_embeddings[:train_num], "second pre")
-    position_vis(Y[:train_num + oos_num], None, second_embeddings, "second whole")
-
-    # cls_acc = np.sum(np.array(ile.predict_cls, dtype=int) == Y[train_num:train_num + oos_num]) / oos_num
-    # print("cls acc", cls_acc)
+    data = np.random.random((1000, 10))
+    embedder = Isomap(n_neighbors=10)
+    embedder.fit_transform(data)

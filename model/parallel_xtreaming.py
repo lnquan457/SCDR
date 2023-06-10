@@ -54,10 +54,11 @@ class ParallelXtreaming:
         return self.buffered_data.shape[0] >= self._buffer_size
 
     def fit_new_data(self, x, labels=None):
-
         sta = time.time()
+        out_num = self._total_n_samples - self._window_size
+
         if not self._buffering(x):
-            return None, 0
+            return None, 0, False, out_num
 
         if not self._replace_model_queue.empty():
             replace_model = self._replace_model_queue.get()
@@ -76,7 +77,6 @@ class ParallelXtreaming:
             self._get_new_model_info()
 
         self._total_n_samples += self.buffered_data.shape[0]
-        out_num = self._total_n_samples - self._window_size
         if out_num > 0:
             self.pre_embeddings = self.pre_embeddings[out_num:]
             self.total_data = self.total_data[out_num:]
@@ -107,7 +107,7 @@ class ParallelXtreaming:
             self._pattern_data_queue.put([x, False, self.total_data, self._pre_control_indices, 0])
             self._newest_cntp_indices = sampled_indices
             self.buffered_data = None
-            return self.pre_embeddings, 0
+            return self.pre_embeddings, 0, 0, out_num
 
         t_sta = time.time()
         self.total_data = np.concatenate([self.total_data, self.buffered_data], axis=0)
@@ -131,7 +131,7 @@ class ParallelXtreaming:
         self.time_cost += time.time() - sta
         self._time_cost_records.append(time.time() - sta - add_data_time + self._time_cost_records[-1])
         self.buffered_data = None
-        return self.pre_embeddings, add_data_time
+        return self.pre_embeddings, add_data_time, True, out_num
 
     def _get_new_model_info(self):
         self._newest_model, _, self._newest_cntp_indices, self._newest_cntp_points = self._model_return_queue.get()
@@ -141,6 +141,11 @@ class ParallelXtreaming:
         dists = cdist(data, self.total_data[self._pre_control_indices])
         embeddings = self.pro_model.reuse_project(dists)
         return embeddings
+
+    def ending(self):
+        output = "Time Cost: %.4f" % self.time_cost
+        print(output)
+        return output, self._time_cost_records
 
 
 class XtreamingChangeDetector(Process):

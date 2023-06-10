@@ -66,10 +66,11 @@ class ParallelINE(INEModel):
         self._pattern_data_queue.put([new_data, False, self.stream_dataset.get_total_data(), self._total_data_idx])
 
         knn_indices, knn_dists, dists = self._cal_new_data_kNN(new_data, include_self=False)
+        knn_indices = knn_indices.squeeze()
 
         new_data_prob = self._cal_new_data_probability(knn_dists.astype(np.float32, copy=False))
 
-        initial_embedding = self._initialize_new_data_embedding(pre_data_num, knn_indices)
+        initial_embedding = self._initialize_new_data_embedding(new_data_prob, knn_indices)
         # print("initial", initial_embedding)
         self.pre_embeddings = self._optimize_new_data_embedding(knn_indices, initial_embedding, new_data_prob)
         # print("after", self.pre_embeddings[-1])
