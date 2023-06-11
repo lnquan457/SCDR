@@ -65,15 +65,15 @@ class LwFCDR(CDRModel):
         self.__cluster_repel_weight = 1.0
         # 保持旧数据局部结构不变的权重
         self.__lwf_weight = 10.0     # 10.0
-        self.__temporal_steady_weight = 2.0     # 1.0
+        self.__temporal_steady_weight = 1.0     # 1.0
 
         # 用于计算VC损失
         self.preserve_rank = True
         self.preserve_pos = True
         self.preserve_shape = True
         self.rank_weight = 1.0
-        self.pos_weight = 1.0   # normal 2.0
-        self.shape_weight = 1.0     # normal 2.0
+        self.pos_weight = 2.0   # normal 2.0
+        self.shape_weight = 2.0     # normal 2.0
         self._rep_cluster_indices = None
         self._rep_exclude_indices = None
 

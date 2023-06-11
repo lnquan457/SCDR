@@ -15,7 +15,7 @@ OPTIMIZE_NEIGHBORS = True
 
 
 class DataProcessor:
-    def __init__(self, n_neighbors, batch_size, model_update_queue_set, window_size, device="cuda:0"):
+    def __init__(self, n_neighbors, batch_size, model_update_queue_set, window_size, device="cuda:0", serialization=False):
         self.n_neighbors = n_neighbors
         self.batch_size = batch_size
         self.model_update_queue_set = model_update_queue_set
@@ -23,19 +23,20 @@ class DataProcessor:
         self._window_size = window_size
         self.nn_embedder = None
 
+        self.serialization = serialization
         self.data_num_when_update = 0
 
         # 用于确定何时要更新模型，1）新的流形出现；2）模型对旧流形数据的嵌入质量太低；3）长时间没有更新；
         self.model_update_intervals = 6000
         self.model_update_num_thresh = 50
-        self.manifold_change_num_thresh = 30
-        self.bad_embedding_num_thresh = 50
+        self.manifold_change_num_thresh = 100
+        self.bad_embedding_num_thresh = 100
 
         # self._manifold_change_d_weight = 1
         # self._local_move_std_weight = 3
         self._do_model_update = True
         # 是否进行跳步优化
-        self.skip_opt = False
+        self.skip_opt = True
         # bfgs优化时,使用的负例数目
         self.opt_neg_num = 50
 
@@ -328,10 +329,10 @@ class DataProcessor:
         self._out_since_last_send_update = 0
 
         # TODO: 使得模型更新和数据处理变成串行的
-        # if self.debug:
-        #     while self.model_update_queue_set.MODEL_UPDATING.value == 1:
-        #         pass
-        #     self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
+        if self.serialization:
+            while self.model_update_queue_set.MODEL_UPDATING.value == 1:
+                pass
+            self.model_update_queue_set.WAITING_UPDATED_DATA.value = 1
 
     def get_final_embeddings(self):
         embeddings = self.stream_dataset.get_total_embeddings()

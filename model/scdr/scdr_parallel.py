@@ -12,12 +12,12 @@ from utils.queue_set import ModelUpdateQueueSet, DataProcessorQueue
 
 
 class SCDRParallel:
-    def __init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, window_size=2000,
-                 ckpt_path=None, device="cuda:0"):
+    def __init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, window_size=5000,
+                 ckpt_path=None, device="cuda:0", serialization=False):
         self.model_update_queue_set = model_update_queue_set
         self.device = device
         self.nn_embedder = NNEmbedder(device)
-        self.data_processor = DataProcessor(n_neighbors, batch_size, model_update_queue_set, device)
+        self.data_processor = DataProcessor(n_neighbors, batch_size, model_update_queue_set, window_size, device, serialization)
         self.ckpt_path = ckpt_path if (ckpt_path is not None and os.path.exists(ckpt_path)) else None
         self.initial_train_num = initial_train_num
 

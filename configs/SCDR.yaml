@@ -26,3 +26,4 @@ method_params:
   alpha: 6
   separation_begin_ratio: 0.20
   steady_begin_ratio: 0.90
+  parallel: True

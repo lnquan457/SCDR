@@ -524,7 +524,8 @@ class StreamingExProcess(StreamingEx, Process):
                                             time_stamp_to_date_time_adjoin(int(time.time())))
         self.model = SCDRParallel(self.cfg.method_params.n_neighbors, self.cfg.method_params.batch_size,
                                   model_update_queue_set, self.cfg.exp_params.initial_data_num,
-                                  window_size=self.cfg.exp_params.window_size, device=model_trainer.device)
+                                  window_size=self.cfg.exp_params.window_size, device=model_trainer.device,
+                                  serialization=~self.cfg.parallel)
         model_trainer.daemon = True
         model_trainer.start()
         return self.stream_fitting()
