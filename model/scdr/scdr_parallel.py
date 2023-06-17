@@ -107,11 +107,11 @@ class SCDRParallel:
 
 class SCDRFullParallel(SCDRParallel):
     def __init__(self, embedding_data_queue, n_neighbors, batch_size, model_update_queue_set, initial_train_num,
-                 ckpt_path=None, device="cuda:0", window_size=2000):
+                 ckpt_path=None, device="cuda:0", window_size=2000, serialization=False):
         SCDRParallel.__init__(self, n_neighbors, batch_size, model_update_queue_set, initial_train_num, window_size,
-                              ckpt_path, device)
+                              ckpt_path, device, serialization)
         self.data_processor = DataProcessorProcess(embedding_data_queue, n_neighbors, batch_size, model_update_queue_set
-                                                   , window_size, device)
+                                                   , window_size, device, serialization)
         self._embedding_data_queue: DataProcessorQueue = embedding_data_queue
 
     def fit_new_data(self, data, labels=None, end=False):

@@ -155,11 +155,11 @@ class Experiment:
 
         self.pre_embeddings = None
 
-        self.do_test = True
+        self.do_test = False
         self.do_vis = True
         self.save_model = True
         self.save_final_embeddings = True
-        self.draw_loss = True
+        self.draw_loss = False
         self.print_time_info = True
 
         self.fixed_k = 10
@@ -271,7 +271,7 @@ class Experiment:
             np.save(os.path.join(self.result_save_dir, "embeddings_{}.npy".format(self.epoch_num)), embeddings)
 
         if self.metric_tool is not None:
-            self.metric_tool.join(timeout=60)
+            self.metric_tool.join(timeout=5)
 
         if self.print_time_info:
             end_time = time.time()
@@ -280,7 +280,8 @@ class Experiment:
             output = "Train cost time: {} Total cost time: {}".format(self.train_time_cost, total_cost_time)
             InfoLogger.info(output)
             self.message_queue.put(output)
-        self.message_queue.put("end")
+        # TODO: 取消注释
+        # self.message_queue.put("end")
 
         if self.save_model:
             self.save_weights(self.epoch_num)
@@ -403,8 +404,8 @@ class Experiment:
                 if torch.is_tensor(v):
                     state[k] = v.to(self.device)
 
-    def load_weights(self, checkpoint_path, train):
-        self.preprocess(train)
+    def load_weights(self, checkpoint_path, train, load_data=None):
+        self.preprocess(train, load_data)
         model_CKPT = torch.load(checkpoint_path)
         self.model.load_state_dict(model_CKPT['state_dict'])
         self.init_optimizer()
@@ -437,11 +438,11 @@ class Experiment:
         embeddings = self.cal_lower_embeddings(data)
         return embeddings
 
-    def train_for_visualize(self):
+    def train_for_visualize(self, load_data=None):
         if not self.multi or self.device_id == 0:
             InfoLogger.info("Start train for Visualize")
         launch_time_stamp = int(time.time())
-        self.preprocess()
+        self.preprocess(load_data=load_data)
         self.pre_embeddings = self.train(launch_time_stamp)
         return self.pre_embeddings
 
@@ -494,6 +495,7 @@ class Experiment:
             使用 model.eval() 将模型切换到测试模式，此时BN和Dropout中的参数不会改变
             """
             self.model.eval()
+            self.model = self.model.to(device)
             data = data.to(device)
             # self.model.encoder.eval()
             if self.multi:

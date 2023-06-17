@@ -14,7 +14,7 @@ from utils.constant_pool import ConfigInfo, SIPCA, ATSNE, XTREAMING, SCDR, STREA
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=INE,
+    parser.add_argument("--method", type=str, default=SCDR,
                         choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
     parser.add_argument("--parallel", type=bool, default=False)
@@ -32,71 +32,73 @@ if __name__ == '__main__':
     # method_list = [INE, SCDR, SISOMAPPP]
     method_list = [SIPCA, XTREAMING, INE, SISOMAPPP]
     # method_list = [SCDR]
-    test_time = 1
-    # situation_list = ["ND", "FD", "PD"]
-    situation = "PD"
+    test_time = 2
+    situation_list = ["ND", "PD", "FD"]
+    # situation = "PD"
     # dataset_list = ["sat", "HAR_2", "usps",  "mnist_fla", "shuttle", "arem", "basketball"]
     # dataset_list = ["sat", "HAR_2", "usps", "mnist_fla", "shuttle", "arem", "basketball", "electric_devices",
     #                 "texture", "Anuran Calls_8c"]
-    dataset_list = ["usps_clear"]
+    dataset_list = ["covid_twi"]
     # dataset_list = FINAL_DATASET_LIST
     # dataset_list = ["usps_clear", "mnist_fla"]
     # dim_list = [36, 561, 256, 784, 9, 6, 6, 96, 40, 22]
     # dim_list = [6, 6, 561, 9, 784]
-    dim_list = [784]
+    dim_list = [256]
 
-    start_time = time_stamp_to_date_time_adjoin(time.time())
-    excel_save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\{}_{}".format(start_time, situation)
-    excel_headers = copy(METRIC_NAMES)
-    excel_headers.extend(STEADY_METRIC_NAMES)
-    excel_headers.append("Single Process Time")
-    excel_headers.append("Total Process Time")
-    excel_headers.append("Data Delay Time")
+    for situation in situation_list:
 
-    for i, method_name in enumerate(method_list):
-        print("Current method:", method_name)
-        cfg = get_config()
-        cfg_path = ConfigInfo.MODEL_CONFIG_PATH.format(method_name)
-        cfg.merge_from_file(cfg_path)
-        cfg.exp_params.window_size = 5000
-        cfg.exp_params.vis_iter = 1000
-        cfg.exp_params.eval_iter = 1
+        start_time = time_stamp_to_date_time_adjoin(time.time())
+        excel_save_dir = r"D:\Projects\流数据\Code\SCDR\results\excel_res\{}_{}".format(start_time, situation)
+        excel_headers = copy(METRIC_NAMES)
+        excel_headers.extend(STEADY_METRIC_NAMES)
+        excel_headers.append("Single Process Time")
+        excel_headers.append("Total Process Time")
+        excel_headers.append("Data Delay Time")
 
-        args.method = method_name
-        result_save_dir = "results/{}/ex_{}_{}".format(args.method, start_time, situation)
-        method_save_dir = os.path.join(excel_save_dir, method_name)
-        if not os.path.exists(method_save_dir):
-            os.makedirs(method_save_dir)
+        for i, method_name in enumerate(method_list):
+            print("Current method:", method_name)
+            cfg = get_config()
+            cfg_path = ConfigInfo.MODEL_CONFIG_PATH.format(method_name)
+            cfg.merge_from_file(cfg_path)
+            cfg.exp_params.window_size = 5000
+            cfg.exp_params.vis_iter = 1000
+            cfg.exp_params.eval_iter = 100
 
-        for j, dataset_name in enumerate(dataset_list):
-            print("Processing Data:", dataset_name)
+            args.method = method_name
+            result_save_dir = "results/{}/ex_{}_{}".format(args.method, start_time, situation)
+            method_save_dir = os.path.join(excel_save_dir, method_name)
+            if not os.path.exists(method_save_dir):
+                os.makedirs(method_save_dir)
 
-            # if method_name == SIPCA and "mnist" in dataset_name:
-            #     continue
-            # if method_name == SIPCA and j < 2:
-            #     continue
-            if method_name == SCDR:
-                cfg.exp_params.input_dims = dim_list[j]
-            excel_save_path = os.path.join(method_save_dir, "{}.xlsx".format(dataset_name))
-            total_res = []
-            cfg.exp_params.dataset = dataset_name
-            custom_indices_path = os.path.join(args.indices_dir, "{}_{}_new.npy".format(cfg.exp_params.dataset, situation))
-            for e in range(test_time):
-                metrics_list, avg_single_process_time, total_process_time, avg_data_delay_time = \
-                    custom_indices_training(cfg, custom_indices_path, args, result_save_dir, cfg_path, device, log_path)
-                cur_res = metrics_list
-                cur_res.extend([avg_single_process_time, total_process_time, avg_data_delay_time])
-                total_res.append(cur_res)
+            for j, dataset_name in enumerate(dataset_list):
+                print("Processing Data:", dataset_name)
 
-            total_res = np.array(total_res)
-            avg = np.mean(total_res, axis=0)
-            total_res = np.concatenate([total_res, avg[np.newaxis, :]], axis=0)
-            res_dict = {}
-            for t, ttem in enumerate(excel_headers):
-                res_dict[ttem] = total_res[:, t]
+                # if method_name == SIPCA and "mnist" in dataset_name:
+                #     continue
+                # if method_name == SIPCA and j < 2:
+                #     continue
+                if method_name == SCDR:
+                    cfg.exp_params.input_dims = dim_list[j]
+                excel_save_path = os.path.join(method_save_dir, "{}.xlsx".format(dataset_name))
+                total_res = []
+                cfg.exp_params.dataset = dataset_name
+                custom_indices_path = os.path.join(args.indices_dir, "{}_{}.npy".format(cfg.exp_params.dataset, situation))
+                for e in range(test_time):
+                    metrics_list, avg_single_process_time, total_process_time, avg_data_delay_time = \
+                        custom_indices_training(cfg, custom_indices_path, args, result_save_dir, cfg_path, device, log_path)
+                    cur_res = metrics_list
+                    cur_res.extend([avg_single_process_time, total_process_time, avg_data_delay_time])
+                    total_res.append(cur_res)
 
-            df = pd.DataFrame(res_dict)
-            df.to_excel(excel_save_path)
+                total_res = np.array(total_res)
+                avg = np.mean(total_res, axis=0)
+                total_res = np.concatenate([total_res, avg[np.newaxis, :]], axis=0)
+                res_dict = {}
+                for t, ttem in enumerate(excel_headers):
+                    res_dict[ttem] = total_res[:, t]
+
+                df = pd.DataFrame(res_dict)
+                df.to_excel(excel_save_path)
 
 
 

@@ -254,8 +254,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
         self._cached_neighbor_change_indices = []
         self.cur_neighbor_changed_indices = None
         self.__replaced_raw_weights = []
-        self.__sigmas = None
-        self.__rhos = None
+        self._sigmas = None
+        self._rhos = None
         self._concat_num = 1000
         self._tmp_neighbor_weights = np.ones((1, self.n_neighbor))
         self._unfitted_data_num = 0
@@ -331,8 +331,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
                 # knn_dists[item] = dist[tmp_sorted_indices]
 
         self._knn_manager.update_knn_graph(knn_indices, knn_dists)
-        self.__sigmas = self.__sigmas[out_num:]
-        self.__rhos = self.__rhos[out_num:]
+        self._sigmas = self._sigmas[out_num:]
+        self._rhos = self._rhos[out_num:]
         self.raw_knn_weights = self.raw_knn_weights[out_num:]     # 是应该更新的，但是影响很小
 
         self.train_dataset.slide_window(out_num)
@@ -366,7 +366,7 @@ class StreamingDatasetWrapper(DataSetWrapper):
                                                            None, accelerate=False)
             self._knn_manager.add_new_kNN(knn_indices, knn_distances)
 
-        self.__sigmas, self.__rhos = self.distance2prob(train_dataset, symmetric)
+        self._sigmas, self._rhos = self.distance2prob(train_dataset, symmetric)
 
         train_num = self.update_transform(data_augment, epoch_num, is_image, train_dataset)
         train_indices = self._generate_train_indices(train_num, train_dataset)
@@ -459,8 +459,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         self.raw_knn_weights = np.concatenate([self.raw_knn_weights, np.ones((new_data_num, self.n_neighbor))],
                                               axis=0)
-        self.__sigmas = np.concatenate([self.__sigmas, np.ones(new_data_num)])
-        self.__rhos = np.concatenate([self.__rhos, np.ones(new_data_num)])
+        self._sigmas = np.concatenate([self._sigmas, np.ones(new_data_num)])
+        self._rhos = np.concatenate([self._rhos, np.ones(new_data_num)])
         # self.symmetric_nn_weights = np.concatenate([self.symmetric_nn_weights, np.ones(new_data_num)])
         # self.symmetric_nn_indices = np.concatenate([self.symmetric_nn_indices, np.ones(new_data_num)])
         self.concat_t += time.time() - sta
@@ -493,8 +493,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
             self.fuzzy_t += time.time() - sta
         # print("fuzzy", self.fuzzy_t)
 
-        self.__sigmas[cur_update_indices] = cur_sigmas
-        self.__rhos[cur_update_indices] = cur_rhos
+        self._sigmas[cur_update_indices] = cur_sigmas
+        self._rhos[cur_update_indices] = cur_rhos
 
         if not update_similarity:
             self._cached_neighbor_change_indices = np.union1d(self._cached_neighbor_change_indices, neighbor_changed_indices)
@@ -522,8 +522,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
 
         updated_sym_nn_indices, updated_symm_nn_weights = extract_csr(umap_graph, self._cached_neighbor_change_indices)
 
-        self.__sigmas[self._cached_neighbor_change_indices] = sigmas
-        self.__rhos[self._cached_neighbor_change_indices] = rhos
+        self._sigmas[self._cached_neighbor_change_indices] = sigmas
+        self._rhos[self._cached_neighbor_change_indices] = rhos
         self.symmetric_nn_weights[self._cached_neighbor_change_indices] = updated_symm_nn_weights
         self.symmetric_nn_indices[self._cached_neighbor_change_indices] = updated_sym_nn_indices
         self._cached_neighbor_change_indices = []
@@ -545,8 +545,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
     def cal_old2new_relationship(self, old_n_samples, reduction="max"):
         old_data = self.get_total_data()[:old_n_samples]
         new_data = self.get_total_data()[old_n_samples:]
-        old_rhos = self.__rhos[:old_n_samples]
-        old_sigmas = self.__sigmas[:old_n_samples]
+        old_rhos = self._rhos[:old_n_samples]
+        old_sigmas = self._sigmas[:old_n_samples]
         dists = cdist(old_data, new_data)
         normed_dists = dists - old_rhos[:, np.newaxis]
         normed_dists[normed_dists < 0] = 0
@@ -564,8 +564,8 @@ class StreamingDatasetWrapper(DataSetWrapper):
     def update_previous_info(self, pre_num, new_self, out_during_update, skipped_slide_num):
         if pre_num <= out_during_update:
             return
-        self.__sigmas[:pre_num-out_during_update] = new_self.__sigmas[out_during_update:pre_num]
-        self.__rhos[:pre_num-out_during_update] = new_self.__rhos[out_during_update:pre_num]
+        self._sigmas[:pre_num - out_during_update] = new_self._sigmas[out_during_update:pre_num]
+        self._rhos[:pre_num - out_during_update] = new_self._rhos[out_during_update:pre_num]
         self.raw_knn_weights[:pre_num-out_during_update] = new_self.raw_knn_weights[out_during_update:pre_num]
         self._knn_manager.knn_indices[:pre_num-out_during_update] = new_self.get_knn_indices()[out_during_update:pre_num]
         self._knn_manager.knn_dists[:pre_num-out_during_update] = new_self.get_knn_dists()[out_during_update:pre_num]

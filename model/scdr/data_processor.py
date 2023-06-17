@@ -421,9 +421,9 @@ class DataProcessor:
 
 class DataProcessorProcess(DataProcessor, Process):
     def __init__(self, embedding_data_queue, n_neighbors, batch_size,
-                 model_update_queue_set, window_size, device="cuda:0"):
+                 model_update_queue_set, window_size, device="cuda:0", serialization=False):
         self.name = "data update process"
-        DataProcessor.__init__(self, n_neighbors, batch_size, model_update_queue_set, window_size, device)
+        DataProcessor.__init__(self, n_neighbors, batch_size, model_update_queue_set, window_size, device, serialization)
         Process.__init__(self, name=self.name)
         self._embedding_data_queue: DataProcessorQueue = embedding_data_queue
         self._newest_model = None

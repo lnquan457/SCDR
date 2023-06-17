@@ -25,7 +25,7 @@ def simple_draw(x_indices, y_indices, title, save_path):
     plt.show()
 
 
-def cal_knn(pdist):
+def cal_knn(pdist, eval_k):
     sorted_indices = np.argsort(pdist, axis=1)
     knn_indices = sorted_indices[:, 1:eval_k + 1]
     knn_distances = []
@@ -36,25 +36,28 @@ def cal_knn(pdist):
 
 
 if __name__ == '__main__':
-    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0302"
+    situation = "ND"
+    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0224".format(situation)
     data_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
-    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\PD\0302"
+    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0224".format(situation)
     eval_k = 10
     window_size = 5000
-    valid_metric_indices = [0, 1, 2, 3, 4]
-    total_res_data = np.zeros((5, 10, 5))
+    valid_metric_indices = [0, 1, 2, 3, 4, 5, 6]
+    total_res_data = np.zeros((7, 1, 5))
     xtreaming_buffer_size = 200
     eval_step = 100
-    situation = "PD"
+
     # method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE"]
     # method_list = ["INE", "SIsomap++", "SCDR"]
-    method_list = ["INE"]
-    metric_list = ["Trust", "Continuity", "Neighbor Hit", "KA(10)", "Position Change"]
+    method_list = ["sPCA", "Xtreaming", "SIsomap++", "INE", "SCDR"]
+    metric_list = ["Trust", "Continuity", "Neighbor Hit", "KA(10)", "Shepard Goodness", "DEMaP", "Position Change",]
     # dataset_list = ["arem"]
     # dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "sat", "shuttle", "usps", "Anuran Calls_8c",
     #                 "electric_devices", "texture"]
-    dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "shuttle"]
+    # dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "shuttle"]
+    # dataset_list = ["arem", "basketball", "HAR_2", "mnist_fla", "shuttle"]
+    dataset_list = ["covid_twi"]
 
     for i, method in enumerate(method_list):
         print("Method:", method)
@@ -87,7 +90,7 @@ if __name__ == '__main__':
                 eval_embedding_dir = os.path.join(item_dir, "eval_embeddings")
                 # eval_embedding_dir = r"D:\Projects\流数据\Code\SCDR\results\INE\arem\20230228_15h15m59s\eval_embeddings"
 
-                metric_records = [[] for i in range(len(METRIC_NAMES) + 1)]
+                metric_records = [[] for i in range(len(metric_list))]
                 metric_image_dir = os.path.join(item_dir, "metric_imgs")
                 check_path_exist(metric_image_dir)
                 sta_time_step = 1
@@ -149,7 +152,7 @@ if __name__ == '__main__':
                     pre_e_num = pre_embedding_pdist.shape[0]
 
                     eval_pdist = pairwise_distance[:embedding_num, :][:, :embedding_num]
-                    knn_indices, knn_dists = cal_knn(eval_pdist)
+                    knn_indices, knn_dists = cal_knn(eval_pdist, eval_k)
 
                     metric_tool = Metric(dataset, total_data[:embedding_num], total_label[:embedding_num], knn_indices,
                                          knn_dists, eval_pdist, k=eval_k)

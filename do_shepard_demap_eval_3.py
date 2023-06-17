@@ -40,7 +40,7 @@ if __name__ == '__main__':
     res_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0222".format(situation)
     data_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
-    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0224".format(situation)
+    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0222".format(situation)
     eval_k = 10
     window_size = 5000
     valid_metric_indices = [0, 1]
@@ -48,7 +48,7 @@ if __name__ == '__main__':
     xtreaming_buffer_size = 200
     eval_step = 100
 
-    method_list = ["sPCA", "Xtreaming", "SIsomap++", "SCDR", "INE"]
+    method_list = ["Xtreaming", "SIsomap++", "SCDR", "INE"]
     # method_list = ["sPCA"]
     # method_list = ["SCDR"]
     metric_list = ["Shepard Goodness", "DEMaP", ]
@@ -60,11 +60,11 @@ if __name__ == '__main__':
         j = 0
         for dataset in dataset_list:
             print("==========Dataset:", dataset)
-            # if method == "sPCA" and dataset == "mnist_fla":
-            #     for k, item in enumerate(valid_metric_indices):
-            #         total_res_data[k, j, i] = 0
-            #     j += 1
-            #     continue
+            if method == "sPCA" and dataset == "mnist_fla" and situation == "PD":
+                for k, item in enumerate(valid_metric_indices):
+                    total_res_data[k, j, i] = 0
+                j += 1
+                continue
 
             dataset_dir = os.path.join(method_dir, dataset)
             with h5py.File(os.path.join(data_dir, "{}.h5".format(dataset)), "r") as hf:

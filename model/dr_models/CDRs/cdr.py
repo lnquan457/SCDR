@@ -64,8 +64,8 @@ class LwFCDR(CDRModel):
         # 新数据与旧数据之间进行排斥的对比损失的权重
         self.__cluster_repel_weight = 1.0
         # 保持旧数据局部结构不变的权重
-        self.__lwf_weight = 10.0     # 10.0
-        self.__temporal_steady_weight = 1.0     # 1.0
+        self.__lwf_weight = 0.0     # 10.0
+        self.__temporal_steady_weight = 0.0     # 1.0
 
         # 用于计算VC损失
         self.preserve_rank = True

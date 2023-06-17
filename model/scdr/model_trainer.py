@@ -20,7 +20,7 @@ from utils.queue_set import ModelUpdateQueueSet
 
 class SCDRTrainer(CDRsExperiments):
     def __init__(self, clr_model, dataset_name, configs, result_save_dir,
-                 config_path, device='cuda', log_path="logs.txt"):
+                 config_path, device='cuda:0', log_path="logs.txt"):
         CDRsExperiments.__init__(self, clr_model, dataset_name, configs, result_save_dir, config_path, True, device,
                                  log_path)
         self.stream_dataset = None
@@ -352,7 +352,6 @@ class SCDRTrainerProcess(SCDRTrainer, Process):
                     indices = np.where(pre_symm_nn_indices[i] >= 0)
                     pre_symm_nn_indices[i] = pre_symm_nn_indices[i][indices]
                     pre_symm_nn_weights[i] = pre_symm_nn_weights[i][indices]
-                #
 
                 # 一些数据的kNN由于滑动窗口改变了，他们所对应的symmetric_nn_indices也应该改变
                 self.stream_dataset = stream_dataset

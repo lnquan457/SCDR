@@ -17,7 +17,7 @@ def parse_args():
     parser.add_argument("--method", type=str, default=INE,
                         choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
     parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
-    # parser.add_argument("--parallel", type=bool, default=False)
+    parser.add_argument("--parallel", type=bool, default=False)
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
         cfg.exp_params.window_size = 5000
         cfg.exp_params.vis_iter = 1000
         cfg.exp_params.eval_iter = 100
-        cfg.parallel = False
+        cfg.method_param.parallel = False
 
         args.method = method_name
         result_save_dir = "results/{}/ex_{}_{}".format(args.method, start_time, situation)

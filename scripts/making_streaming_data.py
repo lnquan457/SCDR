@@ -110,9 +110,9 @@ if __name__ == '__main__':
     # dataset_list = ["usps_clear", "mnist_fla", "HAR_2", "arem", "shuttle", "basketball"]
     # dataset_list = ["usps_clear", "mnist_fla", "HAR_2", "arem", "shuttle", "basketball"]
     # dataset_list = ["mnist_fla_10000", "mnist_fla_20000", "usps_clear", "mnist_fla", "HAR_2", "arem", "shuttle", "basketball"]
-    dataset_list = ["mnist_fla"]
-    # situation_list = ["ND", "PD", "FD"]
-    situation_list = ["PD"]
+    dataset_list = ["covid_twi"]
+    situation_list = ["ND", "PD", "FD"]
+    # situation_list = ["PD"]
     for item in dataset_list:
         data_name = item.split(".")[0]
 
@@ -124,7 +124,7 @@ if __name__ == '__main__':
             for situation in situation_list:
                 init_indices, stream_indices, init_cls_num, stream_new_cls_num = func_dict[situation](unique_cls,
                                                                                                       cls_nums, y)
-                save_path = os.path.join(save_dir, "{}_{}_new.npy".format(data_name, situation))
+                save_path = os.path.join(save_dir, "{}_{}.npy".format(data_name, situation))
                 np.save(save_path, [init_indices, stream_indices])
                 print("{}_{} -> Init Num: {} Stream Num: {} Init Cls: {} Stream New Cls: {}".format(
                     data_name, situation, len(init_indices), len(stream_indices), init_cls_num, stream_new_cls_num))

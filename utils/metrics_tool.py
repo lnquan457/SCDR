@@ -107,9 +107,11 @@ def cal_manifold_pdist_change(cur_embeddings, pre_embeddings, pre_labels):
     return np.sum(total_dists)
 
 
-def get_matrix_spearman_corr(high_dis_matrix, low_dis_matrix):
+def get_matrix_spearman_corr(high_dis_matrix, low_dis_matrix, indices=None):
     corr_list = []
-    for i in range(high_dis_matrix.shape[0]):
+    if indices is None:
+        indices = range(high_dis_matrix.shape[0])
+    for i in indices:
         corr, _ = stats.spearmanr(high_dis_matrix[i], low_dis_matrix[i])
         corr_list.append(corr)
     return np.mean(corr_list)
@@ -209,7 +211,7 @@ class Metric:
         # knn_ac_5 = self.metric_avg_fn_rank(embedding_data)
         # knn_ac_1 = 0
         sc = metric_silhouette_score(embedding_data, self.origin_label)
-        dsc = self.metric_dsc(embedding_data)
+        dsc = 0
         # gon = self.metric_gong(embedding_data)
         gon = 0
 
@@ -218,20 +220,24 @@ class Metric:
         self.low_knn_indices = None
         return trust, continuity, neighbor_hit, knn_ac, sc, dsc
 
-    def cal_simplified_metrics(self, k, embedding_data, knn_k=10, compute_shepard=False, final=False):
+    def cal_simplified_metrics(self, k, embedding_data, knn_k=10, compute_shepard=False, final=False, clear=True,
+                               cal_demap=True):
         self.val_count += 1
         self.acquire_low_distance(embedding_data)
         # trust = self.metric_trustworthiness(k, embedding_data, final=final)
         # continuity = self.metric_continuity(k, embedding_data)
         trust, continuity, neighbor_hit, knn_ac = self.metric_trust_continuity(k, embedding_data)
+        shepard_goodness = self.metric_shepard_diagram_correlation(embedding_data)
+        demap = self.metric_demap(embedding_data) if cal_demap else 0
 
         # neighbor_hit = self.metric_neighborhood_hit(k, embedding_data)
         # knn_ac = knn_score(embedding_data, self.origin_label, knn_k)
 
-        self.embedding_data = None
-        self.low_dis_matrix = None
-        self.low_knn_indices = None
-        return trust, continuity[0], neighbor_hit, knn_ac
+        if clear:
+            self.embedding_data = None
+            self.low_dis_matrix = None
+            self.low_knn_indices = None
+        return trust, continuity[0], neighbor_hit, knn_ac, shepard_goodness, demap
 
     def eval_dataset(self, k):
         is_balanced, class_num, class_counts = self.metric_dc_dataset_is_balanced()
@@ -394,15 +400,16 @@ class Metric:
         # 筛选出高维空间中每个数据点的除自己以外的前k个邻居
 
         knn_indices = self.knn_indices
+        n = knn_indices.shape[0]
+        indices = np.arange(0, n) if self.subset_indices is None else self.subset_indices
+        num = len(indices)
 
         sum_i_t = 0
         sum_i = 0
-        n = knn_indices.shape[0]
-        indices = np.arange(0, n)
-        pred_knn_labels = np.zeros(shape=(n, self.K))
+        pred_knn_labels = np.zeros(shape=(num, self.K))
         labels_predict = []
 
-        for i in range(n):
+        for idx, i in enumerate(indices):
             # 返回在knn_proj（低维空间）中但是不在knn_orig（高维空间中）的排序后的邻居索引
             U = np.setdiff1d(self.low_knn_indices[i], knn_indices[i])
             sum_j_t = 0
@@ -423,21 +430,21 @@ class Metric:
 
             sum_i += sum_j
 
-            pred_knn_labels[i] = self.origin_label[self.low_knn_indices[i]]
+            pred_knn_labels[idx] = self.origin_label[self.low_knn_indices[i]]
 
             top_k = self.origin_label[self.low_knn_indices[i]]
             nums, counts = np.unique(top_k, return_counts=True)
             labels_predict.append(nums[np.argmax(counts)])
 
         labels_predict = np.array(labels_predict)
-        labels_gt = self.origin_label
+        labels_gt = self.origin_label[indices]
         acc = np.sum(labels_predict == labels_gt) / len(labels_gt)
 
         nn_label_same_ratio = np.mean(
             np.mean((pred_knn_labels == np.tile(self.origin_label[indices].reshape((-1, 1)), k)).astype('uint8'),
                     axis=1))
 
-        return 1 - (2 / (n * k * (2 * n - 3 * k - 1)) * sum_i_t), 1 - (2 / (n * k * (2 * n - 3 * k - 1)) * sum_i), \
+        return 1 - (2 / (num * k * (2 * n - 3 * k - 1)) * sum_i_t), 1 - (2 / (num * k * (2 * n - 3 * k - 1)) * sum_i), \
             nn_label_same_ratio, acc
 
     def metric_trustworthiness(self, k, embedding_data, high_nn_indices=None, final=False):
@@ -524,7 +531,7 @@ class Metric:
 
         # 耗费很大的内存空间
         # corr, _ = stats.spearmanr(self.high_dis_matrix, self.low_dis_matrix)
-        return get_matrix_spearman_corr(high_dis_matrix, self.low_dis_matrix)
+        return get_matrix_spearman_corr(high_dis_matrix, self.low_dis_matrix, self.subset_indices)
 
     def metric_demap(self, embedding_data, high_knn_infos=None):
         self.acquire_low_distance(embedding_data)
@@ -545,7 +552,7 @@ class Metric:
         kng = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n_samples, n_samples)).tocsr()
 
         geo_dist_matrix = shortest_path(kng, method='D', directed=False, return_predecessors=False)
-        demap = get_matrix_spearman_corr(geo_dist_matrix, self.low_dis_matrix)
+        demap = get_matrix_spearman_corr(geo_dist_matrix, self.low_dis_matrix, self.subset_indices)
         return demap
 
 

@@ -36,11 +36,11 @@ def cal_knn(pdist):
 
 
 if __name__ == '__main__':
-    situation = "ND"
-    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0224".format(situation)
+    situation = "FD"
+    res_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0215".format(situation)
     data_dir = r"D:\Projects\流数据\Data\H5 Data"
     indices_dir = r"D:\Projects\流数据\Data\new\indices_seq"
-    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0224".format(situation)
+    save_dir = r"D:\Projects\流数据\Evaluation\原始数据\{}\0215".format(situation)
     eval_k = 10
     window_size = 5000
     # valid_metric_indices = [0, 1, 2, 3, 4]
@@ -49,7 +49,7 @@ if __name__ == '__main__':
     xtreaming_buffer_size = 200
     eval_step = 100
 
-    method_list = ["sPCA", "Xtreaming", "SIsomap++"]
+    method_list = ["Xtreaming", "SIsomap++"]
     # method_list = ["sPCA"]
     # method_list = ["SCDR"]
     metric_list = ["Shepard Goodness", "DEMaP", ]

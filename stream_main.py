@@ -97,11 +97,11 @@ def custom_indices_training(configs, custom_indices_path, recv_args, res_save_di
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--method", type=str, default=INE,
+    parser.add_argument("--method", type=str, default=SCDR,
                         choices=[SIPCA, XTREAMING, INE, SISOMAPPP, SCDR])
-    parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
-    # parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
-    parser.add_argument("--parallel", type=bool, default=True)
+    # parser.add_argument("--indices_dir", type=str, default=r"../../Data/new/indices_seq")
+    parser.add_argument("--indices_dir", type=str, default=r"../../Data/indices/ex1116")
+    parser.add_argument("--parallel", type=bool, default=False)
     parser.add_argument("-Xmx", type=str, default="102400m")
     return parser.parse_args()
 
